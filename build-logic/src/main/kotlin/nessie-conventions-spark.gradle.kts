@@ -14,19 +14,19 @@
  * limitations under the License.
  */
 
-// Scala project, Java 8
+// Conventions for Nessie Spark extensions.
 
 plugins {
+  id("nessie-common-java")
   scala
-  `maven-publish`
-  signing
-  id("nessie-common-base")
-  id("nessie-common-src")
-  id("nessie-java")
   id("nessie-scala")
-  id("nessie-testing")
 }
 
-tasks.withType<JavaCompile>().configureEach { options.release.set(8) }
+tasks.withType<JavaCompile>().configureEach { options.release = 11 }
 
-tasks.withType<ScalaCompile>().configureEach { options.release.set(8) }
+tasks.withType<ScalaCompile>().configureEach {
+  options.release = 11
+  scalaCompileOptions.additionalParameters.add("-release:11")
+  sourceCompatibility = "11"
+  targetCompatibility = "11"
+}

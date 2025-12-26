@@ -67,7 +67,9 @@ public abstract class DefaultLocalExpire implements Expire {
     Instant started = clock().instant();
     expireParameters().liveContentSet().startExpireContents(started);
 
+    @SuppressWarnings("resource")
     ForkJoinPool forkJoinPool = new ForkJoinPool(parallelism());
+    RuntimeException error = null;
     try {
       DeleteSummary deleteSummary =
           forkJoinPool.invoke(ForkJoinTask.adapt(this::expireInForkJoinPool));
@@ -77,8 +79,11 @@ public abstract class DefaultLocalExpire implements Expire {
           Duration.between(started, clock().instant()),
           deleteSummary);
       return deleteSummary;
+    } catch (RuntimeException e) {
+      error = e;
+      throw e;
     } finally {
-      expireParameters().liveContentSet().finishedExpireContents(clock().instant(), null);
+      expireParameters().liveContentSet().finishedExpireContents(clock().instant(), error);
       forkJoinPool.shutdown();
     }
   }

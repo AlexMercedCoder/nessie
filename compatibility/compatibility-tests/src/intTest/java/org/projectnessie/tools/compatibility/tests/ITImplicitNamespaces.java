@@ -17,6 +17,7 @@ package org.projectnessie.tools.compatibility.tests;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.projectnessie.client.api.NessieApiV1;
@@ -32,7 +33,8 @@ import org.projectnessie.tools.compatibility.api.Version;
 import org.projectnessie.tools.compatibility.internal.NessieUpgradesExtension;
 
 @ExtendWith(NessieUpgradesExtension.class)
-@NessieServerProperty(name = "nessie.store.validate.namespaces", value = "false")
+@NessieServerProperty(name = "nessie.store.namespace-validation", value = "false")
+@Tag("nessie-multi-env")
 public class ITImplicitNamespaces {
 
   @NessieVersion Version version;
@@ -52,7 +54,7 @@ public class ITImplicitNamespaces {
             .operation(
                 Put.of(
                     ContentKey.of("test-implicit-namespace-" + version, "table_name123"),
-                    IcebergTable.of("metadata-location", 42L, 43, 44, 45, "content-id-" + version)))
+                    IcebergTable.of("metadata-location-" + version, 42L, 43, 44, 45)))
             .branch(versionBranch)
             .commit();
     assertThat(branchNew)

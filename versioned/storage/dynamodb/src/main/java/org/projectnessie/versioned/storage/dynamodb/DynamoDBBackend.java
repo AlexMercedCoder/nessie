@@ -19,11 +19,12 @@ import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.KEY
 import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.TABLE_OBJS;
 import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.TABLE_REFS;
 
+import jakarta.annotation.Nonnull;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-import javax.annotation.Nonnull;
 import org.projectnessie.versioned.storage.common.persist.Backend;
 import org.projectnessie.versioned.storage.common.persist.PersistFactory;
 import org.slf4j.Logger;
@@ -42,26 +43,31 @@ import software.amazon.awssdk.services.dynamodb.model.ResourceNotFoundException;
 import software.amazon.awssdk.services.dynamodb.model.ScalarAttributeType;
 import software.amazon.awssdk.services.dynamodb.model.TableDescription;
 
-final class DynamoDBBackend implements Backend {
+public final class DynamoDBBackend implements Backend {
   private static final Logger LOGGER = LoggerFactory.getLogger(DynamoDBBackend.class);
 
   private final DynamoDbClient client;
   private final boolean closeClient;
 
-  DynamoDBBackend(@Nonnull @jakarta.annotation.Nonnull DynamoDbClient client, boolean closeClient) {
-    this.client = client;
+  final String tableRefs;
+  final String tableObjs;
+
+  public DynamoDBBackend(@Nonnull DynamoDBBackendConfig config, boolean closeClient) {
+    this.client = config.client();
+    this.tableRefs =
+        config.tablePrefix().map(prefix -> prefix + '_' + TABLE_REFS).orElse(TABLE_REFS);
+    this.tableObjs =
+        config.tablePrefix().map(prefix -> prefix + '_' + TABLE_OBJS).orElse(TABLE_OBJS);
     this.closeClient = closeClient;
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   DynamoDbClient client() {
     return client;
   }
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
   public PersistFactory createFactory() {
     return new DynamoDBPersistFactory(this);
   }
@@ -74,9 +80,10 @@ final class DynamoDBBackend implements Backend {
   }
 
   @Override
-  public void setupSchema() {
-    createIfMissing(TABLE_REFS);
-    createIfMissing(TABLE_OBJS);
+  public Optional<String> setupSchema() {
+    createIfMissing(tableRefs);
+    createIfMissing(tableObjs);
+    return Optional.empty();
   }
 
   private void createIfMissing(String name) {
@@ -128,13 +135,8 @@ final class DynamoDBBackend implements Backend {
     throw new IllegalStateException(
         String.format(
             "Invalid key schema for table: %s. Key schema should be a hash partitioned "
-                + "attribute with the name 'id'.",
-            description.tableName()));
-  }
-
-  @Override
-  public String configInfo() {
-    return "";
+                + "attribute with the name '%s'.",
+            description.tableName(), KEY_NAME));
   }
 
   @Override
@@ -149,7 +151,7 @@ final class DynamoDBBackend implements Backend {
     @SuppressWarnings("resource")
     DynamoDbClient c = client();
 
-    Stream.of(TABLE_REFS, TABLE_OBJS)
+    Stream.of(tableRefs, tableObjs)
         .forEach(
             table -> {
               try (BatchWrite batchWrite = new BatchWrite(this, table)) {

@@ -15,14 +15,22 @@
  */
 package org.projectnessie.services.rest;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import static org.projectnessie.api.v2.params.ReferenceResolver.resolveReferencePathElement;
 import static org.projectnessie.services.impl.RefUtil.toReference;
+import static org.projectnessie.services.rest.RestApiContext.NESSIE_V2;
+import static org.projectnessie.services.rest.common.RestCommon.updateCommitMeta;
 import static org.projectnessie.services.spi.TreeService.MAX_COMMIT_LOG_ENTRIES;
+import static org.projectnessie.versioned.RequestMeta.API_READ;
+import static org.projectnessie.versioned.RequestMeta.API_WRITE;
 
 import com.fasterxml.jackson.annotation.JsonView;
+import jakarta.enterprise.context.RequestScoped;
+import jakarta.inject.Inject;
+import jakarta.ws.rs.Path;
+import jakarta.ws.rs.core.HttpHeaders;
 import java.util.List;
-import javax.enterprise.context.RequestScoped;
-import javax.inject.Inject;
+import java.util.Locale;
 import org.projectnessie.api.v2.http.HttpTreeApi;
 import org.projectnessie.api.v2.params.CommitLogParams;
 import org.projectnessie.api.v2.params.DiffParams;
@@ -30,6 +38,7 @@ import org.projectnessie.api.v2.params.EntriesParams;
 import org.projectnessie.api.v2.params.GetReferenceParams;
 import org.projectnessie.api.v2.params.Merge;
 import org.projectnessie.api.v2.params.ParsedReference;
+import org.projectnessie.api.v2.params.ReferenceHistoryParams;
 import org.projectnessie.api.v2.params.ReferencesParams;
 import org.projectnessie.api.v2.params.Transplant;
 import org.projectnessie.error.NessieConflictException;
@@ -48,47 +57,59 @@ import org.projectnessie.model.ImmutableDiffResponse;
 import org.projectnessie.model.ImmutableEntriesResponse;
 import org.projectnessie.model.ImmutableGetMultipleContentsRequest;
 import org.projectnessie.model.ImmutableLogResponse;
+import org.projectnessie.model.ImmutableOperations;
 import org.projectnessie.model.ImmutableReferencesResponse;
 import org.projectnessie.model.LogResponse;
 import org.projectnessie.model.LogResponse.LogEntry;
 import org.projectnessie.model.MergeResponse;
 import org.projectnessie.model.Operations;
 import org.projectnessie.model.Reference;
+import org.projectnessie.model.ReferenceHistoryResponse;
 import org.projectnessie.model.ReferencesResponse;
 import org.projectnessie.model.SingleReferenceResponse;
 import org.projectnessie.model.ser.Views;
+import org.projectnessie.services.authz.AccessContext;
+import org.projectnessie.services.authz.Authorizer;
+import org.projectnessie.services.config.ServerConfig;
+import org.projectnessie.services.impl.ConfigApiImpl;
+import org.projectnessie.services.impl.ContentApiImpl;
+import org.projectnessie.services.impl.DiffApiImpl;
+import org.projectnessie.services.impl.TreeApiImpl;
 import org.projectnessie.services.spi.ConfigService;
 import org.projectnessie.services.spi.ContentService;
 import org.projectnessie.services.spi.DiffService;
 import org.projectnessie.services.spi.PagedCountingResponseHandler;
 import org.projectnessie.services.spi.TreeService;
+import org.projectnessie.versioned.VersionStore;
 
 /** REST endpoint for the tree-API. */
 @RequestScoped
-@jakarta.enterprise.context.RequestScoped
+@Path("api/v2/trees")
 public class RestV2TreeResource implements HttpTreeApi {
 
   private final ConfigService configService;
   private final TreeService treeService;
   private final ContentService contentService;
   private final DiffService diffService;
+  private final HttpHeaders httpHeaders;
 
   // Mandated by CDI 2.0
   public RestV2TreeResource() {
-    this(null, null, null, null);
+    this(null, null, null, null, null);
   }
 
   @Inject
-  @jakarta.inject.Inject
   public RestV2TreeResource(
-      ConfigService configService,
-      TreeService treeService,
-      ContentService contentService,
-      DiffService diffService) {
-    this.configService = configService;
-    this.treeService = treeService;
-    this.contentService = contentService;
-    this.diffService = diffService;
+      ServerConfig config,
+      VersionStore store,
+      Authorizer authorizer,
+      AccessContext accessContext,
+      HttpHeaders httpHeaders) {
+    this.configService = new ConfigApiImpl(config, store, authorizer, accessContext, NESSIE_V2);
+    this.treeService = new TreeApiImpl(config, store, authorizer, accessContext, NESSIE_V2);
+    this.contentService = new ContentApiImpl(config, store, authorizer, accessContext, NESSIE_V2);
+    this.diffService = new DiffApiImpl(config, store, authorizer, accessContext, NESSIE_V2);
+    this.httpHeaders = httpHeaders;
   }
 
   private ParsedReference parseRefPathString(String refPathString) {
@@ -122,7 +143,7 @@ public class RestV2TreeResource implements HttpTreeApi {
             params.fetchOption(),
             params.filter(),
             params.pageToken(),
-            new PagedCountingResponseHandler<ReferencesResponse, Reference>(maxRecords) {
+            new PagedCountingResponseHandler<>(maxRecords) {
               final ImmutableReferencesResponse.Builder builder = ReferencesResponse.builder();
 
               @Override
@@ -145,9 +166,12 @@ public class RestV2TreeResource implements HttpTreeApi {
 
   @JsonView(Views.V2.class)
   @Override
-  public SingleReferenceResponse createReference(
-      String name, Reference.ReferenceType type, Reference reference)
+  public SingleReferenceResponse createReference(String name, String type, Reference reference)
       throws NessieNotFoundException, NessieConflictException {
+
+    Reference.ReferenceType referenceType = parseReferenceType(type);
+    checkArgument(referenceType != null, "Mandatory reference type missing");
+
     String fromRefName = null;
     String fromHash = null;
     if (reference != null) {
@@ -155,7 +179,7 @@ public class RestV2TreeResource implements HttpTreeApi {
       fromHash = reference.getHash();
     }
 
-    Reference created = tree().createReference(name, type, fromHash, fromRefName);
+    Reference created = tree().createReference(name, referenceType, fromHash, fromRefName);
     return SingleReferenceResponse.builder().reference(created).build();
   }
 
@@ -164,9 +188,23 @@ public class RestV2TreeResource implements HttpTreeApi {
   public SingleReferenceResponse getReferenceByName(GetReferenceParams params)
       throws NessieNotFoundException {
     ParsedReference reference = parseRefPathString(params.getRef());
+    checkArgument(
+        reference.hashWithRelativeSpec() == null,
+        "Hashes are not allowed when fetching a reference by name");
     return SingleReferenceResponse.builder()
         .reference(tree().getReferenceByName(reference.name(), params.fetchOption()))
         .build();
+  }
+
+  @JsonView(Views.V2.class)
+  @Override
+  public ReferenceHistoryResponse getReferenceHistory(ReferenceHistoryParams params)
+      throws NessieNotFoundException {
+    ParsedReference reference = parseRefPathString(params.getRef());
+    checkArgument(
+        reference.hashWithRelativeSpec() == null,
+        "Hashes are not allowed when fetching a reference history");
+    return tree().getReferenceHistory(reference.name(), params.headCommitsToScan());
   }
 
   @JsonView(Views.V2.class)
@@ -184,7 +222,7 @@ public class RestV2TreeResource implements HttpTreeApi {
             params.filter(),
             params.pageToken(),
             params.withContent(),
-            new PagedCountingResponseHandler<EntriesResponse, EntriesResponse.Entry>(maxRecords) {
+            new PagedCountingResponseHandler<>(maxRecords) {
               @Override
               public EntriesResponse build() {
                 return builder.build();
@@ -222,8 +260,7 @@ public class RestV2TreeResource implements HttpTreeApi {
             reference.hashWithRelativeSpec(),
             params.filter(),
             params.pageToken(),
-            new PagedCountingResponseHandler<LogResponse, LogEntry>(
-                maxRecords, MAX_COMMIT_LOG_ENTRIES) {
+            new PagedCountingResponseHandler<>(maxRecords, MAX_COMMIT_LOG_ENTRIES) {
               final ImmutableLogResponse.Builder builder = ImmutableLogResponse.builder();
 
               @Override
@@ -258,7 +295,7 @@ public class RestV2TreeResource implements HttpTreeApi {
             to.name(),
             to.hashWithRelativeSpec(),
             params.pageToken(),
-            new PagedCountingResponseHandler<DiffResponse, DiffEntry>(maxRecords) {
+            new PagedCountingResponseHandler<>(maxRecords) {
               @Override
               public DiffResponse build() {
                 return builder.build();
@@ -286,10 +323,9 @@ public class RestV2TreeResource implements HttpTreeApi {
 
   @JsonView(Views.V2.class)
   @Override
-  public SingleReferenceResponse assignReference(
-      Reference.ReferenceType type, String ref, Reference assignTo)
+  public SingleReferenceResponse assignReference(String type, String ref, Reference assignTo)
       throws NessieNotFoundException, NessieConflictException {
-    ParsedReference reference = parseRefPathString(ref, type);
+    ParsedReference reference = parseRefPathString(ref, parseReferenceType(type));
     Reference updated =
         tree()
             .assignReference(
@@ -299,37 +335,47 @@ public class RestV2TreeResource implements HttpTreeApi {
 
   @JsonView(Views.V2.class)
   @Override
-  public SingleReferenceResponse deleteReference(Reference.ReferenceType type, String ref)
+  public SingleReferenceResponse deleteReference(String type, String ref)
       throws NessieConflictException, NessieNotFoundException {
-    ParsedReference reference = parseRefPathString(ref, type);
+    ParsedReference reference = parseRefPathString(ref, parseReferenceType(type));
     Reference deleted =
         tree()
             .deleteReference(reference.type(), reference.name(), reference.hashWithRelativeSpec());
     return SingleReferenceResponse.builder().reference(deleted).build();
   }
 
+  private static Reference.ReferenceType parseReferenceType(String type) {
+    if (type == null) {
+      return null;
+    }
+    return Reference.ReferenceType.valueOf(type.toUpperCase(Locale.ROOT));
+  }
+
   @JsonView(Views.V2.class)
   @Override
-  public ContentResponse getContent(ContentKey key, String ref, boolean withDocumentation)
+  public ContentResponse getContent(
+      ContentKey key, String ref, boolean withDocumentation, boolean forWrite)
       throws NessieNotFoundException {
     ParsedReference reference = parseRefPathString(ref);
     return content()
-        .getContent(key, reference.name(), reference.hashWithRelativeSpec(), withDocumentation);
+        .getContent(
+            key, reference.name(), reference.hashWithRelativeSpec(), withDocumentation, API_READ);
   }
 
   @JsonView(Views.V2.class)
   @Override
   public GetMultipleContentsResponse getSeveralContents(
-      String ref, List<String> keys, boolean withDocumentation) throws NessieNotFoundException {
+      String ref, List<String> keys, boolean withDocumentation, boolean forWrite)
+      throws NessieNotFoundException {
     ImmutableGetMultipleContentsRequest.Builder request = GetMultipleContentsRequest.builder();
     keys.forEach(k -> request.addRequestedKeys(ContentKey.fromPathString(k)));
-    return getMultipleContents(ref, request.build(), withDocumentation);
+    return getMultipleContents(ref, request.build(), withDocumentation, forWrite);
   }
 
   @JsonView(Views.V2.class)
   @Override
   public GetMultipleContentsResponse getMultipleContents(
-      String ref, GetMultipleContentsRequest request, boolean withDocumentation)
+      String ref, GetMultipleContentsRequest request, boolean withDocumentation, boolean forWrite)
       throws NessieNotFoundException {
     ParsedReference reference = parseRefPathString(ref);
     return content()
@@ -337,7 +383,8 @@ public class RestV2TreeResource implements HttpTreeApi {
             reference.name(),
             reference.hashWithRelativeSpec(),
             request.getRequestedKeys(),
-            withDocumentation);
+            withDocumentation,
+            API_READ);
   }
 
   @JsonView(Views.V2.class)
@@ -347,7 +394,7 @@ public class RestV2TreeResource implements HttpTreeApi {
     ParsedReference ref = parseRefPathString(branch);
 
     String msg = transplant.getMessage();
-    CommitMeta meta = CommitMeta.fromMessage(msg == null ? "" : msg);
+    CommitMeta meta = commitMeta(CommitMeta.builder().message(msg == null ? "" : msg)).build();
 
     return tree()
         .transplantCommitsIntoBranch(
@@ -382,6 +429,7 @@ public class RestV2TreeResource implements HttpTreeApi {
     } else {
       meta.message(msg == null ? "" : msg);
     }
+    commitMeta(meta);
 
     return tree()
         .mergeRefIntoBranch(
@@ -401,7 +449,17 @@ public class RestV2TreeResource implements HttpTreeApi {
   @Override
   public CommitResponse commitMultipleOperations(String branch, Operations operations)
       throws NessieNotFoundException, NessieConflictException {
+    ImmutableOperations.Builder ops =
+        ImmutableOperations.builder()
+            .from(operations)
+            .commitMeta(commitMeta(CommitMeta.builder().from(operations.getCommitMeta())).build());
+
     ParsedReference ref = parseRefPathString(branch);
-    return tree().commitMultipleOperations(ref.name(), ref.hashWithRelativeSpec(), operations);
+    return tree()
+        .commitMultipleOperations(ref.name(), ref.hashWithRelativeSpec(), ops.build(), API_WRITE);
+  }
+
+  CommitMeta.Builder commitMeta(CommitMeta.Builder commitMeta) {
+    return updateCommitMeta(commitMeta, httpHeaders);
   }
 }

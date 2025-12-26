@@ -14,16 +14,16 @@
  * limitations under the License.
  */
 
-import com.google.common.collect.Maps
 import io.gatling.gradle.GatlingRunTask
+import java.util.Map.entry as mapEntry
 
 plugins {
-  alias(libs.plugins.gatling)
   id("nessie-conventions-scala")
+  alias(libs.plugins.gatling)
   alias(libs.plugins.nessie.run)
 }
 
-extra["maven.name"] = "Nessie - Perf Test - Simulations"
+publishingHelper { mavenName = "Nessie - Perf Test - Simulations" }
 
 dependencies {
   if (System.getProperty("idea.sync.active").toBoolean()) {
@@ -54,7 +54,7 @@ nessieQuarkusApp {
     jvmArgumentsNonInput.add("-XX:SelfDestructTimer=30")
     systemProperties.put("nessie.server.send-stacktrace-to-client", "true")
     System.getProperties()
-      .map { e -> Maps.immutableEntry(e.key.toString(), e.value.toString()) }
+      .map { e -> mapEntry(e.key.toString(), e.value.toString()) }
       .filter { e -> e.key.startsWith("nessie.") || e.key.startsWith("quarkus.") }
       .forEach { e -> systemProperties.put(e.key, e.value) }
   }
@@ -66,12 +66,10 @@ tasks.withType(GatlingRunTask::class.java).configureEach {
 
 gatling {
   gatlingVersion = libs.versions.gatling.get()
-  // Null is OK (io.gatling.gradle.LogbackConfigTask checks for it)
-  logLevel = System.getProperty("gatling.logLevel")
 
   jvmArgs =
     System.getProperties()
-      .map { e -> Maps.immutableEntry(e.key.toString(), e.value.toString()) }
+      .map { e -> mapEntry(e.key.toString(), e.value.toString()) }
       .filter { e ->
         e.key.startsWith("nessie.") || e.key.startsWith("gatling.") || e.key.startsWith("sim.")
       }

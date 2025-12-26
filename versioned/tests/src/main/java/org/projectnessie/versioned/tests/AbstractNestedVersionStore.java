@@ -17,6 +17,7 @@ package org.projectnessie.versioned.tests;
 
 import static com.google.common.collect.Lists.newArrayList;
 import static java.util.Collections.emptyList;
+import static java.util.Objects.requireNonNull;
 import static org.projectnessie.versioned.DefaultMetadataRewriter.DEFAULT_METADATA_REWRITER;
 
 import java.util.ArrayList;
@@ -29,17 +30,18 @@ import org.assertj.core.api.SoftAssertions;
 import org.projectnessie.model.CommitMeta;
 import org.projectnessie.model.Content;
 import org.projectnessie.model.ContentKey;
+import org.projectnessie.model.Operation;
+import org.projectnessie.model.Operation.Delete;
+import org.projectnessie.model.Operation.Put;
+import org.projectnessie.model.Operation.Unchanged;
 import org.projectnessie.versioned.Commit;
 import org.projectnessie.versioned.ContentResult;
-import org.projectnessie.versioned.Delete;
 import org.projectnessie.versioned.Diff;
 import org.projectnessie.versioned.Hash;
 import org.projectnessie.versioned.ImmutableCommit;
-import org.projectnessie.versioned.Put;
 import org.projectnessie.versioned.Ref;
 import org.projectnessie.versioned.ReferenceInfo;
 import org.projectnessie.versioned.ReferenceNotFoundException;
-import org.projectnessie.versioned.Unchanged;
 import org.projectnessie.versioned.VersionStore;
 import org.projectnessie.versioned.paging.PaginationIterator;
 
@@ -52,10 +54,6 @@ public abstract class AbstractNestedVersionStore {
 
   protected VersionStore store() {
     return store;
-  }
-
-  protected boolean isNewStorageModel() {
-    return store().getClass().getName().endsWith("VersionStoreImpl");
   }
 
   protected StorageAssertions storageCheckpoint() {
@@ -111,7 +109,11 @@ public abstract class AbstractNestedVersionStore {
   }
 
   protected CommitBuilder commit(String message) {
-    return new CommitBuilder(store()).withMetadata(CommitMeta.fromMessage(message)).fromLatest();
+    return commit(store(), message);
+  }
+
+  protected CommitBuilder commit(VersionStore store, String message) {
+    return new CommitBuilder(store).withMetadata(CommitMeta.fromMessage(message)).fromLatest();
   }
 
   protected Put put(String key, Content value) {
@@ -147,7 +149,7 @@ public abstract class AbstractNestedVersionStore {
   }
 
   protected static Content contentWithoutId(ContentResult content) {
-    return content != null ? content.content().withId(null) : null;
+    return content != null ? requireNonNull(content.content()).withId(null) : null;
   }
 
   protected static Content contentWithoutId(Content content) {
@@ -176,8 +178,7 @@ public abstract class AbstractNestedVersionStore {
         .collect(Collectors.toList());
   }
 
-  protected static List<org.projectnessie.versioned.Operation> operationsWithoutContentId(
-      List<org.projectnessie.versioned.Operation> operations) {
+  protected static List<Operation> operationsWithoutContentId(List<Operation> operations) {
     if (operations == null) {
       return null;
     }
@@ -186,7 +187,7 @@ public abstract class AbstractNestedVersionStore {
             op -> {
               if (op instanceof Put) {
                 Put put = (Put) op;
-                Content content = put.getValue();
+                Content content = put.getContent();
                 return Put.of(put.getKey(), contentWithoutId(content));
               }
               return op;

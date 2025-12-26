@@ -14,41 +14,9 @@
  * limitations under the License.
  */
 
-import com.github.vlsi.jandex.JandexBuildAction
-import com.github.vlsi.jandex.JandexProcessResources
-
-plugins {
-  id("com.github.vlsi.jandex")
-  id("com.diffplug.spotless")
-}
+plugins { id("com.diffplug.spotless") }
 
 apply<PublishingHelperPlugin>()
-
-repositories {
-  mavenCentral()
-  if (System.getProperty("withMavenLocal").toBoolean()) {
-    mavenLocal()
-  }
-}
-
-jandex { toolVersion.set(libsRequiredVersion("jandex")) }
-
-val sourceSets: SourceSetContainer? by project
-
-sourceSets?.withType(SourceSet::class.java)?.configureEach {
-  val sourceSet = this
-
-  val jandexTaskName = sourceSet.getTaskName("process", "jandexIndex")
-  tasks.named(jandexTaskName, JandexProcessResources::class.java).configure {
-    if ("main" != sourceSet.name) {
-      // No Jandex for non-main
-      jandexBuildAction.set(JandexBuildAction.NONE)
-    }
-    if (!project.plugins.hasPlugin("io.quarkus")) {
-      dependsOn(tasks.named(sourceSet.classesTaskName))
-    }
-  }
-}
 
 //
 
@@ -76,15 +44,34 @@ if (
         target("build-logic/src/**/kotlin/**")
         targetExclude("build-logic/build/**")
       }
-    }
-
-    if (project.plugins.hasPlugin("antlr")) {
-      antlr4 {
-        licenseHeaderFile(rootProject.file("codestyle/copyright-header-java.txt"))
-        target("src/**/antlr4/**")
-        targetExclude("build/**")
+      yaml {
+        // delimiter can be:
+        // - a comment sign not followed by another comment sign (reserved for the license header)
+        // - a YAML document separator
+        // - the beginning of a YAML document (key-value pair)
+        licenseHeaderFile(
+          rootProject.file("codestyle/copyright-header-yaml.txt"),
+          " *(#(?!#)|---|[^:#\\s\\{/]+\\s*:)",
+        )
+        target("helm/nessie/**/*.yaml", "helm/nessie/**/*.yml")
+        targetExclude("helm/nessie/templates/**", "helm/nessie/ci/**")
+      }
+      format("helm-template") {
+        // delimiter can be:
+        // - the beginning of a template not followed by /** (reserved for the license header)
+        // - a comment sign
+        // - a YAML document separator
+        // - the beginning of a YAML document (key-value pair)
+        // - The sentence "To connect to Nessie" (NOTES.txt)
+        licenseHeaderFile(
+          rootProject.file("codestyle/copyright-header-helm-template.txt"),
+          "( *\\{\\{(?!/\\*\\*)| *#|---|[^:#\\s\\{/]+\\s*:|To connect to Nessie)",
+        )
+        target("helm/nessie/templates/**")
+        targetExclude("helm/nessie/templates/tests/**")
       }
     }
+
     if (project.plugins.hasPlugin("java-base")) {
       java {
         googleJavaFormat(libsRequiredVersion("googleJavaFormat"))
@@ -98,7 +85,7 @@ if (
         scalafmt()
         licenseHeaderFile(
           rootProject.file("codestyle/copyright-header-java.txt"),
-          "^(package|import) .*$"
+          "^(package|import) .*$",
         )
         target("src/**/scala/**")
         targetExclude("build-logic/build/**")
@@ -121,4 +108,11 @@ tasks.register("compileAll").configure {
   group = "build"
   description = "Runs all compilation and jar tasks"
   dependsOn(tasks.withType<AbstractCompile>(), tasks.withType<ProcessResources>())
+}
+
+// ensure jars conform to reproducible builds
+// (https://docs.gradle.org/current/userguide/working_with_files.html#sec:reproducible_archives)
+tasks.withType<AbstractArchiveTask>().configureEach {
+  isPreserveFileTimestamps = false
+  isReproducibleFileOrder = true
 }

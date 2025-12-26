@@ -15,10 +15,8 @@
  */
 package org.projectnessie.server.store;
 
-import java.util.function.Supplier;
 import org.projectnessie.model.Content;
 import org.projectnessie.model.IcebergView;
-import org.projectnessie.nessie.relocated.protobuf.ByteString;
 import org.projectnessie.server.store.proto.ObjectTypes;
 
 public final class IcebergViewSerializer extends BaseSerializer<IcebergView> {
@@ -34,27 +32,30 @@ public final class IcebergViewSerializer extends BaseSerializer<IcebergView> {
   }
 
   @Override
+  @SuppressWarnings("deprecation")
   protected void toStoreOnRefState(IcebergView view, ObjectTypes.Content.Builder builder) {
     ObjectTypes.IcebergViewState.Builder stateBuilder =
         ObjectTypes.IcebergViewState.newBuilder()
             .setVersionId(view.getVersionId())
-            .setSchemaId(view.getSchemaId())
-            .setDialect(view.getDialect())
-            .setSqlText(view.getSqlText())
-            .setMetadataLocation(view.getMetadataLocation());
+            .setSchemaId(view.getSchemaId());
+    String dialect = view.getDialect();
+    String sqlText = view.getSqlText();
+    String metadataLocation = view.getMetadataLocation();
+    if (dialect != null) {
+      stateBuilder.setDialect(dialect);
+    }
+    if (sqlText != null) {
+      stateBuilder.setSqlText(sqlText);
+    }
+    if (metadataLocation != null) {
+      stateBuilder.setMetadataLocation(metadataLocation);
+    }
 
     builder.setIcebergViewState(stateBuilder);
   }
 
   @Override
-  public boolean requiresGlobalState(ByteString content) {
-    ObjectTypes.Content parsed = parse(content);
-    return !parsed.getIcebergViewState().hasMetadataLocation();
-  }
-
-  @Override
-  protected IcebergView valueFromStore(
-      ObjectTypes.Content content, Supplier<ByteString> globalState) {
-    return valueFromStoreIcebergView(content, new IcebergMetadataPointerSupplier(globalState));
+  protected IcebergView valueFromStore(ObjectTypes.Content content) {
+    return valueFromStoreIcebergView(content);
   }
 }

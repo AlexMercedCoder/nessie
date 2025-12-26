@@ -17,15 +17,14 @@ package org.projectnessie.quarkus.tests.profiles;
 
 import io.quarkus.test.common.DevServicesContext;
 import io.quarkus.test.common.QuarkusTestResourceLifecycleManager;
-import java.util.Collections;
 import java.util.Map;
 import java.util.Optional;
-import org.projectnessie.versioned.storage.dynamodb.DynamoDBBackendTestFactory;
+import org.projectnessie.versioned.storage.dynamodbtests2.DynamoDB2BackendTestFactory;
 
 public class DynamoTestResourceLifecycleManager
     implements QuarkusTestResourceLifecycleManager, DevServicesContext.ContextAware {
 
-  private DynamoDBBackendTestFactory dynamo;
+  private DynamoDB2BackendTestFactory dynamo;
 
   private Optional<String> containerNetworkId = Optional.empty();
 
@@ -36,17 +35,16 @@ public class DynamoTestResourceLifecycleManager
 
   @Override
   public Map<String, String> start() {
-    dynamo = new DynamoDBBackendTestFactory();
+    dynamo = new DynamoDB2BackendTestFactory();
 
     try {
       // Only start the Docker container (local Dynamo-compatible).
-      dynamo.startDynamo(containerNetworkId);
+      dynamo.start(containerNetworkId);
     } catch (Exception e) {
-      e.printStackTrace();
       throw new RuntimeException(e);
     }
 
-    return Collections.singletonMap("quarkus.dynamodb.endpoint-override", dynamo.getEndpointURI());
+    return dynamo.getQuarkusConfig();
   }
 
   @Override

@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-import org.gradle.api.attributes.TestSuiteType
 import org.gradle.api.component.AdhocComponentWithVariants
 import org.gradle.api.plugins.jvm.JvmTestSuite
 import org.gradle.api.services.BuildService
@@ -29,26 +28,26 @@ plugins {
 
 gradle.sharedServices.registerIfAbsent(
   "intTestParallelismConstraint",
-  TestingParallelismHelper::class.java
+  TestingParallelismHelper::class.java,
 ) {
   val intTestParallelism =
     Integer.getInteger(
       "nessie.intTestParallelism",
-      (Runtime.getRuntime().availableProcessors() / 4).coerceAtLeast(1)
+      (Runtime.getRuntime().availableProcessors() / 4).coerceAtLeast(1),
     )
-  maxParallelUsages.set(intTestParallelism)
+  maxParallelUsages = intTestParallelism
 }
 
 gradle.sharedServices.registerIfAbsent(
   "testParallelismConstraint",
-  TestingParallelismHelper::class.java
+  TestingParallelismHelper::class.java,
 ) {
   val intTestParallelism =
     Integer.getInteger(
       "nessie.testParallelism",
-      (Runtime.getRuntime().availableProcessors() / 2).coerceAtLeast(1)
+      (Runtime.getRuntime().availableProcessors() / 2).coerceAtLeast(1),
     )
-  maxParallelUsages.set(intTestParallelism)
+  maxParallelUsages = intTestParallelism
 }
 
 // Do not publish test fixtures via Maven. Shared, reusable test code should be published as
@@ -62,9 +61,9 @@ components {
 
 if (plugins.hasPlugin("io.quarkus")) {
   // This directory somehow disappears... Maybe some weird Quarkus code.
-  val testFixturesDir = buildDir.resolve("resources/testFixtures")
-  tasks.named("quarkusGenerateCodeTests").configure { doFirst { testFixturesDir.mkdirs() } }
-  tasks.withType<Test>().configureEach { doFirst { testFixturesDir.mkdirs() } }
+  val testFixturesDir = layout.buildDirectory.dir("resources/testFixtures")
+  tasks.named("quarkusGenerateCodeTests").configure { doFirst { mkdir(testFixturesDir) } }
+  tasks.withType<Test>().configureEach { doFirst { mkdir(testFixturesDir) } }
 }
 
 tasks.withType<Test>().configureEach {
@@ -79,12 +78,22 @@ tasks.withType<Test>().configureEach {
   systemProperty("user.language", "en")
   systemProperty("user.country", "US")
   systemProperty("user.variant", "")
+
   jvmArgumentProviders.add(
-    CommandLineArgumentProvider { listOf("-Dtest.log.level=${testLogLevel()}") }
+    CommandLineArgumentProvider {
+      listOf(
+        "-Dtest.log.level=${testLogLevel()}",
+        "-Djunit.platform.reporting.open.xml.enabled=true",
+        "-Djunit.platform.reporting.output.dir=${reports.junitXml.outputLocation.get().asFile.absolutePath}",
+        "-Djunit.jupiter.execution.timeout.default=5m",
+      )
+    }
   )
   environment("TESTCONTAINERS_REUSE_ENABLE", "true")
 
   if (plugins.hasPlugin("io.quarkus")) {
+    systemProperty("java.util.logging.manager", "org.jboss.logmanager.LogManager")
+
     jvmArgs("--add-opens=java.base/java.util=ALL-UNNAMED")
     // Log-levels are required to be able to parse the HTTP listen URL
     jvmArgumentProviders.add(
@@ -92,13 +101,13 @@ tasks.withType<Test>().configureEach {
         listOf(
           "-Dquarkus.log.level=${testLogLevel("INFO")}",
           "-Dquarkus.log.console.level=${testLogLevel("INFO")}",
-          "-Dhttp.access.log.level=${testLogLevel()}"
+          "-Dhttp.access.log.level=${testLogLevel()}",
         )
       }
     )
 
-    minHeapSize = if (testHeapSize != null) testHeapSize as String else "512m"
-    maxHeapSize = if (testHeapSize != null) testHeapSize as String else "1536m"
+    minHeapSize = if (testHeapSize != null) testHeapSize as String else "768m"
+    maxHeapSize = if (testHeapSize != null) testHeapSize as String else "4g"
   } else if (testHeapSize != null) {
     minHeapSize = testHeapSize!!
     maxHeapSize = testHeapSize!!
@@ -125,8 +134,6 @@ testing {
     register<JvmTestSuite>("intTest") {
       useJUnitJupiter(libsRequiredVersion("junit"))
 
-      testType.set(TestSuiteType.INTEGRATION_TEST)
-
       dependencies { implementation.add(project()) }
 
       val hasQuarkus = plugins.hasPlugin("io.quarkus")
@@ -146,7 +153,7 @@ testing {
           // io.quarkus.test.junit.IntegrationTestUtil.determineBuildOutputDirectory(java.net.URL)
           // is not smart enough :(
           if (hasQuarkus) {
-            systemProperty("build.output.directory", buildDir)
+            systemProperty("build.output.directory", layout.buildDirectory.asFile.get())
             dependsOn(tasks.named("quarkusBuild"))
           }
         }

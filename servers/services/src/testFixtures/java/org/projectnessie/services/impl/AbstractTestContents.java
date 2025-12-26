@@ -20,6 +20,7 @@ import static org.assertj.core.api.InstanceOfAssertFactories.list;
 import static org.assertj.core.groups.Tuple.tuple;
 import static org.projectnessie.model.CommitMeta.fromMessage;
 import static org.projectnessie.model.FetchOption.ALL;
+import static org.projectnessie.versioned.RequestMeta.API_READ;
 
 import com.google.common.collect.Maps;
 import java.util.List;
@@ -89,12 +90,9 @@ public abstract class AbstractTestContents extends BaseTestServiceImpl {
                 ContentKey.of("a", "iceberg"), IcebergTable.of("/iceberg/table", 42, 42, 42, 42))),
         new ContentAndOperationType(
             Content.Type.ICEBERG_VIEW,
-            Put.of(
-                ContentKey.of("a", "view"),
-                IcebergView.of("/iceberg/view", 1, 1, "dial", "SELECT foo FROM table"))),
+            Put.of(ContentKey.of("a", "view"), IcebergView.of("/iceberg/view", 1, 1))),
         new ContentAndOperationType(
-            Content.Type.UDF,
-            Put.of(ContentKey.of("a", "udf"), UDF.of("dial", "SELECT foo FROM table"))),
+            Content.Type.UDF, Put.of(ContentKey.of("a", "udf"), UDF.udf("/udf-meta", "42", "666"))),
         new ContentAndOperationType(
             Content.Type.DELTA_LAKE_TABLE,
             Put.of(
@@ -118,23 +116,19 @@ public abstract class AbstractTestContents extends BaseTestServiceImpl {
         new ContentAndOperationType(
             Content.Type.UDF,
             Delete.of(ContentKey.of("a", "udf_delete")),
-            Put.of(ContentKey.of("a", "udf_delete"), UDF.of("dial", "sql"))),
+            Put.of(ContentKey.of("a", "udf_delete"), UDF.udf("/udf-metadata", "42", "666"))),
         new ContentAndOperationType(
             Content.Type.ICEBERG_VIEW,
             Delete.of(ContentKey.of("a", "view_delete")),
-            Put.of(
-                ContentKey.of("a", "view_delete"),
-                IcebergView.of("/iceberg/view", 42, 42, "dial", "sql"))),
+            Put.of(ContentKey.of("a", "view_delete"), IcebergView.of("/iceberg/view", 42, 42))),
         new ContentAndOperationType(
             Content.Type.ICEBERG_VIEW,
             Unchanged.of(ContentKey.of("a", "view_unchanged")),
-            Put.of(
-                ContentKey.of("a", "view_unchanged"),
-                IcebergView.of("/iceberg/view", 42, 42, "dial", "sql"))),
+            Put.of(ContentKey.of("a", "view_unchanged"), IcebergView.of("/iceberg/view", 42, 42))),
         new ContentAndOperationType(
             Content.Type.UDF,
             Unchanged.of(ContentKey.of("a", "udf_unchanged")),
-            Put.of(ContentKey.of("a", "udf_unchanged"), UDF.of("dial", "sql"))),
+            Put.of(ContentKey.of("a", "udf_unchanged"), UDF.udf("/udf-meta-data", "42", "666"))),
         new ContentAndOperationType(
             Content.Type.DELTA_LAKE_TABLE,
             Delete.of(ContentKey.of("a", "delta_delete")),
@@ -214,10 +208,10 @@ public abstract class AbstractTestContents extends BaseTestServiceImpl {
                 .collect(Collectors.toList()));
 
     // Verify that 'get contents' for the HEAD commit returns exactly the committed contents
-    List<ContentKey> allKeys =
+    ContentKey[] allKeys =
         contentAndOps.stream()
             .map(contentAndOperationType -> contentAndOperationType.operation.getKey())
-            .collect(Collectors.toList());
+            .toArray(ContentKey[]::new);
     Map<ContentKey, Content> expected =
         contentAndOps.stream()
             .map(
@@ -233,7 +227,7 @@ public abstract class AbstractTestContents extends BaseTestServiceImpl {
                 })
             .filter(Objects::nonNull)
             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
-    soft.assertThat(contents(committed, allKeys.toArray(new ContentKey[0])))
+    soft.assertThat(contents(committed, allKeys))
         .containsOnlyKeys(expected.keySet())
         .allSatisfy(
             (key, content) -> assertThat(clearIdOnContent(content)).isEqualTo(expected.get(key)));
@@ -299,7 +293,8 @@ public abstract class AbstractTestContents extends BaseTestServiceImpl {
       // Compare content on HEAD commit with the committed content
       soft.assertThat(
               contentApi()
-                  .getContent(fixedContentKey, committed.getName(), committed.getHash(), false))
+                  .getContent(
+                      fixedContentKey, committed.getName(), committed.getHash(), false, API_READ))
           .extracting(ContentResponse::getContent)
           .extracting(this::clearIdOnContent)
           .isEqualTo(put.getContent());
@@ -325,7 +320,12 @@ public abstract class AbstractTestContents extends BaseTestServiceImpl {
       soft.assertThatThrownBy(
               () ->
                   contentApi()
-                      .getContent(fixedContentKey, committed.getName(), committed.getHash(), false))
+                      .getContent(
+                          fixedContentKey,
+                          committed.getName(),
+                          committed.getHash(),
+                          false,
+                          API_READ))
           .isInstanceOf(NessieNotFoundException.class);
 
       // Compare operation on HEAD commit with the committed operation
@@ -347,7 +347,8 @@ public abstract class AbstractTestContents extends BaseTestServiceImpl {
       // Compare content on HEAD commit with the committed content
       soft.assertThat(
               contentApi()
-                  .getContent(fixedContentKey, committed.getName(), committed.getHash(), false))
+                  .getContent(
+                      fixedContentKey, committed.getName(), committed.getHash(), false, API_READ))
           .extracting(ContentResponse::getContent)
           .extracting(this::clearIdOnContent)
           .isEqualTo(contentAndOperationType.prepare.getContent());

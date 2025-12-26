@@ -14,19 +14,17 @@
  * limitations under the License.
  */
 
-plugins {
-  id("nessie-conventions-iceberg8")
-  id("nessie-jacoco")
-}
+plugins { id("nessie-conventions-java11") }
 
-extra["maven.name"] = "Nessie - GC - Iceberg content functionality"
+publishingHelper { mavenName = "Nessie - GC - Iceberg content functionality" }
 
 dependencies {
-  implementation(libs.iceberg.core)
+  implementation(platform(libs.iceberg.bom))
+  implementation("org.apache.iceberg:iceberg-core")
 
   compileOnly(libs.errorprone.annotations)
-  compileOnly(libs.immutables.value.annotations)
-  annotationProcessor(libs.immutables.value.processor)
+  compileOnly(nessieProject("nessie-immutables-std"))
+  annotationProcessor(nessieProject("nessie-immutables-std", configuration = "processor"))
 
   implementation(nessieProject("nessie-model"))
   implementation(nessieProject("nessie-gc-base"))
@@ -38,11 +36,8 @@ dependencies {
   compileOnly("com.fasterxml.jackson.core:jackson-annotations")
   compileOnly(libs.microprofile.openapi)
 
-  // javax/jakarta
   compileOnly(libs.jakarta.validation.api)
-  compileOnly(libs.javax.validation.api)
   compileOnly(libs.jakarta.annotation.api)
-  compileOnly(libs.findbugs.jsr305)
 
   testImplementation(nessieProject("nessie-gc-iceberg-mock"))
   testRuntimeOnly(libs.logback.classic)

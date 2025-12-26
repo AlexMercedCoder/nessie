@@ -15,12 +15,12 @@
  */
 package org.projectnessie.model;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonTypeName;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import javax.annotation.Nullable;
 import javax.validation.constraints.NotBlank;
-import javax.validation.constraints.NotNull;
 import org.immutables.value.Value;
 
 @Value.Immutable
@@ -31,13 +31,34 @@ public abstract class UDF extends Content {
 
   @NotBlank
   @jakarta.validation.constraints.NotBlank
-  @NotNull
-  @jakarta.validation.constraints.NotNull
+  @Nullable
+  @jakarta.annotation.Nullable
+  @JsonInclude(JsonInclude.Include.NON_NULL)
+  @SuppressWarnings("DeprecatedIsStillUsed")
+  @Deprecated
   public abstract String getSqlText();
 
   @Nullable
-  @jakarta.annotation.Nullable // TODO this is currently undefined in Iceberg
+  @jakarta.annotation.Nullable
+  @JsonInclude(JsonInclude.Include.NON_NULL)
+  @SuppressWarnings("DeprecatedIsStillUsed")
+  @Deprecated
   public abstract String getDialect();
+
+  @Nullable
+  @jakarta.annotation.Nullable
+  @JsonInclude(JsonInclude.Include.NON_NULL)
+  public abstract String getVersionId();
+
+  @Nullable
+  @jakarta.annotation.Nullable
+  @JsonInclude(JsonInclude.Include.NON_NULL)
+  public abstract String getSignatureId();
+
+  @Nullable
+  @jakarta.annotation.Nullable
+  @JsonInclude(JsonInclude.Include.NON_NULL)
+  public abstract String getMetadataLocation();
 
   @Override
   public Type getType() {
@@ -51,10 +72,29 @@ public abstract class UDF extends Content {
     return ImmutableUDF.builder();
   }
 
+  public static UDF udf(String metadataLocation, String versionId, String signatureId) {
+    return builder()
+        .metadataLocation(metadataLocation)
+        .versionId(versionId)
+        .signatureId(signatureId)
+        .build();
+  }
+
+  public static UDF udf(String id, String metadataLocation, String versionId, String signatureId) {
+    return builder()
+        .id(id)
+        .metadataLocation(metadataLocation)
+        .versionId(versionId)
+        .signatureId(signatureId)
+        .build();
+  }
+
+  @Deprecated
   public static UDF of(String dialect, String sqlText) {
     return builder().dialect(dialect).sqlText(sqlText).build();
   }
 
+  @Deprecated
   public static UDF of(String id, String dialect, String sqlText) {
     return builder().id(id).dialect(dialect).sqlText(sqlText).build();
   }

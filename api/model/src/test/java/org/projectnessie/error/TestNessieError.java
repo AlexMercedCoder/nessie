@@ -15,7 +15,6 @@
  */
 package org.projectnessie.error;
 
-import static com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
 import static org.projectnessie.model.Conflict.ConflictType.UNEXPECTED_HASH;
@@ -69,7 +68,9 @@ class TestNessieError {
                 .put("someNewField", "blah")
                 .set("key", ckJson),
             conflict(UNKNOWN, ContentKey.of("foo"), "msg")),
-        arguments(objectNode().put("message", "msg"), conflict(null, null, "msg")));
+        arguments(
+            objectNode().putNull("conflictType").put("message", "msg"),
+            conflict(UNKNOWN, null, "msg")));
   }
 
   /**
@@ -81,8 +82,7 @@ class TestNessieError {
   @ParameterizedTest
   @MethodSource("conflictDeserialization")
   void conflictDeserialization(JsonNode input, Conflict expected) throws Exception {
-    Conflict parsedConflict =
-        new ObjectMapper().disable(FAIL_ON_UNKNOWN_PROPERTIES).treeToValue(input, Conflict.class);
+    Conflict parsedConflict = new ObjectMapper().treeToValue(input, Conflict.class);
     Assertions.assertThat(parsedConflict).isEqualTo(expected);
   }
 
@@ -108,7 +108,7 @@ class TestNessieError {
     e =
         ImmutableNessieError.builder()
             .from(e)
-            .clientProcessingException(new Exception("processingException"))
+            .clientProcessingError(new Exception("processingException").toString())
             .build();
     assertThat(e.getFullMessage())
         .matches(
@@ -121,10 +121,8 @@ class TestNessieError {
                     + "[)]: message\\R"
                     + "foo.bar.InternalServerError\\R"
                     + "\tat some.other.Class\\R"
-                    + "\\RAdditionally, the client-side exception below was caught while decoding the HTTP response:\\R"
-                    + "java.lang.Exception: processingException\\R"
-                    + "\tat (all//)?org.projectnessie.error.TestNessieError.fullMessage[(]TestNessieError.java:"
-                    + ".*",
+                    + "Additionally, the client-side error below was caught while decoding the HTTP response: "
+                    + "java.lang.Exception: processingException",
                 Pattern.DOTALL));
   }
 
@@ -137,17 +135,16 @@ class TestNessieError {
             .status(HTTP_500_CODE)
             .reason(HTTP_500_MESSAGE)
             .serverStackTrace("foo.bar.InternalServerError\n" + "\tat some.other.Class")
-            .clientProcessingException(new Exception("processingException"))
+            .clientProcessingError(new Exception("processingException").toString())
             .build();
 
     String json = mapper.writeValueAsString(e0);
     NessieError e1 = mapper.readValue(json, NessieError.class);
 
-    assertThat(e1.getClientProcessingException()).isNull(); // not propagated through JSON
+    assertThat(e1.getClientProcessingError()).isNull(); // not propagated through JSON
 
     // Copy e0 without the client error
-    NessieError e2 =
-        ImmutableNessieError.builder().from(e0).clientProcessingException(null).build();
+    NessieError e2 = ImmutableNessieError.builder().from(e0).clientProcessingError(null).build();
     assertThat(e1).isEqualTo(e2);
   }
 }

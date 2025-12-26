@@ -25,14 +25,9 @@ import org.projectnessie.versioned.storage.testextension.NessiePersist;
 import org.projectnessie.versioned.storage.testextension.PersistExtension;
 
 @ExtendWith(PersistExtension.class)
-abstract class AbstractTestRestApiPersist extends BaseTestNessieApi {
+abstract class AbstractTestRestApiPersist extends BaseTestNessieRestWithRelRef {
 
   @NessiePersist protected static Persist persist;
 
   @RegisterExtension static NessieJaxRsExtension server = jaxRsExtension(() -> persist);
-
-  @Override
-  protected boolean fullPagingSupport() {
-    return true;
-  }
 }

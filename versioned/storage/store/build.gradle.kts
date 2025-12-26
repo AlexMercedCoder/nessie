@@ -14,12 +14,9 @@
  * limitations under the License.
  */
 
-plugins {
-  id("nessie-conventions-server")
-  id("nessie-jacoco")
-}
+plugins { id("nessie-conventions-java11") }
 
-extra["maven.name"] = "Nessie - Storage - Version Store"
+publishingHelper { mavenName = "Nessie - Storage - Version Store" }
 
 description = "VersionStore implementation relying on 'Persist'."
 
@@ -30,9 +27,7 @@ dependencies {
   implementation(project(":nessie-versioned-spi"))
   implementation(libs.agrona)
 
-  // javax/jakarta
   compileOnly(libs.jakarta.validation.api)
-  compileOnly(libs.javax.validation.api)
   compileOnly(libs.jakarta.annotation.api)
   compileOnly(libs.findbugs.jsr305)
 
@@ -42,14 +37,18 @@ dependencies {
   implementation(libs.guava)
   implementation(libs.slf4j.api)
 
-  compileOnly(libs.immutables.builder)
-  compileOnly(libs.immutables.value.annotations)
-  annotationProcessor(libs.immutables.value.processor)
+  implementation(platform(libs.jackson.bom))
+  compileOnly("com.fasterxml.jackson.core:jackson-annotations")
+  implementation("com.fasterxml.jackson.core:jackson-databind")
+
+  compileOnly(project(":nessie-immutables-std"))
+  annotationProcessor(project(":nessie-immutables-std", configuration = "processor"))
 
   compileOnly(platform(libs.jackson.bom))
   compileOnly("com.fasterxml.jackson.core:jackson-annotations")
 
   testImplementation(project(":nessie-server-store"))
+  testImplementation(project(":nessie-versioned-storage-cache"))
   testImplementation(project(":nessie-versioned-storage-common-tests"))
   testImplementation(project(":nessie-versioned-storage-inmemory"))
   testImplementation(project(":nessie-versioned-storage-testextension"))
@@ -60,7 +59,6 @@ dependencies {
   testCompileOnly(platform(libs.jackson.bom))
   testCompileOnly("com.fasterxml.jackson.core:jackson-annotations")
 
-  // javax/jakarta
   testCompileOnly(libs.jakarta.validation.api)
   testCompileOnly(libs.jakarta.annotation.api)
 

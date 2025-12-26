@@ -18,8 +18,8 @@ package org.projectnessie.versioned.storage.common.objtypes;
 import static org.projectnessie.versioned.storage.common.persist.ObjId.EMPTY_OBJ_ID;
 
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
+import jakarta.annotation.Nullable;
 import java.util.List;
-import javax.annotation.Nullable;
 import org.immutables.value.Value;
 import org.projectnessie.nessie.relocated.protobuf.ByteString;
 import org.projectnessie.versioned.storage.common.config.StoreConfig;
@@ -77,7 +77,7 @@ public interface CommitObj extends Obj {
 
   @Override
   default ObjType type() {
-    return ObjType.COMMIT;
+    return StandardObjType.COMMIT;
   }
 
   static Builder commitBuilder() {
@@ -89,7 +89,10 @@ public interface CommitObj extends Obj {
     Builder from(CommitObj instance);
 
     @CanIgnoreReturnValue
-    Builder id(@Nullable @jakarta.annotation.Nullable ObjId id);
+    Builder id(@Nullable ObjId id);
+
+    @CanIgnoreReturnValue
+    Builder referenced(long referenced);
 
     @CanIgnoreReturnValue
     Builder created(long created);
@@ -99,6 +102,12 @@ public interface CommitObj extends Obj {
 
     @CanIgnoreReturnValue
     Builder addTail(ObjId element);
+
+    @CanIgnoreReturnValue
+    Builder tail(Iterable<? extends ObjId> elements);
+
+    @CanIgnoreReturnValue
+    Builder secondaryParents(Iterable<? extends ObjId> elements);
 
     @CanIgnoreReturnValue
     Builder addSecondaryParents(ObjId element);
@@ -113,7 +122,7 @@ public interface CommitObj extends Obj {
     Builder message(String message);
 
     @CanIgnoreReturnValue
-    Builder referenceIndex(@Nullable @jakarta.annotation.Nullable ObjId referenceIndex);
+    Builder referenceIndex(@Nullable ObjId referenceIndex);
 
     @CanIgnoreReturnValue
     Builder addAllReferenceIndexStripes(Iterable<? extends IndexStripe> referenceIndexStripes);
@@ -135,6 +144,7 @@ public interface CommitObj extends Obj {
   }
 
   /** Creation timestamp in microseconds since epoch. */
+  @Value.Auxiliary
   long created();
 
   /**
@@ -181,17 +191,17 @@ public interface CommitObj extends Obj {
   /**
    * Pointer to the reference {@link StoreKey}-to-{@link CommitOp} index for this commit.
    *
-   * <p>This value, if not {@code null}, can point to {@link ObjType#INDEX_SEGMENTS}, in which case
-   * the reference index is already big and organized in multiple segments, or to {@link
-   * ObjType#INDEX} when the full index is small enough to fit into a single segment and indirection
-   * is not necessary.
+   * <p>This value, if not {@code null}, can point to {@link StandardObjType#INDEX_SEGMENTS}, in
+   * which case the reference index is already big and organized in multiple segments, or to {@link
+   * StandardObjType#INDEX} when the full index is small enough to fit into a single segment and
+   * indirection is not necessary.
    *
    * <p>A {@code null} value means that the "embedded" {@link #incrementalIndex()} was never big
    * enough, a "reference index" does not exist and {@link #incrementalIndex()} contains everything.
    *
-   * <p>An external {@link ObjType#INDEX_SEGMENTS} object will only be created, if the number of
-   * stripes is higher than {@link StoreConfig#maxReferenceStripesPerCommit()}, otherwise the
-   * stripes for the reference index will be stored {@link #referenceIndexStripes() inside} the
+   * <p>An external {@link StandardObjType#INDEX_SEGMENTS} object will only be created, if the
+   * number of stripes is higher than {@link StoreConfig#maxReferenceStripesPerCommit()}, otherwise
+   * the stripes for the reference index will be stored {@link #referenceIndexStripes() inside} the
    * commit.
    *
    * @see #incrementalIndex()
@@ -199,14 +209,13 @@ public interface CommitObj extends Obj {
    * @see #referenceIndexStripes()
    */
   @Nullable
-  @jakarta.annotation.Nullable
   ObjId referenceIndex();
 
   /**
    * Pointers to the composite reference index stripes, an "embedded" version of {@link
-   * ObjType#INDEX_SEGMENTS}. Commits that require to "externalize" index elements to a reference
-   * index, which requires up to {@link StoreConfig#maxReferenceStripesPerCommit()} will be kept
-   * here and not create another indirection via a {@link IndexSegmentsObj}.
+   * StandardObjType#INDEX_SEGMENTS}. Commits that require to "externalize" index elements to a
+   * reference index, which requires up to {@link StoreConfig#maxReferenceStripesPerCommit()} will
+   * be kept here and not create another indirection via a {@link IndexSegmentsObj}.
    *
    * @see #incrementalIndex()
    * @see #incompleteIndex()

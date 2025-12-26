@@ -23,7 +23,6 @@ import static java.util.Collections.emptyMap;
 import static java.util.Collections.singleton;
 import static java.util.function.Function.identity;
 import static org.projectnessie.model.CommitResponse.AddedContent.addedContent;
-import static org.projectnessie.model.Validation.validateHash;
 import static org.projectnessie.services.authz.Check.canReadContentKey;
 import static org.projectnessie.services.authz.Check.canReadEntries;
 import static org.projectnessie.services.authz.Check.canViewReference;
@@ -42,11 +41,12 @@ import static org.projectnessie.services.cel.CELUtil.VAR_REF;
 import static org.projectnessie.services.cel.CELUtil.VAR_REF_META;
 import static org.projectnessie.services.cel.CELUtil.VAR_REF_TYPE;
 import static org.projectnessie.services.impl.RefUtil.toNamedRef;
+import static org.projectnessie.versioned.RequestMeta.API_WRITE;
 
 import com.google.common.base.Strings;
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import java.security.Principal;
+import jakarta.annotation.Nullable;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -56,14 +56,11 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.function.BiConsumer;
+import java.util.function.BiPredicate;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
-import java.util.function.Supplier;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
-import javax.annotation.Nullable;
 import org.projectnessie.cel.tools.Script;
 import org.projectnessie.cel.tools.ScriptException;
 import org.projectnessie.error.NessieConflictException;
@@ -76,15 +73,14 @@ import org.projectnessie.model.CommitMeta;
 import org.projectnessie.model.CommitResponse;
 import org.projectnessie.model.Content;
 import org.projectnessie.model.ContentKey;
-import org.projectnessie.model.Detached;
 import org.projectnessie.model.EntriesResponse.Entry;
 import org.projectnessie.model.FetchOption;
 import org.projectnessie.model.IdentifiedContentKey;
-import org.projectnessie.model.ImmutableCommitMeta;
 import org.projectnessie.model.ImmutableCommitResponse;
 import org.projectnessie.model.ImmutableContentKeyDetails;
 import org.projectnessie.model.ImmutableLogEntry;
 import org.projectnessie.model.ImmutableMergeResponse;
+import org.projectnessie.model.ImmutableReferenceHistoryResponse;
 import org.projectnessie.model.ImmutableReferenceMetadata;
 import org.projectnessie.model.LogResponse.LogEntry;
 import org.projectnessie.model.MergeBehavior;
@@ -92,37 +88,47 @@ import org.projectnessie.model.MergeKeyBehavior;
 import org.projectnessie.model.MergeResponse;
 import org.projectnessie.model.MergeResponse.ContentKeyConflict;
 import org.projectnessie.model.Operation;
+import org.projectnessie.model.Operation.Delete;
+import org.projectnessie.model.Operation.Put;
 import org.projectnessie.model.Operations;
 import org.projectnessie.model.Reference;
 import org.projectnessie.model.Reference.ReferenceType;
+import org.projectnessie.model.ReferenceHistoryResponse;
+import org.projectnessie.model.ReferenceHistoryState;
 import org.projectnessie.model.ReferenceMetadata;
 import org.projectnessie.model.Tag;
 import org.projectnessie.model.Validation;
+import org.projectnessie.services.authz.AccessContext;
+import org.projectnessie.services.authz.ApiContext;
 import org.projectnessie.services.authz.Authorizer;
 import org.projectnessie.services.authz.AuthzPaginationIterator;
 import org.projectnessie.services.authz.BatchAccessChecker;
 import org.projectnessie.services.authz.Check;
+import org.projectnessie.services.authz.RetriableAccessChecker;
 import org.projectnessie.services.cel.CELUtil;
 import org.projectnessie.services.config.ServerConfig;
+import org.projectnessie.services.hash.HashValidator;
+import org.projectnessie.services.hash.ResolvedHash;
 import org.projectnessie.services.spi.PagedResponseHandler;
 import org.projectnessie.services.spi.TreeService;
 import org.projectnessie.versioned.BranchName;
 import org.projectnessie.versioned.Commit;
-import org.projectnessie.versioned.Delete;
 import org.projectnessie.versioned.GetNamedRefsParams;
 import org.projectnessie.versioned.GetNamedRefsParams.RetrieveOptions;
 import org.projectnessie.versioned.Hash;
 import org.projectnessie.versioned.KeyEntry;
 import org.projectnessie.versioned.MergeConflictException;
 import org.projectnessie.versioned.MergeResult;
+import org.projectnessie.versioned.MergeTransplantResultBase;
 import org.projectnessie.versioned.NamedRef;
-import org.projectnessie.versioned.Put;
 import org.projectnessie.versioned.ReferenceAlreadyExistsException;
 import org.projectnessie.versioned.ReferenceConflictException;
+import org.projectnessie.versioned.ReferenceHistory;
 import org.projectnessie.versioned.ReferenceInfo;
 import org.projectnessie.versioned.ReferenceNotFoundException;
+import org.projectnessie.versioned.RequestMeta;
 import org.projectnessie.versioned.TagName;
-import org.projectnessie.versioned.Unchanged;
+import org.projectnessie.versioned.TransplantResult;
 import org.projectnessie.versioned.VersionStore;
 import org.projectnessie.versioned.VersionStore.CommitValidator;
 import org.projectnessie.versioned.VersionStore.MergeOp;
@@ -136,8 +142,9 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
       ServerConfig config,
       VersionStore store,
       Authorizer authorizer,
-      Supplier<Principal> principal) {
-    super(config, store, authorizer, principal);
+      AccessContext accessContext,
+      ApiContext apiContext) {
+    super(config, store, authorizer, accessContext, apiContext);
   }
 
   @Override
@@ -152,7 +159,7 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
 
       AuthzPaginationIterator<ReferenceInfo<CommitMeta>> authz =
           new AuthzPaginationIterator<ReferenceInfo<CommitMeta>>(
-              references, super::startAccessCheck, getConfig().accessChecksBatchSize()) {
+              references, super::startAccessCheck, getServerConfig().accessChecksBatchSize()) {
             @Override
             protected Set<Check> checksForEntry(ReferenceInfo<CommitMeta> entry) {
               return singleton(canViewReference(entry.getNamedRef()));
@@ -174,7 +181,7 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
     } catch (ReferenceNotFoundException e) {
       throw new IllegalArgumentException(
           String.format(
-              "Could not find default branch '%s'.", this.getConfig().getDefaultBranch()));
+              "Could not find default branch '%s'.", this.getServerConfig().getDefaultBranch()));
     }
     return pagedResponseHandler.build();
   }
@@ -182,7 +189,7 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
   private GetNamedRefsParams getGetNamedRefsParams(boolean fetchMetadata) {
     return fetchMetadata
         ? GetNamedRefsParams.builder()
-            .baseReference(BranchName.of(this.getConfig().getDefaultBranch()))
+            .baseReference(BranchName.of(this.getServerConfig().getDefaultBranch()))
             .branchRetrieveOptions(RetrieveOptions.BASE_REFERENCE_RELATED_AND_COMMIT_META)
             .tagRetrieveOptions(RetrieveOptions.COMMIT_META)
             .build()
@@ -253,34 +260,68 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
   }
 
   @Override
+  public ReferenceHistoryResponse getReferenceHistory(String refName, Integer headCommitsToScan)
+      throws NessieNotFoundException {
+    Reference ref;
+    ReferenceHistory history;
+    try {
+      ref = makeReference(getStore().getNamedRef(refName, getGetNamedRefsParams(false)), false);
+
+      startAccessCheck().canViewReference(RefUtil.toNamedRef(ref)).checkAndThrow();
+
+      history = getStore().getReferenceHistory(ref.getName(), headCommitsToScan);
+    } catch (ReferenceNotFoundException e) {
+      throw new NessieReferenceNotFoundException(e.getMessage(), e);
+    }
+
+    ImmutableReferenceHistoryResponse.Builder response =
+        ReferenceHistoryResponse.builder()
+            .reference(ref)
+            .commitLogConsistency(history.commitLogConsistency());
+    response.current(convertStoreHistoryEntry(history.current()));
+    history.previous().stream().map(this::convertStoreHistoryEntry).forEach(response::addPrevious);
+    return response.build();
+  }
+
+  private ReferenceHistoryState convertStoreHistoryEntry(
+      ReferenceHistory.ReferenceHistoryElement element) {
+    return ReferenceHistoryState.referenceHistoryElement(
+        element.pointer().asString(), element.commitConsistency(), element.meta());
+  }
+
+  @Override
   public Reference createReference(
       String refName, ReferenceType type, String targetHash, String sourceRefName)
       throws NessieNotFoundException, NessieConflictException {
     Validation.validateForbiddenReferenceName(refName);
     NamedRef namedReference = toNamedRef(type, refName);
-    if (type == ReferenceType.TAG && targetHash == null) {
-      throw new IllegalArgumentException(
-          "Tag-creation requires a target named-reference and hash.");
-    }
 
-    BatchAccessChecker check =
-        startAccessCheck().canCreateReference(RefUtil.toNamedRef(type, refName));
+    BatchAccessChecker check = startAccessCheck().canCreateReference(namedReference);
+    Optional<Hash> targetHashObj;
     try {
-      check.canViewReference(namedRefWithHashOrThrow(sourceRefName, targetHash).getValue());
-    } catch (NessieNotFoundException e) {
+      ResolvedHash targetRef =
+          getHashResolver()
+              .resolveHashOnRef(
+                  sourceRefName,
+                  targetHash,
+                  new HashValidator("Target hash").hashMustBeUnambiguous());
+      check.canViewReference(targetRef.getNamedRef());
+      targetHashObj = Optional.of(targetRef.getHash());
+    } catch (ReferenceNotFoundException e) {
       // If the default-branch does not exist and hashOnRef points to the "beginning of time",
       // then do not throw a NessieNotFoundException, but re-create the default branch. In all
       // cases, re-throw the exception.
       if (!(ReferenceType.BRANCH.equals(type)
-          && refName.equals(getConfig().getDefaultBranch())
+          && refName.equals(getServerConfig().getDefaultBranch())
           && (null == targetHash || getStore().noAncestorHash().asString().equals(targetHash)))) {
-        throw e;
+        throw new NessieReferenceNotFoundException(e.getMessage(), e);
       }
+      targetHashObj = Optional.empty();
     }
     check.checkAndThrow();
 
     try {
-      Hash hash = getStore().create(namedReference, toHash(targetHash, false)).getHash();
+      Hash hash = getStore().create(namedReference, targetHashObj).getHash();
       return RefUtil.toReference(namedReference, hash);
     } catch (ReferenceNotFoundException e) {
       throw new NessieReferenceNotFoundException(e.getMessage(), e);
@@ -291,7 +332,7 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
 
   @Override
   public Branch getDefaultBranch() throws NessieNotFoundException {
-    Reference r = getReferenceByName(getConfig().getDefaultBranch(), FetchOption.MINIMAL);
+    Reference r = getReferenceByName(getServerConfig().getDefaultBranch(), FetchOption.MINIMAL);
     checkState(r instanceof Branch, "Default branch isn't a branch");
     return (Branch) r;
   }
@@ -301,25 +342,35 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
       ReferenceType referenceType, String referenceName, String expectedHash, Reference assignTo)
       throws NessieNotFoundException, NessieConflictException {
     try {
-      ReferenceInfo<CommitMeta> resolved =
-          getStore().getNamedRef(referenceName, GetNamedRefsParams.DEFAULT);
-      NamedRef ref = resolved.getNamedRef();
+
+      ResolvedHash oldRef =
+          getHashResolver()
+              .resolveHashOnRef(
+                  referenceName,
+                  expectedHash,
+                  new HashValidator("Assignment target", "Expected hash")
+                      .refMustBeBranchOrTag()
+                      .hashMustBeUnambiguous());
+      ResolvedHash newRef =
+          getHashResolver()
+              .resolveHashOnRef(
+                  assignTo.getName(),
+                  assignTo.getHash(),
+                  new HashValidator("Target hash").hashMustBeUnambiguous());
 
       checkArgument(
-          referenceType == null || referenceType == RefUtil.referenceType(ref),
+          referenceType == null || referenceType == RefUtil.referenceType(oldRef.getNamedRef()),
           "Expected reference type %s does not match existing reference %s",
           referenceType,
-          ref);
+          oldRef.getNamedRef());
 
       startAccessCheck()
-          .canViewReference(
-              namedRefWithHashOrThrow(assignTo.getName(), assignTo.getHash()).getValue())
-          .canAssignRefToHash(ref)
+          .canViewReference(newRef.getNamedRef())
+          .canAssignRefToHash(oldRef.getNamedRef())
           .checkAndThrow();
 
-      Hash targetHash = toHash(assignTo.getName(), assignTo.getHash());
-      getStore().assign(resolved.getNamedRef(), toHash(expectedHash, true), targetHash);
-      return RefUtil.toReference(ref, targetHash);
+      getStore().assign(oldRef.getNamedRef(), oldRef.getHash(), newRef.getHash());
+      return RefUtil.toReference(oldRef.getNamedRef(), newRef.getHash());
     } catch (ReferenceNotFoundException e) {
       throw new NessieReferenceNotFoundException(e.getMessage(), e);
     } catch (ReferenceConflictException e) {
@@ -342,13 +393,22 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
           referenceType,
           ref);
       checkArgument(
-          !(ref instanceof BranchName && getConfig().getDefaultBranch().equals(ref.getName())),
+          !(ref instanceof BranchName
+              && getServerConfig().getDefaultBranch().equals(ref.getName())),
           "Default branch '%s' cannot be deleted.",
           ref.getName());
 
       startAccessCheck().canDeleteReference(ref).checkAndThrow();
 
-      Hash deletedAthash = getStore().delete(ref, toHash(expectedHash, true)).getHash();
+      ResolvedHash refToDelete =
+          getHashResolver()
+              .resolveHashOnRef(
+                  resolved.getNamedRef(),
+                  resolved.getHash(),
+                  expectedHash,
+                  new HashValidator("Expected hash").hashMustBeUnambiguous());
+
+      Hash deletedAthash = getStore().delete(ref, refToDelete.getHash()).getHash();
       return RefUtil.toReference(ref, deletedAthash);
     } catch (ReferenceNotFoundException e) {
       throw new NessieReferenceNotFoundException(e.getMessage(), e);
@@ -367,42 +427,58 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
       String pageToken,
       PagedResponseHandler<R, LogEntry> pagedResponseHandler)
       throws NessieNotFoundException {
-    // we should only allow named references when no paging is defined
-    WithHash<NamedRef> endRef =
-        namedRefWithHashOrThrow(namedRef, null == pageToken ? youngestHash : pageToken);
 
-    startAccessCheck().canListCommitLog(endRef.getValue()).checkAndThrow();
+    try {
 
-    boolean fetchAll = FetchOption.isFetchAll(fetchOption);
-    Set<Check> successfulChecks = new HashSet<>();
-    Set<Check> failedChecks = new HashSet<>();
-    try (PaginationIterator<Commit> commits = getStore().getCommits(endRef.getHash(), fetchAll)) {
+      ResolvedHash endRef =
+          getHashResolver()
+              .resolveHashOnRef(
+                  namedRef,
+                  null == pageToken ? youngestHash : pageToken,
+                  new HashValidator(null == pageToken ? "Youngest hash" : "Token pagination hash"));
 
-      Predicate<LogEntry> predicate = filterCommitLog(filter);
-      while (commits.hasNext()) {
-        Commit commit = commits.next();
+      startAccessCheck().canListCommitLog(endRef.getNamedRef()).checkAndThrow();
 
-        LogEntry logEntry = commitToLogEntry(fetchAll, commit);
+      String stopHash =
+          oldestHashLimit == null
+              ? null
+              : getHashResolver()
+                  .resolveHashOnRef(endRef, oldestHashLimit, new HashValidator("Oldest hash"))
+                  .getHash()
+                  .asString();
 
-        String hash = logEntry.getCommitMeta().getHash();
+      boolean fetchAll = FetchOption.isFetchAll(fetchOption);
+      Set<Check> successfulChecks = new HashSet<>();
+      Set<Check> failedChecks = new HashSet<>();
+      try (PaginationIterator<Commit> commits = getStore().getCommits(endRef.getHash(), fetchAll)) {
 
-        if (!predicate.test(logEntry)) {
-          continue;
-        }
+        Predicate<LogEntry> predicate = filterCommitLog(filter);
+        while (commits.hasNext()) {
+          Commit commit = commits.next();
 
-        boolean stop = Objects.equals(hash, oldestHashLimit);
+          LogEntry logEntry = commitToLogEntry(fetchAll, commit);
 
-        logEntry = logEntryOperationsAccessCheck(successfulChecks, failedChecks, endRef, logEntry);
+          String hash = logEntry.getCommitMeta().getHash();
 
-        if (!pagedResponseHandler.addEntry(logEntry)) {
-          if (!stop) {
-            pagedResponseHandler.hasMore(commits.tokenForCurrent());
+          if (!predicate.test(logEntry)) {
+            continue;
           }
-          break;
-        }
 
-        if (stop) {
-          break;
+          boolean stop = Objects.equals(hash, stopHash);
+
+          logEntry =
+              logEntryOperationsAccessCheck(successfulChecks, failedChecks, endRef, logEntry);
+
+          if (!pagedResponseHandler.addEntry(logEntry)) {
+            if (!stop) {
+              pagedResponseHandler.hasMore(commits.tokenForCurrent());
+            }
+            break;
+          }
+
+          if (stop) {
+            break;
+          }
         }
       }
 
@@ -439,12 +515,14 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
 
     Set<Check> checks = newHashSetWithExpectedSize(operations.size());
     for (Operation op : operations) {
-      if (op instanceof Operation.Put) {
-        checks.add(canReadContentKey(endRef.getValue(), identifiedKeys.get(op.getKey())));
-      } else if (op instanceof Operation.Delete) {
-        checks.add(canReadContentKey(endRef.getValue(), identifiedKeys.get(op.getKey())));
-      } else {
+      if (!(op instanceof Operation.Put) && !(op instanceof Operation.Delete)) {
         throw new IllegalStateException("Unknown operation " + op);
+      }
+      IdentifiedContentKey identifiedKey = identifiedKeys.get(op.getKey());
+      if (identifiedKey != null) {
+        checks.add(canReadContentKey(endRef.getValue(), identifiedKey));
+      } else {
+        checks.add(canReadContentKey(endRef.getValue(), op.getKey()));
       }
     }
 
@@ -459,13 +537,15 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
     Map<Check, String> failures = anyCheck ? accessCheck.check() : emptyMap();
 
     for (Operation op : operations) {
-      Check check;
-      if (op instanceof Operation.Put) {
-        check = canReadContentKey(endRef.getValue(), identifiedKeys.get(op.getKey()));
-      } else if (op instanceof Operation.Delete) {
-        check = canReadContentKey(endRef.getValue(), identifiedKeys.get(op.getKey()));
-      } else {
+      if (!(op instanceof Operation.Put) && !(op instanceof Operation.Delete)) {
         throw new IllegalStateException("Unknown operation " + op);
+      }
+      IdentifiedContentKey identifiedKey = identifiedKeys.get(op.getKey());
+      Check check;
+      if (identifiedKey != null) {
+        check = canReadContentKey(endRef.getValue(), identifiedKey);
+      } else {
+        check = canReadContentKey(endRef.getValue(), op.getKey());
       }
       if (failures.containsKey(check)) {
         failedChecks.add(check);
@@ -478,9 +558,9 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
   }
 
   private ImmutableLogEntry commitToLogEntry(boolean fetchAll, Commit commit) {
-    CommitMeta commitMetaWithHash = enhanceCommitMeta(commit.getHash(), commit.getCommitMeta());
+    CommitMeta commitMeta = commit.getCommitMeta();
     ImmutableLogEntry.Builder logEntry = LogEntry.builder();
-    logEntry.commitMeta(commitMetaWithHash);
+    logEntry.commitMeta(commitMeta);
     if (commit.getParentHash() != null) {
       logEntry.parentCommitHash(commit.getParentHash().asString());
     }
@@ -493,7 +573,7 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
                 op -> {
                   ContentKey key = op.getKey();
                   if (op instanceof Put) {
-                    Content content = ((Put) op).getValue();
+                    Content content = ((Put) op).getContent();
                     logEntry.addOperations(Operation.Put.of(key, content));
                   }
                   if (op instanceof Delete) {
@@ -503,19 +583,6 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
       }
     }
     return logEntry.build();
-  }
-
-  private static CommitMeta enhanceCommitMeta(Hash hash, CommitMeta commitMeta) {
-    if (commitMeta.getParentCommitHashes().size() > 1) {
-      ImmutableCommitMeta.Builder updatedCommitMeta = commitMeta.toBuilder().hash(hash.asString());
-      // Only add the 1st commit ID (merge parent) to the legacy MERGE_PARENT_PROPERTY. It was
-      // introduced for compatibility with older clients. There is currently only one use case for
-      // the property: exposing the commit ID of the merged commit.
-      updatedCommitMeta.putProperties(
-          CommitMeta.MERGE_PARENT_PROPERTY, commitMeta.getParentCommitHashes().get(1));
-      return updatedCommitMeta.build();
-    }
-    return commitMeta;
   }
 
   /**
@@ -563,7 +630,7 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
   public MergeResponse transplantCommitsIntoBranch(
       String branchName,
       String expectedHash,
-      @Nullable @jakarta.annotation.Nullable CommitMeta commitMeta,
+      @Nullable CommitMeta commitMeta,
       List<String> hashesToTransplant,
       String fromRefName,
       Collection<MergeKeyBehavior> keyMergeBehaviors,
@@ -576,19 +643,35 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
       checkArgument(!hashesToTransplant.isEmpty(), "No hashes given to transplant.");
       validateCommitMeta(commitMeta);
 
-      BranchName targetBranch = BranchName.of(branchName);
       String lastHash = hashesToTransplant.get(hashesToTransplant.size() - 1);
-      validateHash(lastHash);
-      WithHash<NamedRef> namedRefWithHash = namedRefWithHashOrThrow(fromRefName, lastHash);
+      ResolvedHash fromRef =
+          getHashResolver()
+              .resolveHashOnRef(
+                  fromRefName,
+                  lastHash,
+                  new HashValidator("Hash to transplant").hashMustBeUnambiguous());
+
+      ResolvedHash toRef =
+          getHashResolver()
+              .resolveHashOnRef(
+                  branchName,
+                  expectedHash,
+                  new HashValidator("Reference to transplant into", "Expected hash")
+                      .refMustBeBranch()
+                      .hashMustBeUnambiguous());
 
       startAccessCheck()
-          .canViewReference(namedRefWithHash.getValue())
-          .canCommitChangeAgainstReference(targetBranch)
+          .canViewReference(fromRef.getNamedRef())
+          .canCommitChangeAgainstReference(toRef.getNamedRef())
           .checkAndThrow();
 
-      List<Hash> transplants;
-      try (Stream<Hash> s = hashesToTransplant.stream().map(Hash::of)) {
-        transplants = s.collect(Collectors.toList());
+      List<Hash> transplants = new ArrayList<>(hashesToTransplant.size());
+      for (String hash : hashesToTransplant) {
+        transplants.add(
+            getHashResolver()
+                .resolveHashOnRef(
+                    fromRef, hash, new HashValidator("Hash to transplant").hashMustBeUnambiguous())
+                .getHash());
       }
 
       if (transplants.size() > 1) {
@@ -597,41 +680,37 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
         commitMeta = null;
       }
 
-      Optional<Hash> into = toHash(expectedHash, true);
-
-      MergeResult<Commit> result =
+      TransplantResult result =
           getStore()
               .transplant(
                   TransplantOp.builder()
-                      .fromRef(namedRefWithHash.getValue())
-                      .toBranch(targetBranch)
-                      .expectedHash(into)
+                      .fromRef(fromRef.getNamedRef())
+                      .toBranch((BranchName) toRef.getNamedRef())
+                      .expectedHash(Optional.of(toRef.getHash()))
                       .sequenceToTransplant(transplants)
                       .updateCommitMetadata(
                           commitMetaUpdate(
                               commitMeta,
                               numCommits ->
                                   String.format(
-                                      "Transplanted %d commits from %s at %s into %s%s",
+                                      "Transplanted %d commits from %s at %s into %s at %s",
                                       numCommits,
                                       fromRefName,
                                       lastHash,
                                       branchName,
-                                      into.map(h -> " at " + h.asString()).orElse(""))))
+                                      toRef.getHash().asString())))
                       .mergeKeyBehaviors(keyMergeBehaviors(keyMergeBehaviors))
                       .defaultMergeBehavior(defaultMergeBehavior(defaultMergeBehavior))
                       .dryRun(Boolean.TRUE.equals(dryRun))
                       .fetchAdditionalInfo(Boolean.TRUE.equals(fetchAdditionalInfo))
-                      .validator(createCommitValidator(targetBranch))
+                      .validator(createCommitValidator((BranchName) toRef.getNamedRef(), API_WRITE))
                       .build());
-      return createResponse(fetchAdditionalInfo, result);
+      return createResponse(result);
     } catch (ReferenceNotFoundException e) {
       throw new NessieReferenceNotFoundException(e.getMessage(), e);
     } catch (MergeConflictException e) {
       if (Boolean.TRUE.equals(returnConflictAsResult)) {
-        @SuppressWarnings("unchecked")
-        MergeResult<Commit> mr = (MergeResult<Commit>) e.getMergeResult();
-        return createResponse(fetchAdditionalInfo, mr);
+        return createResponse(e.getMergeResult());
       }
       throw new NessieReferenceConflictException(e.getReferenceConflicts(), e.getMessage(), e);
     } catch (ReferenceConflictException e) {
@@ -645,7 +724,7 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
       String expectedHash,
       String fromRefName,
       String fromHash,
-      @Nullable @jakarta.annotation.Nullable CommitMeta commitMeta,
+      @Nullable CommitMeta commitMeta,
       Collection<MergeKeyBehavior> keyMergeBehaviors,
       MergeBehavior defaultMergeBehavior,
       Boolean dryRun,
@@ -655,49 +734,57 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
     try {
       validateCommitMeta(commitMeta);
 
-      BranchName targetBranch = BranchName.of(branchName);
-      WithHash<NamedRef> namedRefWithHash = namedRefWithHashOrThrow(fromRefName, fromHash);
+      ResolvedHash fromRef =
+          getHashResolver()
+              .resolveHashOnRef(
+                  fromRefName, fromHash, new HashValidator("Source hash").hashMustBeUnambiguous());
+      ResolvedHash toRef =
+          getHashResolver()
+              .resolveHashOnRef(
+                  branchName,
+                  expectedHash,
+                  new HashValidator("Reference to merge into", "Expected hash")
+                      .refMustBeBranch()
+                      .hashMustBeUnambiguous());
+
+      checkArgument(toRef.getNamedRef() instanceof BranchName, "Can only merge into branches.");
+
       startAccessCheck()
-          .canViewReference(namedRefWithHash.getValue())
-          .canCommitChangeAgainstReference(targetBranch)
+          .canViewReference(fromRef.getNamedRef())
+          .canCommitChangeAgainstReference(toRef.getNamedRef())
           .checkAndThrow();
 
-      Hash from = toHash(fromRefName, fromHash);
-      Optional<Hash> into = toHash(expectedHash, true);
-
-      MergeResult<Commit> result =
+      MergeResult result =
           getStore()
               .merge(
                   MergeOp.builder()
-                      .fromRef(namedRefWithHash.getValue())
-                      .fromHash(toHash(fromRefName, fromHash))
-                      .toBranch(targetBranch)
-                      .expectedHash(into)
+                      .fromRef(fromRef.getNamedRef())
+                      .fromHash(fromRef.getHash())
+                      .toBranch((BranchName) toRef.getNamedRef())
+                      .expectedHash(Optional.of(toRef.getHash()))
                       .updateCommitMetadata(
                           commitMetaUpdate(
                               commitMeta,
                               numCommits ->
                                   // numCommits is always 1 for merges
                                   String.format(
-                                      "Merged %s at %s into %s%s",
+                                      "Merged %s at %s into %s at %s",
                                       fromRefName,
-                                      from.asString(),
+                                      fromRef.getHash().asString(),
                                       branchName,
-                                      into.map(h -> " at " + h.asString()).orElse(""))))
+                                      toRef.getHash().asString())))
                       .mergeKeyBehaviors(keyMergeBehaviors(keyMergeBehaviors))
                       .defaultMergeBehavior(defaultMergeBehavior(defaultMergeBehavior))
                       .dryRun(Boolean.TRUE.equals(dryRun))
                       .fetchAdditionalInfo(Boolean.TRUE.equals(fetchAdditionalInfo))
-                      .validator(createCommitValidator(targetBranch))
+                      .validator(createCommitValidator((BranchName) toRef.getNamedRef(), API_WRITE))
                       .build());
-      return createResponse(fetchAdditionalInfo, result);
+      return createResponse(result);
     } catch (ReferenceNotFoundException e) {
       throw new NessieReferenceNotFoundException(e.getMessage(), e);
     } catch (MergeConflictException e) {
       if (Boolean.TRUE.equals(returnConflictAsResult)) {
-        @SuppressWarnings("unchecked")
-        MergeResult<Commit> mr = (MergeResult<Commit>) e.getMergeResult();
-        return createResponse(fetchAdditionalInfo, mr);
+        return createResponse(e.getMergeResult());
       }
       throw new NessieReferenceConflictException(e.getReferenceConflicts(), e.getMessage(), e);
     } catch (ReferenceConflictException e) {
@@ -723,7 +810,8 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
     }
   }
 
-  private MergeResponse createResponse(Boolean fetchAdditionalInfo, MergeResult<Commit> result) {
+  @SuppressWarnings("deprecation")
+  private MergeResponse createResponse(MergeTransplantResultBase result) {
     Function<Hash, String> hashToString = h -> h != null ? h.asString() : null;
     ImmutableMergeResponse.Builder response =
         ImmutableMergeResponse.builder()
@@ -735,27 +823,6 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
             .wasApplied(result.wasApplied())
             .wasSuccessful(result.wasSuccessful());
 
-    BiConsumer<List<Commit>, Consumer<LogEntry>> convertCommits =
-        (src, dest) -> {
-          if (src == null) {
-            return;
-          }
-          src.stream()
-              .map(c -> commitToLogEntry(Boolean.TRUE.equals(fetchAdditionalInfo), c))
-              .forEach(dest);
-        };
-
-    convertCommits.accept(result.getSourceCommits(), response::addSourceCommits);
-    convertCommits.accept(result.getTargetCommits(), response::addTargetCommits);
-
-    BiConsumer<List<Hash>, Consumer<String>> convertCommitIds =
-        (src, dest) -> {
-          if (src == null) {
-            return;
-          }
-          src.stream().map(hashToString).forEach(dest);
-        };
-
     result
         .getDetails()
         .forEach(
@@ -763,12 +830,12 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
               ImmutableContentKeyDetails.Builder keyDetails =
                   ImmutableContentKeyDetails.builder()
                       .key(ContentKey.of(key.getElements()))
-                      .conflictType(ContentKeyConflict.valueOf(details.getConflictType().name()))
+                      .conflictType(
+                          details.getConflict() != null
+                              ? ContentKeyConflict.UNRESOLVABLE
+                              : ContentKeyConflict.NONE)
                       .mergeBehavior(MergeBehavior.valueOf(details.getMergeBehavior().name()))
                       .conflict(details.getConflict());
-
-              convertCommitIds.accept(details.getSourceCommits(), keyDetails::addSourceCommits);
-              convertCommitIds.accept(details.getTargetCommits(), keyDetails::addTargetCommits);
 
               response.addDetails(keyDetails.build());
             });
@@ -802,14 +869,17 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
       ContentKey prefixKey,
       List<ContentKey> requestedKeys)
       throws NessieNotFoundException {
-    WithHash<NamedRef> refWithHash = namedRefWithHashOrThrow(namedRef, hashOnRef);
-
-    effectiveReference.accept(refWithHash);
 
     try {
-      Predicate<ContentKey> contentKeyPredicate = null;
+      ResolvedHash refWithHash =
+          getHashResolver()
+              .resolveHashOnRef(namedRef, hashOnRef, new HashValidator("Expected hash"));
+
+      effectiveReference.accept(refWithHash);
+      BiPredicate<ContentKey, Content.Type> contentKeyPredicate = null;
       if (requestedKeys != null && !requestedKeys.isEmpty()) {
-        contentKeyPredicate = new HashSet<>(requestedKeys)::contains;
+        Set<ContentKey> requestedKeysSet = new HashSet<>(requestedKeys);
+        contentKeyPredicate = (key, type) -> requestedKeysSet.contains(key);
         if (prefixKey == null) {
           // Populate minKey/maxKey if not set or if those would query "more" keys.
           ContentKey minRequested = null;
@@ -831,7 +901,16 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
         }
       }
 
-      Predicate<KeyEntry> filterPredicate = filterEntries(filter);
+      // apply filter as early as possible to avoid work (i.e. content loading, authz checks)
+      // for entries that we will eventually throw away
+      final int namespaceFilterDepth = namespaceDepth == null ? 0 : namespaceDepth;
+      if (namespaceFilterDepth > 0) {
+        BiPredicate<ContentKey, Content.Type> depthFilter =
+            (key, type) -> key.getElementCount() >= namespaceFilterDepth;
+        contentKeyPredicate = combinePredicateWithAnd(contentKeyPredicate, depthFilter);
+      }
+      BiPredicate<ContentKey, Content.Type> filterPredicate = filterEntries(filter);
+      contentKeyPredicate = combinePredicateWithAnd(contentKeyPredicate, filterPredicate);
 
       try (PaginationIterator<KeyEntry> entries =
           getStore()
@@ -848,60 +927,34 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
 
         AuthzPaginationIterator<KeyEntry> authz =
             new AuthzPaginationIterator<KeyEntry>(
-                entries, super::startAccessCheck, getConfig().accessChecksBatchSize()) {
+                entries, super::startAccessCheck, getServerConfig().accessChecksBatchSize()) {
               @Override
               protected Set<Check> checksForEntry(KeyEntry entry) {
                 return singleton(canReadContentKey(refWithHash.getValue(), entry.getKey()));
               }
             }.initialCheck(canReadEntries(refWithHash.getValue()));
 
-        if (namespaceDepth != null && namespaceDepth > 0) {
-          int depth = namespaceDepth;
-          filterPredicate = filterPredicate.and(e -> e.getKey().elements().size() >= depth);
-          Set<ContentKey> seen = new HashSet<>();
-          while (authz.hasNext()) {
-            KeyEntry key = authz.next();
+        Set<ContentKey> seenNamespaces = namespaceFilterDepth > 0 ? new HashSet<>() : null;
+        while (authz.hasNext()) {
+          KeyEntry key = authz.next();
 
-            if (!filterPredicate.test(key)) {
-              continue;
-            }
+          Content c = key.getContent();
+          Entry entry =
+              c != null
+                  ? Entry.entry(key.getKey().contentKey(), key.getKey().type(), c)
+                  : Entry.entry(
+                      key.getKey().contentKey(),
+                      key.getKey().type(),
+                      key.getKey().lastElement().contentId());
 
-            Content c = key.getContent();
-            Entry entry =
-                c != null
-                    ? Entry.entry(key.getKey().contentKey(), key.getKey().type(), c)
-                    : Entry.entry(
-                        key.getKey().contentKey(),
-                        key.getKey().type(),
-                        key.getKey().lastElement().contentId());
-
-            entry = maybeTruncateToDepth(entry, depth);
-
-            // add implicit namespace entries only once (single parent of multiple real entries)
-            if (seen.add(entry.getName())) {
-              if (!pagedResponseHandler.addEntry(entry)) {
-                pagedResponseHandler.hasMore(authz.tokenForCurrent());
-                break;
-              }
-            }
+          if (namespaceFilterDepth > 0) {
+            entry = maybeTruncateToDepth(entry, namespaceFilterDepth);
           }
-        } else {
-          while (authz.hasNext()) {
-            KeyEntry key = authz.next();
 
-            if (!filterPredicate.test(key)) {
-              continue;
-            }
-
-            Content c = key.getContent();
-            Entry entry =
-                c != null
-                    ? Entry.entry(key.getKey().contentKey(), key.getKey().type(), c)
-                    : Entry.entry(
-                        key.getKey().contentKey(),
-                        key.getKey().type(),
-                        key.getKey().lastElement().contentId());
-
+          // add implicit namespace entries only once (single parent of multiple real entries)
+          if (seenNamespaces == null
+              || !Content.Type.NAMESPACE.equals(entry.getType())
+              || seenNamespaces.add(entry.getName())) {
             if (!pagedResponseHandler.addEntry(entry)) {
               pagedResponseHandler.hasMore(authz.tokenForCurrent());
               break;
@@ -926,14 +979,25 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
     return entry;
   }
 
+  private static BiPredicate<ContentKey, Content.Type> combinePredicateWithAnd(
+      BiPredicate<ContentKey, Content.Type> a, BiPredicate<ContentKey, Content.Type> b) {
+    if (a == null) {
+      return b;
+    }
+    if (b == null) {
+      return a;
+    }
+    return a.and(b);
+  }
+
   /**
    * Produces the predicate for key-entry filtering.
    *
    * @param filter The filter to filter by
    */
-  protected Predicate<KeyEntry> filterEntries(String filter) {
+  protected BiPredicate<ContentKey, Content.Type> filterEntries(String filter) {
     if (Strings.isNullOrEmpty(filter)) {
-      return x -> true;
+      return null;
     }
 
     final Script script;
@@ -948,8 +1012,8 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
     } catch (ScriptException e) {
       throw new IllegalArgumentException(e);
     }
-    return entry -> {
-      Map<String, Object> arguments = ImmutableMap.of(VAR_ENTRY, CELUtil.forCel(entry));
+    return (key, type) -> {
+      Map<String, Object> arguments = ImmutableMap.of(VAR_ENTRY, CELUtil.forCel(key, type));
 
       try {
         return script.execute(Boolean.class, arguments);
@@ -961,32 +1025,33 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
 
   @Override
   public CommitResponse commitMultipleOperations(
-      String branch, String expectedHash, Operations operations)
+      String branch, String expectedHash, Operations operations, RequestMeta requestMeta)
       throws NessieNotFoundException, NessieConflictException {
-    BranchName branchName = BranchName.of(branch);
 
     CommitMeta commitMeta = operations.getCommitMeta();
     validateCommitMeta(commitMeta);
 
-    List<org.projectnessie.versioned.Operation> ops =
-        operations.getOperations().stream()
-            .map(TreeApiImpl::toOp)
-            .collect(ImmutableList.toImmutableList());
-
     try {
       ImmutableCommitResponse.Builder commitResponse = ImmutableCommitResponse.builder();
+
+      ResolvedHash toRef =
+          getHashResolver()
+              .resolveHashOnRef(
+                  branch,
+                  expectedHash,
+                  new HashValidator("Reference to commit into", "Expected hash")
+                      .refMustBeBranch()
+                      .hashMustBeUnambiguous());
 
       Hash newHash =
           getStore()
               .commit(
-                  BranchName.of(branch),
-                  Optional.ofNullable(expectedHash).map(Hash::of),
+                  (BranchName) toRef.getNamedRef(),
+                  Optional.of(toRef.getHash()),
                   commitMetaUpdate(null, numCommits -> null).rewriteSingle(commitMeta),
-                  ops,
-                  createCommitValidator(branchName),
-                  (key, cid) -> {
-                    commitResponse.addAddedContents(addedContent(key, cid));
-                  })
+                  operations.getOperations(),
+                  createCommitValidator((BranchName) toRef.getNamedRef(), requestMeta),
+                  (key, cid) -> commitResponse.addAddedContents(addedContent(key, cid)))
               .getCommitHash();
 
       return commitResponse.targetBranch(Branch.of(branch, newHash.asString())).build();
@@ -997,22 +1062,32 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
     }
   }
 
-  private CommitValidator createCommitValidator(BranchName branchName) {
+  private CommitValidator createCommitValidator(BranchName branchName, RequestMeta requestMeta) {
+    // Commits routinely run retries due to collisions on updating the HEAD of the branch.
+    // Authorization is not dependent on the commit history, only on the collection of access
+    // checks, which reflect the current commit. On retries, the commit data relevant to access
+    // checks almost never changes. Therefore, we use RetriableAccessChecker to avoid re-validating
+    // access checks (which could be a time-consuming operation) on subsequent retries, unless
+    // authorization input data changes.
+    RetriableAccessChecker accessChecker =
+        new RetriableAccessChecker(this::startAccessCheck, getApiContext());
     return validation -> {
-      BatchAccessChecker check = startAccessCheck().canCommitChangeAgainstReference(branchName);
+      BatchAccessChecker check = accessChecker.newAttempt();
+      check.canCommitChangeAgainstReference(branchName);
       validation
           .operations()
           .forEach(
               op -> {
+                Set<String> keyActions = requestMeta.keyActions(op.identifiedKey().contentKey());
                 switch (op.operationType()) {
                   case CREATE:
-                    check.canCreateEntity(branchName, op.identifiedKey());
+                    check.canCreateEntity(branchName, op.identifiedKey(), keyActions);
                     break;
                   case UPDATE:
-                    check.canUpdateEntity(branchName, op.identifiedKey());
+                    check.canUpdateEntity(branchName, op.identifiedKey(), keyActions);
                     break;
                   case DELETE:
-                    check.canDeleteEntity(branchName, op.identifiedKey());
+                    check.canDeleteEntity(branchName, op.identifiedKey(), keyActions);
                     break;
                   default:
                     throw new UnsupportedOperationException(
@@ -1021,28 +1096,6 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
               });
       check.checkAndThrow();
     };
-  }
-
-  private Hash toHash(String referenceName, String hashOnReference)
-      throws ReferenceNotFoundException {
-    if (Detached.REF_NAME.equals(referenceName)) {
-      return Hash.of(hashOnReference);
-    }
-    if (hashOnReference == null) {
-      return getStore().getNamedRef(referenceName, GetNamedRefsParams.DEFAULT).getHash();
-    }
-    return toHash(hashOnReference, true)
-        .orElseThrow(() -> new IllegalStateException("Required hash is missing"));
-  }
-
-  private static Optional<Hash> toHash(String hash, boolean required) {
-    if (hash == null || hash.isEmpty()) {
-      if (required) {
-        throw new IllegalArgumentException("Must provide expected hash value for operation.");
-      }
-      return Optional.empty();
-    }
-    return Optional.of(Hash.of(hash));
   }
 
   private static Reference makeReference(
@@ -1064,7 +1117,6 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
   }
 
   @Nullable
-  @jakarta.annotation.Nullable
   private static ReferenceMetadata extractReferenceMetadata(ReferenceInfo<CommitMeta> refWithHash) {
     ImmutableReferenceMetadata.Builder builder = ImmutableReferenceMetadata.builder();
     boolean found = false;
@@ -1075,8 +1127,7 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
     }
     if (null != refWithHash.getHeadCommitMeta()) {
       found = true;
-      builder.commitMetaOfHEAD(
-          enhanceCommitMeta(refWithHash.getHash(), refWithHash.getHeadCommitMeta()));
+      builder.commitMetaOfHEAD(refWithHash.getHeadCommitMeta());
     }
     if (0L != refWithHash.getCommitSeq()) {
       found = true;
@@ -1090,19 +1141,5 @@ public class TreeApiImpl extends BaseApiImpl implements TreeService {
       return null;
     }
     return builder.build();
-  }
-
-  protected static org.projectnessie.versioned.Operation toOp(Operation o) {
-    ContentKey key = o.getKey();
-    if (o instanceof Operation.Delete) {
-      return Delete.of(key);
-    } else if (o instanceof Operation.Put) {
-      Operation.Put put = (Operation.Put) o;
-      return Put.of(key, put.getContent());
-    } else if (o instanceof Operation.Unchanged) {
-      return Unchanged.of(key);
-    } else {
-      throw new IllegalStateException("Unknown operation " + o);
-    }
   }
 }

@@ -18,13 +18,13 @@ package org.projectnessie.tools.contentgenerator.cli;
 import static java.util.Arrays.asList;
 import static java.util.Collections.singletonList;
 import static org.assertj.core.api.Assertions.tuple;
+import static org.assertj.core.api.InstanceOfAssertFactories.type;
 import static org.projectnessie.jaxrs.ext.NessieJaxRsExtension.jaxRsExtension;
 import static org.projectnessie.model.CommitMeta.fromMessage;
 import static org.projectnessie.model.Content.Type.NAMESPACE;
 import static org.projectnessie.tools.contentgenerator.RunContentGenerator.runGeneratorCmd;
 import static org.projectnessie.tools.contentgenerator.cli.CreateMissingNamespaces.branchesStream;
 import static org.projectnessie.tools.contentgenerator.cli.CreateMissingNamespaces.collectMissingNamespaceKeys;
-import static org.projectnessie.tools.contentgenerator.cli.CreateMissingNamespaces.commitCreateNamespaces;
 
 import java.net.URI;
 import org.assertj.core.api.SoftAssertions;
@@ -40,15 +40,16 @@ import org.projectnessie.client.ext.NessieClientFactory;
 import org.projectnessie.client.ext.NessieClientUri;
 import org.projectnessie.jaxrs.ext.NessieJaxRsExtension;
 import org.projectnessie.model.Branch;
+import org.projectnessie.model.CommitMeta;
 import org.projectnessie.model.ContentKey;
 import org.projectnessie.model.EntriesResponse;
 import org.projectnessie.model.IcebergTable;
+import org.projectnessie.model.LogResponse;
 import org.projectnessie.model.Namespace;
 import org.projectnessie.model.Operation.Put;
-import org.projectnessie.model.Reference;
 import org.projectnessie.tools.contentgenerator.RunContentGenerator.ProcessResult;
 import org.projectnessie.versioned.storage.common.persist.Persist;
-import org.projectnessie.versioned.storage.inmemory.InmemoryBackendTestFactory;
+import org.projectnessie.versioned.storage.inmemorytests.InmemoryBackendTestFactory;
 import org.projectnessie.versioned.storage.testextension.NessieBackend;
 import org.projectnessie.versioned.storage.testextension.NessiePersist;
 import org.projectnessie.versioned.storage.testextension.NessieStoreConfig;
@@ -67,6 +68,7 @@ public class TestCreateMissingNamespaces {
 
   private NessieApiV2 nessieApi;
   private URI uri;
+  private final CreateMissingNamespaces cmd = new CreateMissingNamespaces();
 
   @BeforeEach
   public void setUp(NessieClientFactory clientFactory, @NessieClientUri URI uri) {
@@ -84,7 +86,13 @@ public class TestCreateMissingNamespaces {
     prepareRoundtrip();
 
     ProcessResult result =
-        runGeneratorCmd("create-missing-namespaces", "--verbose", "--uri", uri.toString());
+        runGeneratorCmd(
+            "create-missing-namespaces",
+            "--author",
+            "Author 123",
+            "--verbose",
+            "--uri",
+            uri.toString());
 
     soft.assertThat(result)
         .extracting(
@@ -112,6 +120,13 @@ public class TestCreateMissingNamespaces {
                 "    all namespaces present.",
                 "Successfully processed 4 branches, created 5 namespaces."),
             singletonList(""));
+
+    soft.assertThat(nessieApi.getCommitLog().refName("branch1").stream())
+        .isNotEmpty()
+        .first(type(LogResponse.LogEntry.class))
+        .extracting(LogResponse.LogEntry::getCommitMeta)
+        .extracting(CommitMeta::getAuthor)
+        .isEqualTo("Author 123");
   }
 
   @Test
@@ -174,29 +189,32 @@ public class TestCreateMissingNamespaces {
 
   protected void prepareRoundtrip() throws Exception {
     Branch defaultBranch = nessieApi.getDefaultBranch();
-    Reference branch1 =
-        nessieApi
-            .createReference()
-            .sourceRefName(defaultBranch.getName())
-            .reference(Branch.of("branch1", defaultBranch.getHash()))
-            .create();
-    Reference branch2 =
-        nessieApi
-            .createReference()
-            .sourceRefName(defaultBranch.getName())
-            .reference(Branch.of("branch2", defaultBranch.getHash()))
-            .create();
-    Reference branch3 =
-        nessieApi
-            .createReference()
-            .sourceRefName(defaultBranch.getName())
-            .reference(Branch.of("branch3", defaultBranch.getHash()))
-            .create();
+    Branch branch1 =
+        (Branch)
+            nessieApi
+                .createReference()
+                .sourceRefName(defaultBranch.getName())
+                .reference(Branch.of("branch1", defaultBranch.getHash()))
+                .create();
+    Branch branch2 =
+        (Branch)
+            nessieApi
+                .createReference()
+                .sourceRefName(defaultBranch.getName())
+                .reference(Branch.of("branch2", defaultBranch.getHash()))
+                .create();
+    Branch branch3 =
+        (Branch)
+            nessieApi
+                .createReference()
+                .sourceRefName(defaultBranch.getName())
+                .reference(Branch.of("branch3", defaultBranch.getHash()))
+                .create();
 
     nessieApi
         .commitMultipleOperations()
         .commitMeta(fromMessage("foo"))
-        .branchName(branch1.getName())
+        .branch(branch1)
         .operation(Put.of(ContentKey.of("a", "b", "Table"), IcebergTable.of("meta1", 1, 2, 3, 4)))
         .operation(Put.of(ContentKey.of("a", "b", "Data"), IcebergTable.of("meta2", 1, 2, 3, 4)))
         .operation(Put.of(ContentKey.of("Data"), IcebergTable.of("meta3", 1, 2, 3, 4)))
@@ -206,14 +224,14 @@ public class TestCreateMissingNamespaces {
     nessieApi
         .commitMultipleOperations()
         .commitMeta(fromMessage("foo"))
-        .branchName(branch2.getName())
+        .branch(branch2)
         .operation(Put.of(ContentKey.of("x", "y", "Table"), IcebergTable.of("meta1", 1, 2, 3, 4)))
         .commit();
 
     nessieApi
         .commitMultipleOperations()
         .commitMeta(fromMessage("foo"))
-        .branchName(branch3.getName())
+        .branch(branch3)
         .operation(Put.of(ContentKey.of("Table"), IcebergTable.of("meta1", 1, 2, 3, 4)))
         .commit();
   }
@@ -253,17 +271,19 @@ public class TestCreateMissingNamespaces {
   @Test
   public void testCollectMissingNamespaceKeys() throws Exception {
     Branch defaultBranch = nessieApi.getDefaultBranch();
-    nessieApi
-        .createReference()
-        .sourceRefName(defaultBranch.getName())
-        .reference(Branch.of("branch", defaultBranch.getHash()))
-        .create();
+    Branch branch =
+        (Branch)
+            nessieApi
+                .createReference()
+                .sourceRefName(defaultBranch.getName())
+                .reference(Branch.of("branch", defaultBranch.getHash()))
+                .create();
 
     Branch head =
         nessieApi
             .commitMultipleOperations()
             .commitMeta(fromMessage("foo"))
-            .branchName("branch")
+            .branch(branch)
             .operation(
                 Put.of(ContentKey.of("a", "b", "Table"), IcebergTable.of("meta1", 1, 2, 3, 4)))
             .operation(
@@ -312,7 +332,7 @@ public class TestCreateMissingNamespaces {
   public void testCommitCreateNamespaces() throws Exception {
     Branch defaultBranch = nessieApi.getDefaultBranch();
 
-    commitCreateNamespaces(
+    cmd.commitCreateNamespaces(
         nessieApi,
         defaultBranch,
         asList(

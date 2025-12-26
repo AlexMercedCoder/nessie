@@ -17,6 +17,7 @@ package org.projectnessie.versioned.tests;
 
 import static java.util.Collections.emptyList;
 import static java.util.Collections.singletonList;
+import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.InstanceOfAssertFactories.type;
 import static org.projectnessie.versioned.testworker.OnRefOnly.newOnRef;
@@ -38,14 +39,14 @@ import org.projectnessie.model.Content;
 import org.projectnessie.model.ContentKey;
 import org.projectnessie.model.MergeBehavior;
 import org.projectnessie.model.MergeKeyBehavior;
+import org.projectnessie.model.Operation.Delete;
+import org.projectnessie.model.Operation.Put;
 import org.projectnessie.versioned.BranchName;
 import org.projectnessie.versioned.Commit;
-import org.projectnessie.versioned.Delete;
 import org.projectnessie.versioned.Hash;
-import org.projectnessie.versioned.MergeResult;
-import org.projectnessie.versioned.Put;
 import org.projectnessie.versioned.ReferenceConflictException;
 import org.projectnessie.versioned.ReferenceNotFoundException;
+import org.projectnessie.versioned.TransplantResult;
 import org.projectnessie.versioned.VersionStore;
 import org.projectnessie.versioned.VersionStore.TransplantOp;
 import org.projectnessie.versioned.VersionStoreException;
@@ -97,7 +98,8 @@ public abstract class AbstractTransplant extends AbstractNestedVersionStore {
             .put(T_3, V_3_1)
             .toBranch(sourceBranch);
 
-    Content t1 = store().getValue(sourceBranch, ContentKey.of("t1")).content();
+    Content t1 =
+        requireNonNull(store().getValue(sourceBranch, ContentKey.of("t1"), false).content());
 
     secondCommit =
         commit("Second Commit")
@@ -117,7 +119,7 @@ public abstract class AbstractTransplant extends AbstractNestedVersionStore {
     final BranchName newBranch = BranchName.of("bar_1");
     store().create(newBranch, Optional.empty()).getHash();
 
-    MergeResult<Commit> result =
+    TransplantResult result =
         store()
             .transplant(
                 TransplantOp.builder()
@@ -138,7 +140,8 @@ public abstract class AbstractTransplant extends AbstractNestedVersionStore {
                             ContentKey.of(T_1),
                             ContentKey.of(T_2),
                             ContentKey.of(T_3),
-                            ContentKey.of(T_4)))))
+                            ContentKey.of(T_4)),
+                        false)))
         .containsExactlyInAnyOrderEntriesOf(
             ImmutableMap.of(
                 ContentKey.of(T_1), V_1_2,
@@ -154,7 +157,7 @@ public abstract class AbstractTransplant extends AbstractNestedVersionStore {
     store().create(newBranch, Optional.empty());
     Hash targetHead = commit("Unrelated commit").put(T_5, V_5_1).toBranch(newBranch);
 
-    MergeResult<Commit> result =
+    TransplantResult result =
         store()
             .transplant(
                 TransplantOp.builder()
@@ -176,17 +179,17 @@ public abstract class AbstractTransplant extends AbstractNestedVersionStore {
                       o -> {
                         soft.assertThat(o).isInstanceOf(Put.class);
                         soft.assertThat(o.getKey()).isEqualTo(ContentKey.of(T_1));
-                        soft.assertThat(contentWithoutId(((Put) o).getValue())).isEqualTo(V_1_1);
+                        soft.assertThat(contentWithoutId(((Put) o).getContent())).isEqualTo(V_1_1);
                       },
                       o -> {
                         soft.assertThat(o).isInstanceOf(Put.class);
                         soft.assertThat(o.getKey()).isEqualTo(ContentKey.of(T_2));
-                        soft.assertThat(contentWithoutId(((Put) o).getValue())).isEqualTo(V_2_1);
+                        soft.assertThat(contentWithoutId(((Put) o).getContent())).isEqualTo(V_2_1);
                       },
                       o -> {
                         soft.assertThat(o).isInstanceOf(Put.class);
                         soft.assertThat(o.getKey()).isEqualTo(ContentKey.of(T_3));
-                        soft.assertThat(contentWithoutId(((Put) o).getValue())).isEqualTo(V_3_1);
+                        soft.assertThat(contentWithoutId(((Put) o).getContent())).isEqualTo(V_3_1);
                       });
             },
             c -> {
@@ -199,7 +202,7 @@ public abstract class AbstractTransplant extends AbstractNestedVersionStore {
                       o -> {
                         soft.assertThat(o).isInstanceOf(Put.class);
                         soft.assertThat(o.getKey()).isEqualTo(ContentKey.of(T_1));
-                        soft.assertThat(contentWithoutId(((Put) o).getValue())).isEqualTo(V_1_2);
+                        soft.assertThat(contentWithoutId(((Put) o).getContent())).isEqualTo(V_1_2);
                       },
                       o ->
                           soft.assertThat(o)
@@ -214,7 +217,7 @@ public abstract class AbstractTransplant extends AbstractNestedVersionStore {
                       o -> {
                         soft.assertThat(o).isInstanceOf(Put.class);
                         soft.assertThat(o.getKey()).isEqualTo(ContentKey.of(T_4));
-                        soft.assertThat(contentWithoutId(((Put) o).getValue())).isEqualTo(V_4_1);
+                        soft.assertThat(contentWithoutId(((Put) o).getContent())).isEqualTo(V_4_1);
                       });
             },
             c -> {
@@ -227,7 +230,7 @@ public abstract class AbstractTransplant extends AbstractNestedVersionStore {
                       o -> {
                         soft.assertThat(o).isInstanceOf(Put.class);
                         soft.assertThat(o.getKey()).isEqualTo(ContentKey.of(T_2));
-                        soft.assertThat(contentWithoutId(((Put) o).getValue())).isEqualTo(V_2_2);
+                        soft.assertThat(contentWithoutId(((Put) o).getContent())).isEqualTo(V_2_2);
                       }
                       // Unchanged operation not retained
                       );
@@ -243,7 +246,8 @@ public abstract class AbstractTransplant extends AbstractNestedVersionStore {
                             ContentKey.of(T_2),
                             ContentKey.of(T_3),
                             ContentKey.of(T_4),
-                            ContentKey.of(T_5)))))
+                            ContentKey.of(T_5)),
+                        false)))
         .containsExactlyInAnyOrderEntriesOf(
             ImmutableMap.of(
                 ContentKey.of(T_1), V_1_2,
@@ -301,7 +305,8 @@ public abstract class AbstractTransplant extends AbstractNestedVersionStore {
                             ContentKey.of(T_1),
                             ContentKey.of(T_2),
                             ContentKey.of(T_3),
-                            ContentKey.of(T_4)))))
+                            ContentKey.of(T_4)),
+                        false)))
         .containsExactlyInAnyOrderEntriesOf(
             ImmutableMap.of(
                 ContentKey.of(T_1), V_1_2,
@@ -355,7 +360,7 @@ public abstract class AbstractTransplant extends AbstractNestedVersionStore {
     final BranchName newBranch = BranchName.of("bar_7");
     store().create(newBranch, Optional.empty());
     commit("Another commit").put(T_5, V_5_1).toBranch(newBranch);
-    Content t5 = store().getValue(newBranch, ContentKey.of(T_5)).content();
+    Content t5 = requireNonNull(store().getValue(newBranch, ContentKey.of(T_5), false).content());
     commit("Another commit").put(T_5, V_1_4.withId(t5.getId())).toBranch(newBranch);
 
     store()
@@ -375,7 +380,8 @@ public abstract class AbstractTransplant extends AbstractNestedVersionStore {
                             ContentKey.of(T_2),
                             ContentKey.of(T_3),
                             ContentKey.of(T_4),
-                            ContentKey.of(T_5)))))
+                            ContentKey.of(T_5)),
+                        false)))
         .containsExactlyInAnyOrderEntriesOf(
             ImmutableMap.of(
                 ContentKey.of(T_1), V_1_2,
@@ -441,7 +447,7 @@ public abstract class AbstractTransplant extends AbstractNestedVersionStore {
     store().create(newBranch, Optional.empty());
     Hash targetHead = commit("Unrelated commit").put(T_5, V_5_1).toBranch(newBranch);
 
-    MergeResult<Commit> result =
+    TransplantResult result =
         store()
             .transplant(
                 TransplantOp.builder()
@@ -468,7 +474,8 @@ public abstract class AbstractTransplant extends AbstractNestedVersionStore {
                 store()
                     .getValues(
                         newBranch,
-                        Arrays.asList(ContentKey.of(T_1), ContentKey.of(T_4), ContentKey.of(T_5)))))
+                        Arrays.asList(ContentKey.of(T_1), ContentKey.of(T_4), ContentKey.of(T_5)),
+                        false)))
         .containsExactlyInAnyOrderEntriesOf(
             ImmutableMap.of(
                 ContentKey.of(T_1), V_1_2,

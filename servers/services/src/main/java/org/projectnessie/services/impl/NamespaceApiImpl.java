@@ -20,11 +20,12 @@ import static java.util.stream.StreamSupport.stream;
 import static org.projectnessie.error.ContentKeyErrorDetails.contentKeyErrorDetails;
 import static org.projectnessie.model.Validation.validateHash;
 import static org.projectnessie.services.impl.RefUtil.toReference;
+import static org.projectnessie.versioned.RequestMeta.API_WRITE;
 import static org.projectnessie.versioned.VersionStore.KeyRestrictions.NO_KEY_RESTRICTIONS;
 
 import com.google.common.base.Preconditions;
 import com.google.errorprone.annotations.MustBeClosed;
-import java.security.Principal;
+import jakarta.annotation.Nullable;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -33,9 +34,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Predicate;
-import java.util.function.Supplier;
 import java.util.stream.Stream;
-import javax.annotation.Nullable;
 import org.projectnessie.api.v1.NamespaceApi;
 import org.projectnessie.api.v1.params.NamespaceParams;
 import org.projectnessie.error.NessieNamespaceAlreadyExistsException;
@@ -49,22 +48,24 @@ import org.projectnessie.model.GetNamespacesResponse;
 import org.projectnessie.model.ImmutableGetNamespacesResponse;
 import org.projectnessie.model.ImmutableNamespace;
 import org.projectnessie.model.Namespace;
+import org.projectnessie.model.Operation;
 import org.projectnessie.model.Operation.Delete;
 import org.projectnessie.model.Operation.Put;
+import org.projectnessie.services.authz.AccessContext;
+import org.projectnessie.services.authz.ApiContext;
 import org.projectnessie.services.authz.Authorizer;
 import org.projectnessie.services.authz.BatchAccessChecker;
 import org.projectnessie.services.config.ServerConfig;
+import org.projectnessie.services.hash.ResolvedHash;
 import org.projectnessie.services.spi.NamespaceService;
 import org.projectnessie.versioned.BranchName;
 import org.projectnessie.versioned.ContentResult;
 import org.projectnessie.versioned.Hash;
 import org.projectnessie.versioned.KeyEntry;
-import org.projectnessie.versioned.NamedRef;
-import org.projectnessie.versioned.Operation;
 import org.projectnessie.versioned.ReferenceConflictException;
 import org.projectnessie.versioned.ReferenceNotFoundException;
+import org.projectnessie.versioned.RequestMeta;
 import org.projectnessie.versioned.VersionStore;
-import org.projectnessie.versioned.WithHash;
 import org.projectnessie.versioned.paging.PaginationIterator;
 
 public class NamespaceApiImpl extends BaseApiImpl implements NamespaceService {
@@ -73,17 +74,18 @@ public class NamespaceApiImpl extends BaseApiImpl implements NamespaceService {
       ServerConfig config,
       VersionStore store,
       Authorizer authorizer,
-      Supplier<Principal> principal) {
-    super(config, store, authorizer, principal);
+      AccessContext accessContext,
+      ApiContext apiContext) {
+    super(config, store, authorizer, accessContext, apiContext);
   }
 
   @Override
-  public Namespace createNamespace(String refName, Namespace namespace)
+  public Namespace createNamespace(String refName, Namespace namespace, RequestMeta requestMeta)
       throws NessieReferenceNotFoundException {
     Preconditions.checkArgument(!namespace.isEmpty(), "Namespace name must not be empty");
 
-    WithHash<NamedRef> refWithHash = namedRefWithHashOrThrow(refName, null);
     try {
+      ResolvedHash refWithHash = getHashResolver().resolveToHead(refName);
 
       try {
         Optional<Content> explicitlyCreatedNamespace =
@@ -108,8 +110,9 @@ public class NamespaceApiImpl extends BaseApiImpl implements NamespaceService {
       Hash hash =
           commit(
               BranchName.of(refWithHash.getValue().getName()),
-              "create namespace " + namespace.name(),
-              TreeApiImpl.toOp(put));
+              "create namespace '" + namespace.toCanonicalString() + "'",
+              put,
+              requestMeta);
 
       Content content = getExplicitlyCreatedNamespace(namespace, hash).orElse(null);
 
@@ -128,8 +131,8 @@ public class NamespaceApiImpl extends BaseApiImpl implements NamespaceService {
   @Override
   public void deleteNamespace(String refName, Namespace namespaceToDelete)
       throws NessieReferenceNotFoundException, NessieNamespaceNotFoundException {
-    WithHash<NamedRef> refWithHash = namedRefWithHashOrThrow(refName, null);
     try {
+      ResolvedHash refWithHash = getHashResolver().resolveToHead(refName);
       Namespace namespace = getNamespace(namespaceToDelete, refWithHash.getHash());
       Delete delete = Delete.of(namespace.toContentKey());
 
@@ -149,8 +152,9 @@ public class NamespaceApiImpl extends BaseApiImpl implements NamespaceService {
 
       commit(
           BranchName.of(refWithHash.getValue().getName()),
-          "delete namespace " + namespace.name(),
-          TreeApiImpl.toOp(delete));
+          "delete namespace '" + namespace.toCanonicalString() + "'",
+          delete,
+          API_WRITE);
     } catch (ReferenceNotFoundException | ReferenceConflictException e) {
       throw new NessieReferenceNotFoundException(e.getMessage(), e);
     }
@@ -163,7 +167,8 @@ public class NamespaceApiImpl extends BaseApiImpl implements NamespaceService {
       if (hashOnRef != null) {
         validateHash(hashOnRef);
       }
-      return getNamespace(namespace, namedRefWithHashOrThrow(refName, hashOnRef).getHash());
+      ResolvedHash resolved = getHashResolver().resolveHashOnRef(refName, hashOnRef);
+      return getNamespace(namespace, resolved.getHash());
     } catch (ReferenceNotFoundException e) {
       throw refNotFoundException(e);
     }
@@ -201,8 +206,8 @@ public class NamespaceApiImpl extends BaseApiImpl implements NamespaceService {
     if (hashOnRef != null) {
       validateHash(hashOnRef);
     }
-    WithHash<NamedRef> refWithHash = namedRefWithHashOrThrow(refName, hashOnRef);
     try {
+      ResolvedHash refWithHash = getHashResolver().resolveHashOnRef(refName, hashOnRef);
       // Note: `Namespace` objects are supposed to get more attributes (e.g. a properties map)
       // which will make it impossible to use the `Namespace` object itself as an identifier to
       // subtract the set of explicitly created namespaces from the set of implicitly created ones.
@@ -235,7 +240,7 @@ public class NamespaceApiImpl extends BaseApiImpl implements NamespaceService {
       // same key.
       if (!explicitNamespaceKeys.isEmpty()) {
         Map<ContentKey, ContentResult> namespaceValues =
-            getStore().getValues(refWithHash.getHash(), explicitNamespaceKeys);
+            getStore().getValues(refWithHash.getHash(), explicitNamespaceKeys, false);
         namespaceValues.values().stream()
             .map(ContentResult::content)
             .filter(Namespace.class::isInstance)
@@ -259,10 +264,11 @@ public class NamespaceApiImpl extends BaseApiImpl implements NamespaceService {
       String refName,
       Namespace namespaceToUpdate,
       Map<String, String> propertyUpdates,
-      Set<String> propertyRemovals)
+      Set<String> propertyRemovals,
+      RequestMeta requestMeta)
       throws NessieNamespaceNotFoundException, NessieReferenceNotFoundException {
     try {
-      WithHash<NamedRef> refWithHash = namedRefWithHashOrThrow(refName, null);
+      ResolvedHash refWithHash = getHashResolver().resolveToHead(refName);
 
       Namespace namespace = getNamespace(namespaceToUpdate, refWithHash.getHash());
       Map<String, String> properties = new HashMap<>(namespace.getProperties());
@@ -278,8 +284,9 @@ public class NamespaceApiImpl extends BaseApiImpl implements NamespaceService {
       Put put = Put.of(updatedNamespace.toContentKey(), updatedNamespace);
       commit(
           BranchName.of(refWithHash.getValue().getName()),
-          "update properties for namespace " + updatedNamespace.name(),
-          TreeApiImpl.toOp(put));
+          "update properties for namespace '" + updatedNamespace.toCanonicalString() + "'",
+          put,
+          requestMeta);
 
     } catch (ReferenceNotFoundException | ReferenceConflictException e) {
       throw new NessieReferenceNotFoundException(e.getMessage(), e);
@@ -288,9 +295,7 @@ public class NamespaceApiImpl extends BaseApiImpl implements NamespaceService {
 
   @MustBeClosed
   private Stream<KeyEntry> getNamespacesKeyStream(
-      @Nullable @jakarta.annotation.Nullable Namespace namespace,
-      Hash hash,
-      Predicate<KeyEntry> earlyFilterPredicate)
+      @Nullable Namespace namespace, Hash hash, Predicate<KeyEntry> earlyFilterPredicate)
       throws ReferenceNotFoundException {
     PaginationIterator<KeyEntry> iter = getStore().getKeys(hash, null, false, NO_KEY_RESTRICTIONS);
     return stream(spliteratorUnknownSize(iter, 0), false)
@@ -319,7 +324,7 @@ public class NamespaceApiImpl extends BaseApiImpl implements NamespaceService {
 
   private Optional<Content> getExplicitlyCreatedNamespace(Namespace namespace, Hash hash)
       throws ReferenceNotFoundException {
-    return Optional.ofNullable(getStore().getValue(hash, namespace.toContentKey()))
+    return Optional.ofNullable(getStore().getValue(hash, namespace.toContentKey(), false))
         .map(ContentResult::content);
   }
 
@@ -362,7 +367,8 @@ public class NamespaceApiImpl extends BaseApiImpl implements NamespaceService {
     return new NessieReferenceNotFoundException(e.getMessage(), e);
   }
 
-  private Hash commit(BranchName branch, String commitMsg, Operation contentOperation)
+  private Hash commit(
+      BranchName branch, String commitMsg, Operation contentOperation, RequestMeta requestMeta)
       throws ReferenceNotFoundException, ReferenceConflictException {
     return getStore()
         .commit(
@@ -377,15 +383,17 @@ public class NamespaceApiImpl extends BaseApiImpl implements NamespaceService {
                   .operations()
                   .forEach(
                       op -> {
+                        Set<String> actions =
+                            requestMeta.keyActions(op.identifiedKey().contentKey());
                         switch (op.operationType()) {
                           case CREATE:
-                            check.canCreateEntity(branch, op.identifiedKey());
+                            check.canCreateEntity(branch, op.identifiedKey(), actions);
                             break;
                           case UPDATE:
-                            check.canUpdateEntity(branch, op.identifiedKey());
+                            check.canUpdateEntity(branch, op.identifiedKey(), actions);
                             break;
                           case DELETE:
-                            check.canDeleteEntity(branch, op.identifiedKey());
+                            check.canDeleteEntity(branch, op.identifiedKey(), actions);
                             break;
                           default:
                             throw new UnsupportedOperationException(

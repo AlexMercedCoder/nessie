@@ -14,36 +14,29 @@
  * limitations under the License.
  */
 
-plugins {
-  id("nessie-conventions-server")
-  id("nessie-jacoco")
-}
+plugins { id("nessie-conventions-java11") }
 
-extra["maven.name"] = "Nessie - Backward Compatibility - Common"
+publishingHelper { mavenName = "Nessie - Backward Compatibility - Common" }
 
 dependencies {
   api(project(":nessie-client"))
   api(project(":nessie-compatibility-jersey"))
   api(project(":nessie-multi-env-test-engine"))
   implementation(project(":nessie-services"))
-  implementation(project(":nessie-versioned-persist-adapter"))
+  implementation(project(":nessie-services-config"))
   implementation(project(":nessie-versioned-storage-common"))
   implementation(project(":nessie-versioned-storage-store"))
-  compileOnly(project(":nessie-versioned-persist-mongodb-test"))
+  compileOnly(project(":nessie-versioned-storage-mongodb-tests"))
+  compileOnly(project(":nessie-versioned-storage-testextension"))
+  compileOnly(libs.mongodb.driver.sync)
 
   implementation(platform(libs.jersey.bom))
   api(libs.slf4j.api)
   api(libs.logback.classic)
-  implementation(libs.maven.core)
-  implementation(libs.maven.resolver.provider)
-  implementation(libs.maven.resolver.connector.basic)
-  implementation(libs.maven.resolver.transport.file)
-  implementation(libs.maven.resolver.transport.http)
+  implementation(libs.maven.resolver.supplier)
   implementation(libs.guava)
 
-  // javax/jakarta
   compileOnly(libs.jakarta.enterprise.cdi.api)
-  compileOnly(libs.javax.enterprise.cdi.api)
 
   compileOnly(libs.microprofile.openapi)
 
@@ -56,12 +49,8 @@ dependencies {
 
   testImplementation(libs.mockito.core)
   testImplementation(libs.guava)
-  testImplementation(project(":nessie-versioned-persist-non-transactional-test"))
   implementation(project(":nessie-versioned-storage-inmemory"))
-  implementation(project(":nessie-versioned-persist-in-memory"))
-  implementation(project(":nessie-versioned-persist-in-memory-test"))
-  implementation(project(":nessie-versioned-persist-rocks"))
-  implementation(project(":nessie-versioned-persist-rocks-test"))
+  testRuntimeOnly(project(":nessie-versioned-storage-rocksdb"))
 
   testCompileOnly(libs.microprofile.openapi)
 

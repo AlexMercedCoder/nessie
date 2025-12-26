@@ -15,14 +15,21 @@
  */
 package org.projectnessie.versioned.storage.cache;
 
+import static org.projectnessie.versioned.storage.cache.CacheBackend.NON_EXISTENT_REFERENCE_SENTINEL;
+import static org.projectnessie.versioned.storage.cache.CacheBackend.NOT_FOUND_OBJ_SENTINEL;
+
+import jakarta.annotation.Nonnull;
+import java.lang.reflect.Array;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
-import javax.annotation.Nonnull;
 import org.projectnessie.versioned.storage.common.config.StoreConfig;
 import org.projectnessie.versioned.storage.common.exceptions.ObjNotFoundException;
 import org.projectnessie.versioned.storage.common.exceptions.ObjTooLargeException;
 import org.projectnessie.versioned.storage.common.exceptions.RefAlreadyExistsException;
 import org.projectnessie.versioned.storage.common.exceptions.RefConditionFailedException;
 import org.projectnessie.versioned.storage.common.exceptions.RefNotFoundException;
+import org.projectnessie.versioned.storage.common.objtypes.UpdateableObj;
 import org.projectnessie.versioned.storage.common.persist.CloseableIterator;
 import org.projectnessie.versioned.storage.common.persist.Obj;
 import org.projectnessie.versioned.storage.common.persist.ObjId;
@@ -42,15 +49,17 @@ class CachingPersistImpl implements Persist {
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public Obj fetchObj(@Nonnull @jakarta.annotation.Nonnull ObjId id) throws ObjNotFoundException {
+  public Obj fetchObj(@Nonnull ObjId id) throws ObjNotFoundException {
     Obj o = cache.get(id);
     if (o != null) {
-      return o;
+      if (o != NOT_FOUND_OBJ_SENTINEL) {
+        return o;
+      }
+      throw new ObjNotFoundException(id);
     }
     try {
       o = persist.fetchObj(id);
-      cache.put(o);
+      cache.putLocal(o);
       return o;
     } catch (ObjNotFoundException e) {
       cache.remove(id);
@@ -59,19 +68,34 @@ class CachingPersistImpl implements Persist {
   }
 
   @Override
-  @Nonnull
-  @jakarta.annotation.Nonnull
-  public <T extends Obj> T fetchTypedObj(
-      @Nonnull @jakarta.annotation.Nonnull ObjId id, ObjType type, Class<T> typeClass)
-      throws ObjNotFoundException {
+  public Obj getImmediate(@Nonnull ObjId id) {
     Obj o = cache.get(id);
+    if (o == NOT_FOUND_OBJ_SENTINEL) {
+      return null;
+    }
+    return o;
+  }
+
+  @Override
+  @Nonnull
+  public <T extends Obj> T fetchTypedObj(
+      @Nonnull ObjId id, ObjType type, @Nonnull Class<T> typeClass) throws ObjNotFoundException {
+    Obj o = cache.get(id);
+    if (o == NOT_FOUND_OBJ_SENTINEL) {
+      throw new ObjNotFoundException(id);
+    }
     if (o != null) {
-      if (o.type() != type) {
+      if (type != null && !type.equals(o.type())) {
         throw new ObjNotFoundException(id);
       }
     } else {
-      o = persist.fetchTypedObj(id, type, typeClass);
-      cache.put(o);
+      try {
+        o = persist.fetchTypedObj(id, type, typeClass);
+        cache.putLocal(o);
+      } catch (ObjNotFoundException e) {
+        cache.putReferenceNegative(id, type);
+        throw e;
+      }
     }
     @SuppressWarnings("unchecked")
     T r = (T) o;
@@ -80,10 +104,11 @@ class CachingPersistImpl implements Persist {
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public ObjType fetchObjType(@Nonnull @jakarta.annotation.Nonnull ObjId id)
-      throws ObjNotFoundException {
+  public ObjType fetchObjType(@Nonnull ObjId id) throws ObjNotFoundException {
     Obj o = cache.get(id);
+    if (o == NOT_FOUND_OBJ_SENTINEL) {
+      throw new ObjNotFoundException(id);
+    }
     if (o != null) {
       return o.type();
     }
@@ -94,12 +119,69 @@ class CachingPersistImpl implements Persist {
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public Obj[] fetchObjs(@Nonnull @jakarta.annotation.Nonnull ObjId[] ids)
-      throws ObjNotFoundException {
-    ObjId[] backendIds = null;
+  public Obj[] fetchObjs(@Nonnull ObjId[] ids) throws ObjNotFoundException {
     Obj[] r = new Obj[ids.length];
 
+    ObjId[] backendIds = fetchObjsPre(ids, r, null, Obj.class);
+
+    if (backendIds == null) {
+      return r;
+    }
+
+    Obj[] backendResult = persist.fetchObjs(backendIds);
+    return fetchObjsPost(backendIds, backendResult, r, null);
+  }
+
+  @Nonnull
+  @Override
+  public <T extends Obj> T[] fetchTypedObjs(
+      @Nonnull ObjId[] ids, ObjType type, @Nonnull Class<T> typeClass) throws ObjNotFoundException {
+    @SuppressWarnings("unchecked")
+    T[] r = (T[]) Array.newInstance(typeClass, ids.length);
+
+    ObjId[] backendIds = fetchObjsPre(ids, r, type, typeClass);
+
+    if (backendIds != null) {
+      T[] backendResult = persist.fetchTypedObjsIfExist(backendIds, type, typeClass);
+      r = fetchObjsPost(backendIds, backendResult, r, type);
+    }
+
+    List<ObjId> notFound = null;
+    for (int i = 0; i < ids.length; i++) {
+      ObjId id = ids[i];
+      if (r[i] == null && id != null) {
+        if (notFound == null) {
+          notFound = new ArrayList<>();
+        }
+        notFound.add(id);
+      }
+    }
+    if (notFound != null) {
+      throw new ObjNotFoundException(notFound);
+    }
+
+    return r;
+  }
+
+  @Override
+  public <T extends Obj> T[] fetchTypedObjsIfExist(
+      @Nonnull ObjId[] ids, ObjType type, @Nonnull Class<T> typeClass) {
+    @SuppressWarnings("unchecked")
+    T[] r = (T[]) Array.newInstance(typeClass, ids.length);
+
+    ObjId[] backendIds = fetchObjsPre(ids, r, type, typeClass);
+
+    if (backendIds == null) {
+      return r;
+    }
+
+    T[] backendResult = persist.fetchTypedObjsIfExist(backendIds, type, typeClass);
+    return fetchObjsPost(backendIds, backendResult, r, type);
+  }
+
+  private <T extends Obj> ObjId[] fetchObjsPre(
+      ObjId[] ids, T[] r, ObjType type, @SuppressWarnings("unused") @Nonnull Class<T> typeClass) {
+    ObjId[] backendIds = null;
     for (int i = 0; i < ids.length; i++) {
       ObjId id = ids[i];
       if (id == null) {
@@ -107,7 +189,11 @@ class CachingPersistImpl implements Persist {
       }
       Obj o = cache.get(id);
       if (o != null) {
-        r[i] = o;
+        if (o != NOT_FOUND_OBJ_SENTINEL && (type == null || type.equals(o.type()))) {
+          @SuppressWarnings("unchecked")
+          T typed = (T) o;
+          r[i] = typed;
+        }
       } else {
         if (backendIds == null) {
           backendIds = new ObjId[ids.length];
@@ -115,25 +201,43 @@ class CachingPersistImpl implements Persist {
         backendIds[i] = id;
       }
     }
+    return backendIds;
+  }
 
-    if (backendIds == null) {
-      return r;
-    }
-
-    Obj[] backendResult = persist.fetchObjs(backendIds);
+  private <T extends Obj> T[] fetchObjsPost(
+      ObjId[] backendIds, T[] backendResult, T[] r, ObjType type) {
     for (int i = 0; i < backendResult.length; i++) {
-      Obj o = backendResult[i];
-      if (o != null) {
-        r[i] = o;
-        cache.put(o);
+      ObjId id = backendIds[i];
+      if (id != null) {
+        T o = backendResult[i];
+        if (o != null) {
+          r[i] = o;
+          cache.putLocal(o);
+        } else {
+          cache.putReferenceNegative(id, type);
+        }
       }
     }
     return r;
   }
 
   @Override
-  public boolean storeObj(
-      @jakarta.annotation.Nonnull @Nonnull Obj obj, boolean ignoreSoftSizeRestrictions)
+  @Nonnull
+  public Obj[] fetchObjsIfExist(@Nonnull ObjId[] ids) {
+    Obj[] r = new Obj[ids.length];
+
+    ObjId[] backendIds = fetchObjsPre(ids, r, null, Obj.class);
+
+    if (backendIds == null) {
+      return r;
+    }
+
+    Obj[] backendResult = persist.fetchObjsIfExist(backendIds);
+    return fetchObjsPost(backendIds, backendResult, r, null);
+  }
+
+  @Override
+  public boolean storeObj(@Nonnull Obj obj, boolean ignoreSoftSizeRestrictions)
       throws ObjTooLargeException {
     if (persist.storeObj(obj, ignoreSoftSizeRestrictions)) {
       cache.put(obj);
@@ -144,9 +248,7 @@ class CachingPersistImpl implements Persist {
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public boolean[] storeObjs(@jakarta.annotation.Nonnull @Nonnull Obj[] objs)
-      throws ObjTooLargeException {
+  public boolean[] storeObjs(@Nonnull Obj[] objs) throws ObjTooLargeException {
     boolean[] stored = persist.storeObjs(objs);
     for (int i = 0; i < stored.length; i++) {
       if (stored[i]) {
@@ -157,7 +259,7 @@ class CachingPersistImpl implements Persist {
   }
 
   @Override
-  public void upsertObj(@jakarta.annotation.Nonnull @Nonnull Obj obj) throws ObjTooLargeException {
+  public void upsertObj(@Nonnull Obj obj) throws ObjTooLargeException {
     try {
       persist.upsertObj(obj);
     } finally {
@@ -166,8 +268,7 @@ class CachingPersistImpl implements Persist {
   }
 
   @Override
-  public void upsertObjs(@jakarta.annotation.Nonnull @Nonnull Obj[] objs)
-      throws ObjTooLargeException {
+  public void upsertObjs(@Nonnull Obj[] objs) throws ObjTooLargeException {
     try {
       persist.upsertObjs(objs);
     } finally {
@@ -180,7 +281,7 @@ class CachingPersistImpl implements Persist {
   }
 
   @Override
-  public void deleteObj(@jakarta.annotation.Nonnull @Nonnull ObjId id) {
+  public void deleteObj(@Nonnull ObjId id) {
     try {
       persist.deleteObj(id);
     } finally {
@@ -189,7 +290,7 @@ class CachingPersistImpl implements Persist {
   }
 
   @Override
-  public void deleteObjs(@jakarta.annotation.Nonnull @Nonnull ObjId[] ids) {
+  public void deleteObjs(@Nonnull ObjId[] ids) {
     try {
       persist.deleteObjs(ids);
     } finally {
@@ -198,6 +299,36 @@ class CachingPersistImpl implements Persist {
           cache.remove(id);
         }
       }
+    }
+  }
+
+  @Override
+  public boolean deleteWithReferenced(@Nonnull Obj obj) {
+    try {
+      return persist.deleteWithReferenced(obj);
+    } finally {
+      cache.remove(obj.id());
+    }
+  }
+
+  @Override
+  public boolean deleteConditional(@Nonnull UpdateableObj obj) {
+    try {
+      return persist.deleteConditional(obj);
+    } finally {
+      cache.remove(obj.id());
+    }
+  }
+
+  @Override
+  public boolean updateConditional(@Nonnull UpdateableObj expected, @Nonnull UpdateableObj newValue)
+      throws ObjTooLargeException {
+    if (persist.updateConditional(expected, newValue)) {
+      cache.put(newValue);
+      return true;
+    } else {
+      cache.remove(expected.id());
+      return false;
     }
   }
 
@@ -212,9 +343,7 @@ class CachingPersistImpl implements Persist {
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public CloseableIterator<Obj> scanAllObjects(
-      @Nonnull @jakarta.annotation.Nonnull Set<ObjType> returnedObjTypes) {
+  public CloseableIterator<Obj> scanAllObjects(@Nonnull Set<ObjType> returnedObjTypes) {
     return persist.scanAllObjects(returnedObjTypes);
   }
 
@@ -237,59 +366,163 @@ class CachingPersistImpl implements Persist {
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
   public StoreConfig config() {
     return persist.config();
   }
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
   public String name() {
     return persist.name();
   }
 
+  // References
+
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public Reference addReference(@Nonnull @jakarta.annotation.Nonnull Reference reference)
-      throws RefAlreadyExistsException {
-    return persist.addReference(reference);
+  public Reference addReference(@Nonnull Reference reference) throws RefAlreadyExistsException {
+    Reference r = null;
+    try {
+      return r = persist.addReference(reference);
+    } finally {
+      if (r != null) {
+        cache.putReference(r);
+      } else {
+        cache.removeReference(reference.name());
+      }
+    }
   }
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public Reference markReferenceAsDeleted(@Nonnull @jakarta.annotation.Nonnull Reference reference)
+  public Reference markReferenceAsDeleted(@Nonnull Reference reference)
       throws RefNotFoundException, RefConditionFailedException {
-    return persist.markReferenceAsDeleted(reference);
+    Reference r = null;
+    try {
+      return r = persist.markReferenceAsDeleted(reference);
+    } finally {
+      if (r != null) {
+        cache.putReference(r);
+      } else {
+        cache.removeReference(reference.name());
+      }
+    }
   }
 
   @Override
-  public void purgeReference(@Nonnull @jakarta.annotation.Nonnull Reference reference)
+  public void purgeReference(@Nonnull Reference reference)
       throws RefNotFoundException, RefConditionFailedException {
-    persist.purgeReference(reference);
+    try {
+      persist.purgeReference(reference);
+    } finally {
+      cache.removeReference(reference.name());
+    }
   }
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public Reference updateReferencePointer(
-      @Nonnull @jakarta.annotation.Nonnull Reference reference,
-      @Nonnull @jakarta.annotation.Nonnull ObjId newPointer)
+  public Reference updateReferencePointer(@Nonnull Reference reference, @Nonnull ObjId newPointer)
       throws RefNotFoundException, RefConditionFailedException {
-    return persist.updateReferencePointer(reference, newPointer);
+    Reference r = null;
+    try {
+      return r = persist.updateReferencePointer(reference, newPointer);
+    } finally {
+      if (r != null) {
+        cache.putReference(r);
+      } else {
+        cache.removeReference(reference.name());
+      }
+    }
   }
 
   @Override
-  public Reference fetchReference(@Nonnull @jakarta.annotation.Nonnull String name) {
-    return persist.fetchReference(name);
+  public Reference fetchReference(@Nonnull String name) {
+    return fetchReferenceInternal(name, false);
+  }
+
+  @Override
+  public Reference fetchReferenceForUpdate(@Nonnull String name) {
+    return fetchReferenceInternal(name, true);
+  }
+
+  private Reference fetchReferenceInternal(@Nonnull String name, boolean bypassCache) {
+    Reference r = null;
+    if (!bypassCache) {
+      r = cache.getReference(name);
+      if (r == NON_EXISTENT_REFERENCE_SENTINEL) {
+        return null;
+      }
+    }
+
+    if (r == null) {
+      r = persist.fetchReferenceForUpdate(name);
+      if (r == null) {
+        cache.putReferenceNegative(name);
+      } else {
+        cache.putReferenceLocal(r);
+      }
+    }
+    return r;
   }
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public Reference[] fetchReferences(@Nonnull @jakarta.annotation.Nonnull String[] names) {
-    return persist.fetchReferences(names);
+  public Reference[] fetchReferences(@Nonnull String[] names) {
+    return fetchReferencesInternal(names, false);
+  }
+
+  @Override
+  @Nonnull
+  public Reference[] fetchReferencesForUpdate(@Nonnull String[] names) {
+    return fetchReferencesInternal(names, true);
+  }
+
+  private Reference[] fetchReferencesInternal(@Nonnull String[] names, boolean bypassCache) {
+    Reference[] r = new Reference[names.length];
+
+    String[] backend = null;
+    if (!bypassCache) {
+      for (int i = 0; i < names.length; i++) {
+        String name = names[i];
+        if (name != null) {
+          Reference cr = cache.getReference(name);
+          if (cr != null) {
+            if (cr != NON_EXISTENT_REFERENCE_SENTINEL) {
+              r[i] = cr;
+            }
+          } else {
+            if (backend == null) {
+              backend = new String[names.length];
+            }
+            backend[i] = name;
+          }
+        }
+      }
+    } else {
+      backend = names;
+    }
+
+    if (backend != null) {
+      Reference[] br = persist.fetchReferencesForUpdate(backend);
+      for (int i = 0; i < br.length; i++) {
+        String name = backend[i];
+        if (name != null) {
+          Reference ref = br[i];
+          if (ref != null) {
+            r[i] = ref;
+            cache.putReferenceLocal(ref);
+          } else {
+            cache.putReferenceNegative(name);
+          }
+        }
+      }
+    }
+
+    return r;
+  }
+
+  @Override
+  public boolean isCaching() {
+    return true;
   }
 }

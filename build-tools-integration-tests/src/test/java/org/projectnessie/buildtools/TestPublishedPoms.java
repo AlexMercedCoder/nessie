@@ -28,17 +28,12 @@ import org.eclipse.aether.RepositorySystem;
 import org.eclipse.aether.RepositorySystemSession;
 import org.eclipse.aether.artifact.DefaultArtifact;
 import org.eclipse.aether.collection.CollectRequest;
-import org.eclipse.aether.connector.basic.BasicRepositoryConnectorFactory;
 import org.eclipse.aether.graph.Dependency;
-import org.eclipse.aether.impl.DefaultServiceLocator;
 import org.eclipse.aether.repository.LocalRepository;
 import org.eclipse.aether.repository.RemoteRepository;
 import org.eclipse.aether.resolution.DependencyRequest;
 import org.eclipse.aether.resolution.DependencyResult;
-import org.eclipse.aether.spi.connector.RepositoryConnectorFactory;
-import org.eclipse.aether.spi.connector.transport.TransporterFactory;
-import org.eclipse.aether.transport.file.FileTransporterFactory;
-import org.eclipse.aether.transport.http.HttpTransporterFactory;
+import org.eclipse.aether.supplier.RepositorySystemSupplier;
 import org.eclipse.aether.util.repository.SimpleArtifactDescriptorPolicy;
 import org.eclipse.aether.util.repository.SimpleResolutionErrorPolicy;
 import org.junit.jupiter.api.BeforeAll;
@@ -68,7 +63,7 @@ public class TestPublishedPoms {
           e);
       }
     }
-    repositorySystem = buildRepositorySystem();
+    repositorySystem = new RepositorySystemSupplier().get();
 
     repositorySystemSession = newSession(repositorySystem);
 
@@ -88,12 +83,11 @@ public class TestPublishedPoms {
     "nessie-compatibility-jersey",
     "nessie-compatibility-tests",
     "nessie-content-generator",
-    "nessie-jaxrs",
     "nessie-jaxrs-testextension",
     "nessie-jaxrs-tests",
     "nessie-model",
     "nessie-quarkus",
-    "nessie-quarkus-cli",
+    "nessie-server-admin-tool",
     "nessie-quarkus-common",
     "nessie-quarkus-tests",
     "nessie-rest-services",
@@ -106,10 +100,9 @@ public class TestPublishedPoms {
     "nessie-versioned-storage-common-serialize",
     "nessie-versioned-storage-common-tests",
     "nessie-versioned-storage-inmemory",
-    "nessie-versioned-storage-mongodb",
+    "nessie-versioned-storage-mongodb2",
     "nessie-versioned-storage-rocksdb",
     "nessie-versioned-storage-store",
-    "nessie-versioned-storage-telemetry",
     "nessie-versioned-storage-testextension",
   })
   void checkMainPom(String artifactId) throws Exception {
@@ -118,16 +111,10 @@ public class TestPublishedPoms {
 
   @ParameterizedTest
   @ValueSource(strings = {
-    "iceberg-views",
-    "nessie-spark-antlr-runtime",
-    "nessie-spark-extensions-grammar",
-    "nessie-spark-extensions-3.1_2.12",
-    "nessie-spark-extensions-3.2_2.12",
-    "nessie-spark-extensions-3.2_2.13",
-    "nessie-spark-extensions-3.3_2.12",
-    "nessie-spark-extensions-3.3_2.13",
     "nessie-spark-extensions-3.4_2.12",
-    "nessie-spark-extensions-3.4_2.13"
+    "nessie-spark-extensions-3.4_2.13",
+    "nessie-spark-extensions-3.5_2.12",
+    "nessie-spark-extensions-3.5_2.13"
   })
   void checkIntegrationsPom(String artifactId) throws Exception {
     checkPom("org.projectnessie.nessie-integrations", artifactId);
@@ -150,15 +137,6 @@ public class TestPublishedPoms {
       exceptions.forEach(e::addSuppressed);
       throw e;
     }
-  }
-
-  private static RepositorySystem buildRepositorySystem() {
-    DefaultServiceLocator locator = MavenRepositorySystemUtils.newServiceLocator();
-    locator.addService(RepositoryConnectorFactory.class, BasicRepositoryConnectorFactory.class);
-    locator.addService(TransporterFactory.class, FileTransporterFactory.class);
-    locator.addService(TransporterFactory.class, HttpTransporterFactory.class);
-
-    return locator.getService(RepositorySystem.class);
   }
 
   private static RepositorySystemSession newSession(RepositorySystem system) {
@@ -188,7 +166,13 @@ public class TestPublishedPoms {
       .forEach(
         (k, v) -> {
           String key = k.toString();
-          if (key.startsWith("java.")) {
+          if (key.startsWith("java.")
+              || key.startsWith("file.")
+              || key.startsWith("os.")
+              || key.endsWith(".separator")
+              || key.endsWith(".encoding")
+              || key.startsWith("sun.")
+              || key.startsWith("user.")) {
             session.setSystemProperty(key, v.toString());
           }
         });

@@ -15,9 +15,6 @@
  */
 package org.projectnessie.events.quarkus.collector;
 
-import static io.opentelemetry.semconv.trace.attributes.SemanticAttributes.ENDUSER_ID;
-import static io.opentelemetry.semconv.trace.attributes.SemanticAttributes.PEER_SERVICE;
-
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.Tracer;
@@ -30,6 +27,9 @@ public class QuarkusTracingResultCollector implements Consumer<Result> {
   public static final String NESSIE_RESULTS_SPAN_NAME = "nessie.results";
   public static final AttributeKey<String> NESSIE_RESULT_TYPE_ATTRIBUTE_KEY =
       AttributeKey.stringKey("nessie.results.type");
+  public static final AttributeKey<String> ENDUSER_ID = AttributeKey.stringKey("enduser.id");
+  public static final AttributeKey<String> PEER_SERVICE = AttributeKey.stringKey("peer.service");
+  public static final AttributeKey<String> SERVICE_NAME = AttributeKey.stringKey("service.name");
 
   private final Consumer<Result> delegate;
   private final String userName;
@@ -48,6 +48,7 @@ public class QuarkusTracingResultCollector implements Consumer<Result> {
             .spanBuilder(NESSIE_RESULTS_SPAN_NAME)
             .setAttribute(NESSIE_RESULT_TYPE_ATTRIBUTE_KEY, result.getResultType().name())
             .setAttribute(ENDUSER_ID, userName)
+            .setAttribute(SERVICE_NAME, "Nessie")
             .setAttribute(PEER_SERVICE, "Nessie")
             .startSpan();
     try (Scope ignored = span.makeCurrent()) {

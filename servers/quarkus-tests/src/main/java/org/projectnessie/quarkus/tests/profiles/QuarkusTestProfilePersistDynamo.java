@@ -15,9 +15,7 @@
  */
 package org.projectnessie.quarkus.tests.profiles;
 
-import static io.quarkus.amazon.common.runtime.AwsCredentialsProviderType.STATIC;
-import static org.projectnessie.quarkus.config.VersionStoreConfig.VersionStoreType.DYNAMODB;
-import static software.amazon.awssdk.regions.Region.US_WEST_2;
+import static org.projectnessie.quarkus.config.VersionStoreConfig.VersionStoreType.DYNAMODB2;
 
 import com.google.common.collect.ImmutableMap;
 import java.util.Collections;
@@ -30,11 +28,7 @@ public class QuarkusTestProfilePersistDynamo extends BaseConfigProfile {
   public Map<String, String> getConfigOverrides() {
     return ImmutableMap.<String, String>builder()
         .putAll(super.getConfigOverrides())
-        .put("nessie.version.store.type", DYNAMODB.name())
-        .put("quarkus.dynamodb.aws.region", US_WEST_2.id())
-        .put("quarkus.dynamodb.aws.credentials.type", STATIC.name())
-        .put("quarkus.dynamodb.aws.credentials.static-provider.access-key-id", "xxx")
-        .put("quarkus.dynamodb.aws.credentials.static-provider.secret-access-key", "xxx")
+        .put("nessie.version.store.type", DYNAMODB2.name())
         .build();
   }
 

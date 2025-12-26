@@ -23,13 +23,18 @@ import static java.nio.file.Files.isRegularFile;
 import static java.nio.file.Files.move;
 import static java.nio.file.Files.newOutputStream;
 
+import jakarta.annotation.Nonnull;
 import java.io.BufferedOutputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
-import javax.annotation.Nonnull;
 import org.immutables.value.Value;
 
 /** Nessie exporter that creates a ZIP file. */
@@ -64,32 +69,46 @@ public abstract class ZipArchiveExporter implements ExportFileSupplier {
   }
 
   @Override
+  public long fixMaxFileSize(long userProvidedMaxFileSize) {
+    return Math.max(64 * 1024, Math.min(10 * 1024 * 1024, userProvidedMaxFileSize));
+  }
+
+  @Override
   public void preValidate() {}
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
   public Path getTargetPath() {
     return outputFile();
   }
 
+  private final Set<DelayedOutputStream> activeOutputStreams = new HashSet<>();
+
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public OutputStream newFileOutput(@Nonnull @jakarta.annotation.Nonnull String fileName)
-      throws IOException {
+  public OutputStream newFileOutput(@Nonnull String fileName) throws IOException {
     checkArgument(
         fileName.indexOf('/') == -1 && fileName.indexOf('\\') == -1, "Directories not supported");
     checkArgument(!fileName.isEmpty(), "Invalid file name argument");
 
-    ZipOutputStream out = zipOutput();
-    out.putNextEntry(new ZipEntry(fileName));
-    return new NonClosingOutputStream(out);
+    var output = new DelayedOutputStream(fileName);
+    synchronized (activeOutputStreams) {
+      activeOutputStreams.add(output);
+    }
+    return output;
   }
 
   @Override
   public void close() throws Exception {
     try {
+      List<DelayedOutputStream> activeOutputs;
+      synchronized (activeOutputStreams) {
+        activeOutputs = new ArrayList<>(activeOutputStreams);
+      }
+      for (var active : activeOutputs) {
+        active.close();
+      }
+
       zipOutput().close();
     } finally {
       deleteIfExists(outputFile());
@@ -99,44 +118,50 @@ public abstract class ZipArchiveExporter implements ExportFileSupplier {
     }
   }
 
-  private static final class NonClosingOutputStream extends OutputStream {
-    private final ZipOutputStream out;
+  private void delayedFinished(DelayedOutputStream delayedOutputStream) {
+    synchronized (activeOutputStreams) {
+      activeOutputStreams.remove(delayedOutputStream);
+    }
+  }
+
+  private final class DelayedOutputStream extends OutputStream {
     private boolean open = true;
 
-    private NonClosingOutputStream(ZipOutputStream out) {
-      this.out = out;
+    private final String name;
+    private final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+
+    private DelayedOutputStream(String name) {
+      this.name = name;
     }
 
     @Override
-    public void write(byte[] b) throws IOException {
+    public void write(byte[] b, int off, int len) {
       checkState(open);
-      out.write(b);
+      buffer.write(b, off, len);
     }
 
     @Override
-    public void write(byte[] b, int off, int len) throws IOException {
+    public void write(int b) {
       checkState(open);
-      out.write(b, off, len);
-    }
-
-    @Override
-    public void write(int b) throws IOException {
-      checkState(open);
-      out.write(b);
+      buffer.write(b);
     }
 
     @Override
     public void flush() throws IOException {
       checkState(open);
-      out.flush();
+      buffer.flush();
     }
 
     @Override
     public void close() throws IOException {
       if (open) {
         try {
+          ZipOutputStream out = zipOutput();
+          out.putNextEntry(new ZipEntry(name));
+          buffer.writeTo(out);
           out.closeEntry();
         } finally {
+          delayedFinished(this);
           open = false;
         }
       }

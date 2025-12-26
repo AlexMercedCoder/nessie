@@ -21,6 +21,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.projectnessie.model.CommitMeta.fromMessage;
 import static org.projectnessie.model.FetchOption.ALL;
 import static org.projectnessie.model.FetchOption.MINIMAL;
+import static org.projectnessie.versioned.RequestMeta.API_READ;
 
 import com.google.common.collect.ImmutableList;
 import java.time.Instant;
@@ -107,8 +108,8 @@ public abstract class AbstractTestCommitLog extends BaseTestServiceImpl {
         commit(
                 branch,
                 fromMessage("some awkward message"),
-                Put.of(hello, IcebergView.of("path1", 1, 1, "Spark", "SELECT ALL THE THINGS")),
-                Put.of(ollah, IcebergView.of("path2", 1, 1, "Spark", "SELECT ALL THE THINGS")))
+                Put.of(hello, IcebergView.of("path1", 1, 1)),
+                Put.of(ollah, IcebergView.of("path2", 1, 1)))
             .getTargetBranch();
 
     soft.assertThat(
@@ -216,7 +217,7 @@ public abstract class AbstractTestCommitLog extends BaseTestServiceImpl {
     soft.assertThat(initialCommitTime).isNotNull();
     Instant lastCommitTime = log.get(0).getCommitMeta().getCommitTime();
     soft.assertThat(lastCommitTime).isNotNull();
-    Instant fiveMinLater = initialCommitTime.plus(5, ChronoUnit.MINUTES);
+    Instant fiveMinLater = requireNonNull(initialCommitTime).plus(5, ChronoUnit.MINUTES);
 
     log =
         commitLog(
@@ -392,7 +393,9 @@ public abstract class AbstractTestCommitLog extends BaseTestServiceImpl {
       Put op;
       try {
         Content existing =
-            contentApi().getContent(key, branch.getName(), currentHash, false).getContent();
+            contentApi()
+                .getContent(key, branch.getName(), currentHash, false, API_READ)
+                .getContent();
         op = Put.of(key, IcebergTable.of("some-file-" + i, 42, 42, 42, 42, existing.getId()));
       } catch (NessieNotFoundException notFound) {
         op = Put.of(key, IcebergTable.of("some-file-" + i, 42, 42, 42, 42));
@@ -419,6 +422,7 @@ public abstract class AbstractTestCommitLog extends BaseTestServiceImpl {
         .containsExactlyElementsOf(allMessages);
   }
 
+  @SuppressWarnings("deprecation")
   @Test
   public void commitLogExtended() throws Exception {
     String branch = "commitLogExtended";

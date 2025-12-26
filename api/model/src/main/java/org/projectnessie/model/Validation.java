@@ -32,7 +32,7 @@ public final class Validation {
   public static final String HASH_REGEX = "^" + HASH_RAW_REGEX + "$";
 
   public static final String RELATIVE_COMMIT_SPEC_RAW_REGEX =
-      "([~*^])([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{1,9}Z|([0-9]+))";
+      "([~*^])([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,9})?Z|([0-9]+))";
 
   /**
    * Regex with an optional hash and a sequence of relative lookups, which can be by-timestamp,
@@ -72,6 +72,9 @@ public final class Validation {
   public static final String REF_NAME_RAW_REGEX =
       "(?:[A-Za-z](?:(?:(?![.][.])[A-Za-z0-9./_-])*[A-Za-z0-9_-])?)|-";
   public static final String REF_NAME_REGEX = "^" + REF_NAME_RAW_REGEX + "$";
+
+  public static final String REF_TYPE_RAW_REGEX = "BRANCH|branch|TAG|tag";
+  public static final String REF_TYPE_REGEX = "^(" + REF_TYPE_RAW_REGEX + ")$";
   public static final String REF_NAME_OR_HASH_REGEX =
       "^(?:(" + HASH_RAW_REGEX + ")|(" + REF_NAME_RAW_REGEX + "))$";
   public static final String REF_NAME_PATH_REGEX =
@@ -95,6 +98,24 @@ public final class Validation {
   public static final Pattern REF_NAME_PATH_ELEMENT_PATTERN =
       Pattern.compile(REF_NAME_PATH_ELEMENT_REGEX);
 
+  /*
+   * Default Cut-Off Policy can be a number or Duration or ISO instant.
+   * Following rules are to validate the same.
+   * */
+  private static final String DURATION_REGEX =
+      "([-+]?)P(?:([-+]?[0-9]+)D)?(T(?:([-+]?[0-9]+)H)?(?:([-+]?[0-9]+)M)?(?:([-+]?[0-9]+)(?:[.,]([0-9]{0,9}))?S)?)?";
+
+  private static final String ISO_TIME_REGEX =
+      "^(?:[1-9]\\d{3}-(?:(?:0[1-9]|1[0-2])-(?:0[1-9]|1\\d|2[0-8])|(?:0[13-9]|1[0-2])-(?:29|30)|(?:0[13578]|1[02])-31)|(?:[1-9]\\d(?:0[48]|[2468][048]|[13579][26])|(?:[2468][048]|[13579][26])00)-02-29)T(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d{1,9})?(?:Z|[+-][01]\\d:[0-5]\\d)$";
+
+  private static final String POSITIVE_INTEGER_REGEX = "^[1-9]\\d{0,10}";
+  public static final String DEFAULT_CUT_OFF_POLICY_REGEX =
+      "NONE" + "|" + POSITIVE_INTEGER_REGEX + "|" + DURATION_REGEX + "|" + ISO_TIME_REGEX;
+  public static final String DEFAULT_CUT_OFF_POLICY_MESSAGE =
+      "Default cut-off-policy must be either the number of commits, a duration (as per java.time.Duration) or an ISO instant (like 2011-12-03T10:15:30Z) ";
+  public static final Pattern DEFAULT_CUT_OFF_POLICY_PATTERN =
+      Pattern.compile(DEFAULT_CUT_OFF_POLICY_REGEX, Pattern.CASE_INSENSITIVE);
+
   public static final String HASH_RULE = "consist of the hex representation of 4-32 bytes";
   private static final String REF_RULE =
       "start with a letter, followed by letters, digits, one of the ./_- characters, "
@@ -103,28 +124,30 @@ public final class Validation {
   public static final String HASH_MESSAGE = "Hash must " + HASH_RULE;
 
   public static final String RELATIVE_COMMIT_SPEC_RULE =
-      "numeric timestamp (milliseconds since epoch), "
-          + "optionally followed relative pointers: "
+      "be either "
           + "'~' + a number representing the n-th predecessor of a commit, "
-          + "'^' + a number representing the n-th parent within a commit or "
-          + "'*' + a number representing the created timestamp in milliseconds since epoch of a commit";
+          + "'^' + a number representing the n-th parent within a commit, or "
+          + "'*' + a number representing the created timestamp of a commit, in milliseconds since epoch or in ISO-8601 format";
   public static final String HASH_OR_RELATIVE_COMMIT_SPEC_RULE =
-      "consist of a valid commit hash ("
+      "consist of either a valid commit hash (which in turn must "
           + HASH_RULE
-          + "), optionally followed by a "
-          + RELATIVE_COMMIT_SPEC_RULE;
+          + "), or a valid relative part (which must "
+          + RELATIVE_COMMIT_SPEC_RULE
+          + "), or both.";
   public static final String HASH_OR_RELATIVE_COMMIT_SPEC_MESSAGE =
-      "Hash with optional timestamp with optional parent must " + HASH_OR_RELATIVE_COMMIT_SPEC_RULE;
+      "Hash with optional relative part must " + HASH_OR_RELATIVE_COMMIT_SPEC_RULE;
 
   public static final String REF_NAME_PATH_MESSAGE =
       "Reference name must "
           + REF_RULE
           + ", optionally followed "
-          + "by @ and a commit hash, which must "
-          + HASH_RULE
-          + ", optionally followed by a "
-          + RELATIVE_COMMIT_SPEC_RULE;
+          + "by @ and a hash with optional relative part. "
+          + HASH_OR_RELATIVE_COMMIT_SPEC_MESSAGE;
   public static final String REF_NAME_MESSAGE = "Reference name must " + REF_RULE;
+
+  public static final String REF_TYPE_RULE = "be either 'branch' or 'tag'";
+  public static final String REF_TYPE_MESSAGE = "Reference type name must " + REF_TYPE_RULE;
+
   public static final String REF_NAME_OR_HASH_MESSAGE =
       "Reference must be either a reference name or hash, " + REF_RULE + " or " + HASH_RULE;
   public static final String FORBIDDEN_REF_NAME_MESSAGE =
@@ -155,6 +178,21 @@ public final class Validation {
   public static boolean isValidHash(String hash) {
     Objects.requireNonNull(hash, "hash must not be null");
     Matcher matcher = HASH_PATTERN.matcher(hash);
+    return matcher.matches();
+  }
+
+  /**
+   * Just checks whether a string is a valid hash and/or a relative spec, but doesn't throw an
+   * exception.
+   *
+   * @see #validateHashOrRelativeSpec(String)
+   */
+  public static boolean isValidHashOrRelativeSpec(String hash) {
+    Objects.requireNonNull(hash, "hash must not be null");
+    if (hash.isEmpty()) {
+      return false;
+    }
+    Matcher matcher = HASH_OR_RELATIVE_COMMIT_SPEC_PATTERN.matcher(hash);
     return matcher.matches();
   }
 
@@ -194,6 +232,42 @@ public final class Validation {
       return referenceName;
     }
     throw new IllegalArgumentException(HASH_MESSAGE + " - but was: " + referenceName);
+  }
+
+  /**
+   * Validates whether a string is a valid hash with optional relative specs.
+   *
+   * <p>The rules are: <em>{@value #HASH_OR_RELATIVE_COMMIT_SPEC_RULE}</em>
+   *
+   * @param referenceName the reference name string to test.
+   */
+  public static String validateHashOrRelativeSpec(String referenceName)
+      throws IllegalArgumentException {
+    if (isValidHashOrRelativeSpec(referenceName)) {
+      return referenceName;
+    }
+    throw new IllegalArgumentException(
+        HASH_OR_RELATIVE_COMMIT_SPEC_MESSAGE + " - but was: " + referenceName);
+  }
+
+  /** Just checks whether a string is a valid cut-off policy or not. */
+  private static boolean isValidDefaultCutoffPolicy(String policy) {
+    Objects.requireNonNull(policy, "policy must not be null");
+    Matcher matcher = DEFAULT_CUT_OFF_POLICY_PATTERN.matcher(policy);
+    return matcher.matches();
+  }
+
+  /**
+   * Validate default cutoff policy. Policies can be one of: - number of commits as an integer
+   * value, - a duration (see java.time.Duration), - an ISO instant, - 'NONE,' means everything's
+   * considered as live
+   */
+  public static void validateDefaultCutOffPolicy(String value) {
+    if (isValidDefaultCutoffPolicy(value)) {
+      return;
+    }
+    throw new IllegalArgumentException(
+        "Failed to parse default-cutoff-value '" + value + "'," + DEFAULT_CUT_OFF_POLICY_MESSAGE);
   }
 
   /**

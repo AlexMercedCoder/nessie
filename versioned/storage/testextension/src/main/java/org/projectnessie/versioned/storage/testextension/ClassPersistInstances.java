@@ -19,12 +19,14 @@ import static org.projectnessie.versioned.storage.common.logic.Logics.repository
 import static org.projectnessie.versioned.storage.testextension.PersistExtension.KEY_REUSABLE_BACKEND;
 import static org.projectnessie.versioned.storage.testextension.PersistExtension.NAMESPACE;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.extension.ExtensionContext;
 import org.junit.jupiter.api.extension.ExtensionContext.Store;
 import org.projectnessie.versioned.storage.cache.CacheBackend;
+import org.projectnessie.versioned.storage.cache.CacheConfig;
 import org.projectnessie.versioned.storage.cache.PersistCaches;
 import org.projectnessie.versioned.storage.common.config.StoreConfig;
 import org.projectnessie.versioned.storage.common.logic.RepositoryLogic;
@@ -52,7 +54,16 @@ final class ClassPersistInstances {
     NessiePersistCache nessiePersistCache =
         PersistExtension.annotationInstance(context, NessiePersistCache.class);
     cacheBackend =
-        nessiePersistCache != null ? PersistCaches.newBackend(nessiePersistCache.capacity()) : null;
+        nessiePersistCache != null && nessiePersistCache.capacityMb() >= 0
+            ? PersistCaches.newBackend(
+                CacheConfig.builder()
+                    .capacityMb(nessiePersistCache.capacityMb())
+                    .referenceTtl(Duration.ofMinutes(1))
+                    .referenceNegativeTtl(Duration.ofMinutes(1))
+                    .enableSoftReferences(nessiePersistCache.enableSoftReferences())
+                    .cacheCapacityOvershoot(0.1d)
+                    .build())
+            : null;
 
     backendTestFactory = reusableTestBackend.backendTestFactory(context);
   }

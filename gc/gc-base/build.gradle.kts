@@ -14,33 +14,29 @@
  * limitations under the License.
  */
 
-plugins {
-  id("nessie-conventions-iceberg8")
-  id("nessie-jacoco")
-}
+plugins { id("nessie-conventions-java11") }
 
-extra["maven.name"] = "Nessie - GC - Base Implementation"
+publishingHelper { mavenName = "Nessie - GC - Base Implementation" }
 
 description =
   "Mark and sweep GC base functionality to identify live contents, map to live files, list existing files and to purge orphan files."
 
 dependencies {
   compileOnly(libs.errorprone.annotations)
-  compileOnly(libs.immutables.value.annotations)
-  annotationProcessor(libs.immutables.value.processor)
+  compileOnly(project(":nessie-immutables-std"))
+  annotationProcessor(project(":nessie-immutables-std", configuration = "processor"))
 
+  api(project(":nessie-storage-uri"))
   implementation(project(":nessie-client"))
   implementation(libs.slf4j.api)
   implementation(libs.guava)
   implementation(libs.agrona)
+  implementation(libs.httpclient5)
 
   compileOnly(libs.microprofile.openapi)
 
-  // javax/jakarta
   compileOnly(libs.jakarta.validation.api)
-  compileOnly(libs.javax.validation.api)
   compileOnly(libs.jakarta.annotation.api)
-  compileOnly(libs.findbugs.jsr305)
 
   compileOnly(platform(libs.jackson.bom))
   compileOnly("com.fasterxml.jackson.core:jackson-annotations")
@@ -48,22 +44,25 @@ dependencies {
   testImplementation(project(":nessie-gc-base-tests"))
   testImplementation(project(":nessie-jaxrs-testextension"))
 
-  testImplementation(project(":nessie-versioned-storage-inmemory"))
+  testImplementation(project(":nessie-versioned-storage-inmemory-tests"))
 
   testRuntimeOnly(libs.logback.classic)
 
   testCompileOnly(libs.microprofile.openapi)
 
-  // javax/jakarta
   testCompileOnly(libs.jakarta.validation.api)
-  testCompileOnly(libs.javax.validation.api)
 
-  testCompileOnly(libs.immutables.value.annotations)
-  testAnnotationProcessor(libs.immutables.value.processor)
+  testCompileOnly(project(":nessie-immutables-std"))
+  testAnnotationProcessor(project(":nessie-immutables-std", configuration = "processor"))
 
   testCompileOnly(platform(libs.jackson.bom))
   testCompileOnly("com.fasterxml.jackson.core:jackson-annotations")
 
   testImplementation(platform(libs.junit.bom))
   testImplementation(libs.bundles.junit.testing)
+}
+
+tasks.withType(Test::class.java).configureEach {
+  // Java 23 & Hadoop
+  systemProperty("java.security.manager", "allow")
 }

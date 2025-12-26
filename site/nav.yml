@@ -1,0 +1,128 @@
+
+nav:
+  - Guides:
+    - guides/index.md
+    - guides/try-nessie.md
+    - guides/about.md
+    - guides/introduction.md
+    - Setting up Nessie:
+      - guides/iceberg-rest.md
+      - guides/docker.md
+      - guides/kubernetes.md
+      - guides/minikube.md
+      - guides/reverse-proxy.md
+      - guides/tls.md
+      - guides/keycloak.md
+      - guides/grafana.md
+      - guides/ui.md
+    - Managing Nessie:
+      - guides/management.md
+      - guides/migration.md
+    - Concepts:
+      - guides/tables-views.md
+      - guides/transactions.md
+      - guides/nessie_vs_git.md
+      - guides/best-practices.md
+    - Iceberg:
+      - iceberg/iceberg.md
+      - iceberg/spark.md
+      - iceberg/flink.md
+      - iceberg/hive.md
+      - iceberg/trino.md
+      - iceberg/views.md
+    - Spark:
+      - guides/spark-s3.md
+      - guides/sql.md
+    - Development:
+      - develop/index.md
+      - develop/spec.md
+      - develop/kernel.md
+      - develop/rest.md
+      - develop/python.md
+      - develop/java.md
+      - develop/content-types.md
+      - develop/repository-configs.md
+
+  - Docs:
+    - Latest Release: '!include build/versions/latest/mkdocs.yml'
+    - Release Notes:
+      - Recent Releases: releases.md
+      - Archive v0.50.0 to v0.69.2: releases-0.69.md
+      - Archive v0.49.0 and older: releases-0.49.md
+    - Upgrade Notes: server-upgrade.md
+    - Unreleased (nightly): '!include build/versions/nightly/mkdocs.yml'
+# Do NOT change, move or remove the following line!!
+# RELEASE_PLACEHOLDER_MARKER
+    - Nessie 0.106.0: '!include build/versions/0.106.0/mkdocs.yml'
+    - Nessie 0.105.7: '!include build/versions/0.105.7/mkdocs.yml'
+    - Nessie 0.105.6: '!include build/versions/0.105.6/mkdocs.yml'
+    - Nessie 0.105.5: '!include build/versions/0.105.5/mkdocs.yml'
+    - Nessie 0.105.4: '!include build/versions/0.105.4/mkdocs.yml'
+    - Nessie 0.105.3: '!include build/versions/0.105.3/mkdocs.yml'
+    - Nessie 0.105.2: '!include build/versions/0.105.2/mkdocs.yml'
+    - Nessie 0.105.1: '!include build/versions/0.105.1/mkdocs.yml'
+    - Nessie 0.105.0: '!include build/versions/0.105.0/mkdocs.yml'
+    - Nessie 0.104.10: '!include build/versions/0.104.10/mkdocs.yml'
+    - Nessie 0.104.9: '!include build/versions/0.104.9/mkdocs.yml'
+    - Nessie 0.104.7: '!include build/versions/0.104.7/mkdocs.yml'
+    - Nessie 0.104.5: '!include build/versions/0.104.5/mkdocs.yml'
+    - Nessie 0.104.4: '!include build/versions/0.104.4/mkdocs.yml'
+    - Nessie 0.104.3: '!include build/versions/0.104.3/mkdocs.yml'
+    - Nessie 0.104.2: '!include build/versions/0.104.2/mkdocs.yml'
+    - Nessie 0.104.1: '!include build/versions/0.104.1/mkdocs.yml'
+    - Nessie 0.104.0: '!include build/versions/0.104.0/mkdocs.yml'
+    - Nessie 0.103.6: '!include build/versions/0.103.6/mkdocs.yml'
+    - Nessie 0.103.5: '!include build/versions/0.103.5/mkdocs.yml'
+    - Nessie 0.103.4: '!include build/versions/0.103.4/mkdocs.yml'
+    - Nessie 0.103.3: '!include build/versions/0.103.3/mkdocs.yml'
+    - Nessie 0.103.2: '!include build/versions/0.103.2/mkdocs.yml'
+    - Nessie 0.103.1: '!include build/versions/0.103.1/mkdocs.yml'
+    - Nessie 0.103.0: '!include build/versions/0.103.0/mkdocs.yml'
+    - Nessie 0.102.5: '!include build/versions/0.102.5/mkdocs.yml'
+    - Nessie 0.102.4: '!include build/versions/0.102.4/mkdocs.yml'
+    - Nessie 0.102.3: '!include build/versions/0.102.3/mkdocs.yml'
+    - Nessie 0.102.2: '!include build/versions/0.102.2/mkdocs.yml'
+    - Nessie 0.102.1: '!include build/versions/0.102.1/mkdocs.yml'
+    - Nessie 0.102.0: '!include build/versions/0.102.0/mkdocs.yml'
+    - Nessie 0.101.3: '!include build/versions/0.101.3/mkdocs.yml'
+    - Nessie 0.101.2: '!include build/versions/0.101.2/mkdocs.yml'
+    - Nessie 0.101.1: '!include build/versions/0.101.1/mkdocs.yml'
+    - Nessie 0.101.0: '!include build/versions/0.101.0/mkdocs.yml'
+    - Nessie 0.100.3: '!include build/versions/0.100.3/mkdocs.yml'
+    - Nessie 0.100.2: '!include build/versions/0.100.2/mkdocs.yml'
+    - Nessie 0.100.1: '!include build/versions/0.100.1/mkdocs.yml'
+    - Nessie 0.100.0: '!include build/versions/0.100.0/mkdocs.yml'
+    - Nessie 0.99.0: '!include build/versions/0.99.0/mkdocs.yml'
+    - Nessie 0.98.0: '!include build/versions/0.98.0/mkdocs.yml'
+    - Nessie 0.97.1: '!include build/versions/0.97.1/mkdocs.yml'
+    - Nessie 0.97.0: '!include build/versions/0.97.0/mkdocs.yml'
+    - Nessie 0.96.1: '!include build/versions/0.96.1/mkdocs.yml'
+    - Nessie 0.96.0: '!include build/versions/0.96.0/mkdocs.yml'
+    - Nessie 0.95.0: '!include build/versions/0.95.0/mkdocs.yml'
+    - Nessie 0.94.4: '!include build/versions/0.94.4/mkdocs.yml'
+    - Nessie 0.94.3: '!include build/versions/0.94.3/mkdocs.yml'
+    - Nessie 0.94.2: '!include build/versions/0.94.2/mkdocs.yml'
+    - Nessie 0.94.1: '!include build/versions/0.94.1/mkdocs.yml'
+    - Nessie 0.94.0: '!include build/versions/0.94.0/mkdocs.yml'
+    - Nessie 0.93.1: '!include build/versions/0.93.1/mkdocs.yml'
+    - Nessie 0.92.1: '!include build/versions/0.92.1/mkdocs.yml'
+    - Nessie 0.92.0: '!include build/versions/0.92.0/mkdocs.yml'
+    - Nessie 0.91.3: '!include build/versions/0.91.3/mkdocs.yml'
+    - Nessie 0.91.2: '!include build/versions/0.91.2/mkdocs.yml'
+    - Nessie 0.91.1: '!include build/versions/0.91.1/mkdocs.yml'
+    - Nessie 0.90.4: '!include build/versions/0.90.4/mkdocs.yml'
+    - Nessie 0.90.2: '!include build/versions/0.90.2/mkdocs.yml'
+    - Nessie 0.83.2: '!include build/versions/0.83.2/mkdocs.yml'
+    - Nessie 0.82.0: '!include build/versions/0.82.0/mkdocs.yml'
+    - Nessie 0.81.1: '!include build/versions/0.81.1/mkdocs.yml'
+    - Nessie 0.81.0: '!include build/versions/0.81.0/mkdocs.yml'
+    - Nessie 0.80.0: '!include build/versions/0.80.0/mkdocs.yml'
+    - Nessie 0.79.0: '!include build/versions/0.79.0/mkdocs.yml'
+  - Downloads: downloads/index.md
+  - Community: community.md
+  - Blog: blog/index.md
+
+not_in_nav: |
+  index.md
+  develop
+  **/generated-docs/

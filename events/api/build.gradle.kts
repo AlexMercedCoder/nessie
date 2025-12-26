@@ -14,21 +14,29 @@
  * limitations under the License.
  */
 
-plugins {
-  id("nessie-conventions-server")
-  id("nessie-jacoco")
-}
+plugins { id("nessie-conventions-java11") }
 
-extra["maven.name"] = "Nessie - Events - API"
+publishingHelper { mavenName = "Nessie - Events - API" }
 
 dependencies {
+  api(project(":nessie-model"))
 
   // Immutables
-  implementation(libs.immutables.builder)
-  implementation(libs.immutables.value.annotations)
-  annotationProcessor(libs.immutables.value.processor)
+  implementation(project(":nessie-immutables-std"))
+  annotationProcessor(project(":nessie-immutables-std", configuration = "processor"))
+
+  // Jackson
+  implementation(platform(libs.jackson.bom))
+  implementation("com.fasterxml.jackson.core:jackson-databind")
+  implementation("com.fasterxml.jackson.core:jackson-annotations")
+
+  compileOnly(libs.microprofile.openapi)
 
   // Testing
   testImplementation(platform(libs.junit.bom))
   testImplementation(libs.bundles.junit.testing)
+
+  testImplementation("com.fasterxml.jackson.datatype:jackson-datatype-jdk8")
+
+  testCompileOnly(libs.microprofile.openapi)
 }

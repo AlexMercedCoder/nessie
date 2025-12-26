@@ -15,15 +15,15 @@
  */
 package org.projectnessie.versioned.storage.jdbc;
 
-import javax.annotation.Nullable;
+import java.util.Optional;
+import java.util.OptionalInt;
 
 public interface JdbcBackendBaseConfig {
 
-  @Nullable
-  @jakarta.annotation.Nullable
-  String catalog();
+  String DEFAULT_FETCH_SIZE_STRING = "100";
+  int DEFAULT_FETCH_SIZE = Integer.parseInt(DEFAULT_FETCH_SIZE_STRING);
 
-  @Nullable
-  @jakarta.annotation.Nullable
-  String schema();
+  Optional<String> datasourceName();
+
+  OptionalInt fetchSize();
 }

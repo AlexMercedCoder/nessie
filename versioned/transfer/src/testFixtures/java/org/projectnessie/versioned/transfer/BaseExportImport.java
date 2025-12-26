@@ -43,6 +43,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.projectnessie.model.CommitMeta;
 import org.projectnessie.model.ContentKey;
 import org.projectnessie.model.IcebergTable;
+import org.projectnessie.model.Operation.Put;
 import org.projectnessie.nessie.relocated.protobuf.ByteString;
 import org.projectnessie.versioned.BranchName;
 import org.projectnessie.versioned.Commit;
@@ -50,13 +51,14 @@ import org.projectnessie.versioned.ContentResult;
 import org.projectnessie.versioned.GetNamedRefsParams;
 import org.projectnessie.versioned.Hash;
 import org.projectnessie.versioned.KeyEntry;
-import org.projectnessie.versioned.Put;
 import org.projectnessie.versioned.ReferenceInfo;
 import org.projectnessie.versioned.ReferenceNotFoundException;
 import org.projectnessie.versioned.TagName;
 import org.projectnessie.versioned.VersionStore;
 import org.projectnessie.versioned.VersionStore.MergeOp;
 import org.projectnessie.versioned.paging.PaginationIterator;
+import org.projectnessie.versioned.storage.common.objtypes.UniqueIdObj;
+import org.projectnessie.versioned.storage.common.persist.Persist;
 import org.projectnessie.versioned.transfer.serialize.TransferTypes.ExportMeta;
 import org.projectnessie.versioned.transfer.serialize.TransferTypes.ExportVersion;
 import org.projectnessie.versioned.transfer.serialize.TransferTypes.HeadsAndForks;
@@ -67,21 +69,29 @@ public abstract class BaseExportImport {
 
   @TempDir Path dir;
 
+  abstract Persist sourcePersist();
+
+  abstract Persist targetPersist();
+
   abstract VersionStore sourceVersionStore();
 
   abstract VersionStore targetVersionStore();
 
   abstract void prepareTargetRepo();
 
-  abstract ImportResult importRepo() throws IOException;
+  abstract ImportResult importRepo(boolean zip) throws IOException;
 
-  abstract ExportMeta exportRepo(boolean fullScan) throws IOException;
+  abstract ExportMeta exportRepo(boolean zip, boolean fullScan) throws Exception;
 
   @MustBeClosed
   abstract Stream<Hash> scanAllTargetCommits();
 
-  interface VersionStoreSetup {
-    void setup(VersionStore vs, HeadsAndForks.Builder headsANdForks, Consumer<ByteString> deleted)
+  public interface VersionStoreSetup {
+    void setup(
+        VersionStore vs,
+        Persist persist,
+        HeadsAndForks.Builder headsANdForks,
+        Consumer<ByteString> deleted)
         throws Exception;
   }
 
@@ -89,23 +99,40 @@ public abstract class BaseExportImport {
     BranchName mainBranch = BranchName.of("main");
 
     return Stream.of(
+        // Scenario: pretty empty
+        arguments(
+            0, // commitsTotal
+            0, // commitsLive
+            1, // namedRefs
+            0, // generic objects
+            0, // generic objects
+            (VersionStoreSetup) (vs, persist, headsAndForks, deleted) -> {}),
         // Scenario: branch + tag + default branch
         arguments(
-            0,
-            0,
-            3,
+            0, // commitsTotal
+            0, // commitsLive
+            3, // namedRefs
+            0, // generic objects
+            0, // generic objects
             (VersionStoreSetup)
-                (vs, headsAndForks, deleted) -> {
+                (vs, persist, headsAndForks, deleted) -> {
                   vs.create(BranchName.of("branch"), Optional.of(vs.noAncestorHash()));
                   vs.create(TagName.of("tag"), Optional.of(vs.noAncestorHash()));
+
+                  persist.storeObj(
+                      UniqueIdObj.uniqueId("space", ByteString.copyFromUtf8("unique")));
+                  persist.storeObj(
+                      UniqueIdObj.uniqueId("other_space", ByteString.copyFromUtf8("also unique")));
                 }),
         // 3 "independent" branches
         arguments(
-            30,
-            30,
-            3,
+            30, // commitsTotal
+            30, // commitsLive
+            3, // namedRefs
+            30, // generic objects (unique-id objects)
+            30, // generic objects
             (VersionStoreSetup)
-                (vs, headsAndForks, deleted) -> {
+                (vs, persist, headsAndForks, deleted) -> {
                   Hash main = vs.getNamedRef("main", GetNamedRefsParams.DEFAULT).getHash();
                   main = commit10(vs, 0, mainBranch, main);
 
@@ -123,11 +150,13 @@ public abstract class BaseExportImport {
                 }),
         // 2 deleted branches (same as above)
         arguments(
-            30,
-            10,
-            1,
+            30, // commitsTotal
+            10, // commitsLive
+            1, // namedRefs
+            30, // generic objects (unique-id objects)
+            10, // generic objects
             (VersionStoreSetup)
-                (vs, headsAndForks, deleted) -> {
+                (vs, persist, headsAndForks, deleted) -> {
                   Hash main = vs.getNamedRef("main", GetNamedRefsParams.DEFAULT).getHash();
                   main = commit10(vs, 0, mainBranch, main);
 
@@ -139,8 +168,8 @@ public abstract class BaseExportImport {
                   Hash b = vs.create(branch, Optional.of(vs.noAncestorHash())).getHash();
                   b = commit10(vs, 0, branch, b);
 
-                  vs.delete(BranchName.of("a"), Optional.of(a));
-                  vs.delete(BranchName.of("b"), Optional.of(b));
+                  vs.delete(BranchName.of("a"), a);
+                  vs.delete(BranchName.of("b"), b);
 
                   headsAndForks.addHeads(a.asBytes());
                   deleted.accept(a.asBytes());
@@ -150,11 +179,13 @@ public abstract class BaseExportImport {
                 }),
         // 3 "independent" branches
         arguments(
-            50,
-            50,
-            3,
+            50, // commitsTotal
+            50, // commitsLive
+            3, // namedRefs
+            50, // generic objects (unique-id objects)
+            50, // generic objects
             (VersionStoreSetup)
-                (vs, headsAndForks, deleted) -> {
+                (vs, persist, headsAndForks, deleted) -> {
                   Hash main = vs.getNamedRef("main", GetNamedRefsParams.DEFAULT).getHash();
                   main = commit10(vs, 0, mainBranch, main);
 
@@ -176,11 +207,13 @@ public abstract class BaseExportImport {
                 }),
         // merge
         arguments(
-            41,
-            41,
-            2,
+            41, // commitsTotal
+            41, // commitsLive
+            2, // namedRefs
+            40, // generic objects (unique-id objects)
+            40, // generic objects (commit log walking)
             (VersionStoreSetup)
-                (vs, headsAndForks, deleted) -> {
+                (vs, persist, headsAndForks, deleted) -> {
                   Hash main = vs.getNamedRef("main", GetNamedRefsParams.DEFAULT).getHash();
                   main = commit10(vs, 0, mainBranch, main);
 
@@ -206,38 +239,75 @@ public abstract class BaseExportImport {
                 }));
   }
 
+  @SuppressWarnings("unused")
   @ParameterizedTest
   @MethodSource("scenarios")
   public void scenariosFullScan(
-      long commitsTotal, long commitsLive, long namedRefs, VersionStoreSetup setup)
+      long commitsTotal,
+      long commitsLive,
+      long namedRefs,
+      long generics,
+      long genericsWalking,
+      VersionStoreSetup setup)
       throws Exception {
-    scenario(commitsTotal, namedRefs, setup, true);
+    scenario(commitsTotal, namedRefs, generics, setup, false, true);
   }
 
+  @SuppressWarnings("unused")
+  @ParameterizedTest
+  @MethodSource("scenarios")
+  public void scenariosFullScanZip(
+      long commitsTotal,
+      long commitsLive,
+      long namedRefs,
+      long generics,
+      long genericsWalking,
+      VersionStoreSetup setup)
+      throws Exception {
+    scenario(commitsTotal, namedRefs, generics, setup, true, true);
+  }
+
+  @SuppressWarnings("unused")
   @ParameterizedTest
   @MethodSource("scenarios")
   public void scenariosCommitLogWalking(
-      long commitsTotal, long commitsLive, long namedRefs, VersionStoreSetup setup)
+      long commitsTotal,
+      long commitsLive,
+      long namedRefs,
+      long generics,
+      long genericsWalking,
+      VersionStoreSetup setup)
       throws Exception {
-    scenario(commitsLive, namedRefs, setup, false);
+    scenario(commitsLive, namedRefs, genericsWalking, setup, false, false);
   }
 
-  private void scenario(long commits, long namedRefs, VersionStoreSetup setup, boolean fullScan)
+  private void scenario(
+      long commits,
+      long namedRefs,
+      long generics,
+      VersionStoreSetup setup,
+      boolean zip,
+      boolean fullScan)
       throws Exception {
     HeadsAndForks.Builder headsAndForksBuilder = HeadsAndForks.newBuilder();
     Set<ByteString> deletedHeads = new HashSet<>();
-    setup.setup(sourceVersionStore(), headsAndForksBuilder, deletedHeads::add);
+    setup.setup(sourceVersionStore(), sourcePersist(), headsAndForksBuilder, deletedHeads::add);
     HeadsAndForks headsAndForks = headsAndForksBuilder.build();
 
-    ExportMeta exportMeta = exportRepo(fullScan);
+    ExportMeta exportMeta = exportRepo(zip, fullScan);
     soft.assertThat(exportMeta)
         .extracting(
-            ExportMeta::getCommitCount, ExportMeta::getNamedReferencesCount, ExportMeta::getVersion)
-        .containsExactly(commits, namedRefs, exportVersion());
+            ExportMeta::getCommitCount,
+            ExportMeta::getNamedReferencesCount,
+            ExportMeta::getGenericObjCount,
+            ExportMeta::getVersion)
+        .containsExactly(commits, namedRefs, generics, exportVersion());
 
     prepareTargetRepo();
 
-    ImportResult importResult = importRepo();
+    ImportResult importResult = importRepo(zip);
+
+    checkRepositoryDescription();
 
     List<ReferenceInfo<CommitMeta>> sourceNamedRefs = namedRefs(sourceVersionStore());
     List<ReferenceInfo<CommitMeta>> targetNamedRefs = namedRefs(targetVersionStore());
@@ -272,8 +342,10 @@ public abstract class BaseExportImport {
                     .map(e -> e.getKey().contentKey())
                     .collect(Collectors.toSet());
             try {
-              Map<ContentKey, ContentResult> targetValues = targetVersionStore().getValues(c, keys);
-              Map<ContentKey, ContentResult> sourceValues = sourceVersionStore().getValues(c, keys);
+              Map<ContentKey, ContentResult> targetValues =
+                  targetVersionStore().getValues(c, keys, false);
+              Map<ContentKey, ContentResult> sourceValues =
+                  sourceVersionStore().getValues(c, keys, false);
               soft.assertThat(targetValues).containsExactlyInAnyOrderEntriesOf(sourceValues);
             } catch (ReferenceNotFoundException e) {
               throw new RuntimeException(e);
@@ -285,8 +357,9 @@ public abstract class BaseExportImport {
         .extracting(
             ImportResult::importedCommitCount,
             ImportResult::importedReferenceCount,
+            ImportResult::importedGenericCount,
             ImportResult::exportMeta)
-        .containsExactly(commits, namedRefs, exportMeta);
+        .containsExactly(commits, namedRefs, generics, exportMeta);
     List<Hash> importHeads = asHashes(importResult.headsAndForks().getHeadsList());
     List<Hash> expectHeads = asHashes(headsAndForks.getHeadsList());
     if (!fullScan) {
@@ -297,6 +370,8 @@ public abstract class BaseExportImport {
     List<Hash> expectForkPoints = asHashes(headsAndForks.getForkPointsList());
     soft.assertThat(importForkPoints).containsExactlyInAnyOrderElementsOf(expectForkPoints);
   }
+
+  protected abstract void checkRepositoryDescription();
 
   static List<Hash> asHashes(List<ByteString> ids) {
     return ids.stream().map(Hash::of).collect(Collectors.toList());

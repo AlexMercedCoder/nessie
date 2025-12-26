@@ -14,13 +14,9 @@
  * limitations under the License.
  */
 
-plugins {
-  id("nessie-conventions-server8")
-  id("nessie-jacoco")
-  alias(libs.plugins.annotations.stripper)
-}
+plugins { id("nessie-conventions-java11") }
 
-extra["maven.name"] = "Nessie - Server - Store"
+publishingHelper { mavenName = "Nessie - Server - Store" }
 
 dependencies {
   implementation(project(":nessie-model"))
@@ -34,9 +30,7 @@ dependencies {
 
   compileOnly(libs.microprofile.openapi)
 
-  // javax/jakarta
   compileOnly(libs.jakarta.validation.api)
-  compileOnly(libs.javax.validation.api)
 
   testImplementation(libs.guava)
   testCompileOnly(libs.microprofile.openapi)
@@ -46,11 +40,4 @@ dependencies {
 
   testImplementation(platform(libs.junit.bom))
   testImplementation(libs.bundles.junit.testing)
-}
-
-annotationStripper {
-  registerDefault().configure {
-    annotationsToDrop("^jakarta[.].+".toRegex())
-    unmodifiedClassesForJavaVersion.set(11)
-  }
 }

@@ -17,23 +17,23 @@ package org.projectnessie.server.error;
 
 import static org.mockito.ArgumentMatchers.any;
 
-import javax.enterprise.context.RequestScoped;
-import javax.validation.ConstraintDeclarationException;
-import javax.validation.ConstraintDefinitionException;
-import javax.validation.GroupDefinitionException;
-import javax.validation.Valid;
-import javax.validation.constraints.NotBlank;
-import javax.validation.constraints.NotEmpty;
-import javax.validation.constraints.NotNull;
-import javax.ws.rs.Consumes;
-import javax.ws.rs.GET;
-import javax.ws.rs.POST;
-import javax.ws.rs.PUT;
-import javax.ws.rs.Path;
-import javax.ws.rs.PathParam;
-import javax.ws.rs.Produces;
-import javax.ws.rs.QueryParam;
-import javax.ws.rs.core.MediaType;
+import jakarta.enterprise.context.RequestScoped;
+import jakarta.validation.ConstraintDeclarationException;
+import jakarta.validation.ConstraintDefinitionException;
+import jakarta.validation.GroupDefinitionException;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
+import jakarta.ws.rs.Consumes;
+import jakarta.ws.rs.GET;
+import jakarta.ws.rs.POST;
+import jakarta.ws.rs.PUT;
+import jakarta.ws.rs.Path;
+import jakarta.ws.rs.PathParam;
+import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.QueryParam;
+import jakarta.ws.rs.core.MediaType;
 import org.mockito.Mockito;
 import org.projectnessie.error.NessieNotFoundException;
 import org.projectnessie.error.NessieReferenceNotFoundException;
@@ -132,17 +132,12 @@ public class ErrorTestService {
   @Consumes(MediaType.APPLICATION_JSON)
   public String unhandledExceptionInTvsStore(@PathParam("exception") String exception)
       throws ReferenceNotFoundException {
-    Exception ex;
-    switch (exception) {
-      case "runtime":
-        ex = new RuntimeException("Store.getValues-throwing");
-        break;
-      case "throttle":
-        ex = new BackendLimitExceededException("Store.getValues-throttled");
-        break;
-      default:
-        throw new IllegalArgumentException("test code error");
-    }
+    Exception ex =
+        switch (exception) {
+          case "runtime" -> new RuntimeException("Store.getValues-throwing");
+          case "throttle" -> new BackendLimitExceededException("Store.getValues-throttled");
+          default -> throw new IllegalArgumentException("test code error");
+        };
 
     Persist persist = Mockito.mock(Persist.class);
     Mockito.when(persist.fetchReference(any())).thenThrow(ex);

@@ -45,11 +45,11 @@ import org.openjdk.jmh.infra.Blackhole;
 import org.projectnessie.model.ContentKey;
 import org.projectnessie.model.IcebergTable;
 import org.projectnessie.model.Namespace;
+import org.projectnessie.model.Operation;
+import org.projectnessie.model.Operation.Put;
 import org.projectnessie.versioned.BranchName;
 import org.projectnessie.versioned.ContentResult;
 import org.projectnessie.versioned.KeyEntry;
-import org.projectnessie.versioned.Operation;
-import org.projectnessie.versioned.Put;
 import org.projectnessie.versioned.ReferenceCreatedResult;
 import org.projectnessie.versioned.paging.PaginationIterator;
 
@@ -127,7 +127,7 @@ public class ContentOpsBench {
   @Benchmark
   public ContentResult getValue(BenchmarkParam param) throws Exception {
     ContentKey key = param.randomKey();
-    return param.versionStore.getValue(param.ref.getNamedRef(), key);
+    return param.versionStore.getValue(param.ref.getNamedRef(), key, false);
   }
 
   @Benchmark
@@ -136,6 +136,6 @@ public class ContentOpsBench {
     while (k.size() < 10) {
       k.add(param.randomKey());
     }
-    return param.versionStore.getValues(param.ref.getNamedRef(), k);
+    return param.versionStore.getValues(param.ref.getNamedRef(), k, false);
   }
 }

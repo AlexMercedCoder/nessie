@@ -23,15 +23,17 @@ import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.TABLE
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
+import jakarta.annotation.Nonnull;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Stream;
-import javax.annotation.Nonnull;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.projectnessie.versioned.storage.common.persist.Backend;
+import org.projectnessie.versioned.storage.common.persist.PersistFactory;
 
-class MongoDBBackend implements Backend {
+public class MongoDBBackend implements Backend {
 
   private final MongoDBBackendConfig config;
   private final MongoClient client;
@@ -39,21 +41,18 @@ class MongoDBBackend implements Backend {
   private MongoCollection<Document> refs;
   private MongoCollection<Document> objs;
 
-  MongoDBBackend(
-      @Nonnull @jakarta.annotation.Nonnull MongoDBBackendConfig config, boolean closeClient) {
+  public MongoDBBackend(@Nonnull MongoDBBackendConfig config, boolean closeClient) {
     this.config = config;
     this.client = config.client();
     this.closeClient = closeClient;
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   MongoCollection<Document> refs() {
     return refs;
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   MongoCollection<Document> objs() {
     return objs;
   }
@@ -71,8 +70,7 @@ class MongoDBBackend implements Backend {
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public MongoDBPersistFactory createFactory() {
+  public PersistFactory createFactory() {
     initialize();
     return new MongoDBPersistFactory(this);
   }
@@ -85,13 +83,9 @@ class MongoDBBackend implements Backend {
   }
 
   @Override
-  public void setupSchema() {
+  public Optional<String> setupSchema() {
     initialize();
-  }
-
-  @Override
-  public String configInfo() {
-    return "database name: " + config.databaseName();
+    return Optional.of("database name: " + config.databaseName());
   }
 
   @Override

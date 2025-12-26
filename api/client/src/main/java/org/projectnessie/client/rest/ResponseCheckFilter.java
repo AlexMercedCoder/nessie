@@ -15,10 +15,10 @@
  */
 package org.projectnessie.client.rest;
 
-import static com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_INVALID_SUBTYPE;
-import static com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES;
+import static org.projectnessie.client.http.Status.INTERNAL_SERVER_ERROR_CODE;
+import static org.projectnessie.client.http.Status.SERVICE_UNAVAILABLE_CODE;
+import static org.projectnessie.client.http.Status.UNAUTHORIZED_CODE;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectReader;
@@ -27,20 +27,15 @@ import java.io.InputStream;
 import java.util.Optional;
 import org.projectnessie.client.http.ResponseContext;
 import org.projectnessie.client.http.Status;
+import org.projectnessie.client.rest.io.CapturingInputStream;
 import org.projectnessie.error.ErrorCode;
 import org.projectnessie.error.ImmutableNessieError;
 import org.projectnessie.error.NessieError;
-import org.projectnessie.error.NessieErrorDetails;
+import org.projectnessie.error.NessieUnavailableException;
 
 public class ResponseCheckFilter {
 
-  /**
-   * Object mapper that ignores unknown properties and unknown subtypes, so it is able to process
-   * instances of {@link NessieError} and especially {@link NessieErrorDetails} with added/unknown
-   * properties or unknown subtypes of the latter.
-   */
-  private static final ObjectMapper MAPPER =
-      new ObjectMapper().disable(FAIL_ON_UNKNOWN_PROPERTIES).disable(FAIL_ON_INVALID_SUBTYPE);
+  private static final ObjectMapper MAPPER = new ObjectMapper();
 
   /**
    * check that response had a valid return code. Throw exception if not.
@@ -53,14 +48,14 @@ public class ResponseCheckFilter {
     final NessieError error;
     // this could IOException, in which case the error will be passed up to the client as an
     // HttpClientException
-    status = con.getResponseCode();
+    status = con.getStatus();
     if (status.getCode() > 199 && status.getCode() < 300) {
       return;
     }
 
     // this could IOException, in which case the error will be passed up to the client as an
     // HttpClientException
-    try (InputStream is = con.getErrorStream()) {
+    try (InputStream is = con.getInputStream()) {
       error = decodeErrorObject(status, is, MAPPER.reader());
     }
 
@@ -74,11 +69,14 @@ public class ResponseCheckFilter {
     // exception with some level of break-down by sub-class to allow for intelligent exception
     // handling on the caller side.
     Exception exception;
-    switch (status) {
-      case INTERNAL_SERVER_ERROR:
+    switch (status.getCode()) {
+      case INTERNAL_SERVER_ERROR_CODE:
         exception = new NessieInternalServerException(error);
         break;
-      case UNAUTHORIZED:
+      case SERVICE_UNAVAILABLE_CODE:
+        exception = new NessieUnavailableException(error);
+        break;
+      case UNAUTHORIZED_CODE:
         // Note: UNAUTHORIZED at this point cannot be a Nessie-controlled error.
         // It must be an error reported at a higher level HTTP service in front of the Nessie
         // Server.
@@ -88,10 +86,6 @@ public class ResponseCheckFilter {
         // Note: Non-Nessie 404 (Not Found) errors (e.g. mistakes in Nessie URIs) will also go
         // through this code and will be reported as generic NessieServiceException.
         exception = new NessieServiceException(error);
-    }
-
-    if (error.getClientProcessingException() != null) {
-      exception.addSuppressed(error.getClientProcessingException()); // for trouble-shooting
     }
 
     throw exception;
@@ -107,35 +101,49 @@ public class ResponseCheckFilter {
               .status(status.getCode())
               .reason(status.getReason())
               .message("Could not parse error object in response.")
-              .clientProcessingException(
-                  new RuntimeException("Could not parse error object in response."))
+              .clientProcessingError("Could not parse error object in response.")
               .build();
     } else {
+      CapturingInputStream capturing = new CapturingInputStream(inputStream);
       try {
-        JsonNode errorData = reader.readTree(inputStream);
-        try {
-          error = reader.treeToValue(errorData, NessieError.class);
-        } catch (JsonProcessingException e) {
-          // If the error payload is valid JSON, but does not represent a NessieError, it is likely
-          // produced by Quarkus and contains the server-side logged error ID. Report the raw JSON
-          // text to the caller for trouble-shooting.
-          error =
-              ImmutableNessieError.builder()
-                  .message(errorData.toString())
-                  .status(status.getCode())
-                  .reason(status.getReason())
-                  .clientProcessingException(e)
-                  .build();
+        JsonNode errorData = reader.readTree(capturing);
+        error = reader.treeToValue(errorData, NessieError.class);
+        // There's been a behavior change in Jackson between versions 2.18.2 and 2.18.3.
+        // Up to 2.18.2, `error` was non-`null` even if `errorData` is empty,
+        // singe 2.18.3, `error` is `null` if `errorData` is empty.
+        if (error == null) {
+          error = noResponseError(status, "(no response from server)", "");
         }
       } catch (IOException e) {
-        error =
-            ImmutableNessieError.builder()
-                .status(status.getCode())
-                .reason(status.getReason())
-                .clientProcessingException(e)
-                .build();
+        // The error payload is valid JSON (or an empty response), but does not represent a
+        // NessieError.
+        //
+        // This can happen when the endpoint is not a Nessie REST API endpoint, but for example an
+        // OAuth2 service.
+        //
+        // Report the captured source input just in case, but do not populate
+        // `clientProcessingException`, because that would put the Jackson exception stack trace
+        // in the message of the (later) thrown exception, which is likely to be displayed to
+        // users. Humans get confused when they see stack traces, even if the reason's legit, for
+        // example an authentication failure.
+        //
+        String cap = capturing.captured().trim();
+        error = noResponseError(status, e.toString(), cap);
       }
     }
     return error;
+  }
+
+  private static ImmutableNessieError noResponseError(
+      Status status, String clientProcessingError, String cap) {
+    return ImmutableNessieError.builder()
+        .message(
+            cap.isEmpty()
+                ? "got empty response body from server"
+                : ("Could not parse error object in response beginning with: " + cap))
+        .status(status.getCode())
+        .reason(status.getReason())
+        .clientProcessingError(clientProcessingError)
+        .build();
   }
 }

@@ -27,7 +27,7 @@ import java.util.Collections;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import org.junit.jupiter.api.extension.ExtensionContext;
-import org.projectnessie.client.http.v1api.HttpApiV1;
+import org.projectnessie.client.rest.v1.HttpApiV1;
 import org.projectnessie.tools.compatibility.api.NessieBaseUri;
 import org.projectnessie.tools.compatibility.api.TargetVersion;
 import org.projectnessie.tools.compatibility.api.Version;
@@ -58,7 +58,7 @@ public class OlderNessieServersExtension extends AbstractMultiVersionExtension {
     ServerKey serverKey =
         ServerKey.forContext(context, version, "In-Memory", Collections.emptyMap());
     NessieServer nessieServer =
-        nessieServer(classContext(context), serverKey, initializeRepository);
+        nessieServer(classContext(context), serverKey, initializeRepository, c -> {});
 
     Function<Field, Object> fieldValue =
         field ->

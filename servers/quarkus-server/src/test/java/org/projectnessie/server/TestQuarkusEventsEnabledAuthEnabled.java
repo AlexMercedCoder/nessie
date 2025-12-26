@@ -21,17 +21,15 @@ import com.google.common.collect.ImmutableMap;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
+import jakarta.enterprise.inject.Instance;
+import jakarta.inject.Inject;
 import java.util.Map;
-import javax.enterprise.inject.Instance;
-import javax.inject.Inject;
 import org.projectnessie.client.NessieClientBuilder;
 import org.projectnessie.client.auth.BasicAuthenticationProvider;
 import org.projectnessie.client.ext.NessieApiVersion;
 import org.projectnessie.client.ext.NessieApiVersions;
-import org.projectnessie.events.service.EventSubscribers;
 import org.projectnessie.server.authn.AuthenticationEnabledProfile;
 import org.projectnessie.server.events.EventsEnabledProfile;
-import org.projectnessie.server.events.fixtures.MockEventSubscriber;
 
 @QuarkusTest
 @TestProfile(TestQuarkusEventsEnabledAuthEnabled.Profile.class)
@@ -45,18 +43,19 @@ public class TestQuarkusEventsEnabledAuthEnabled extends AbstractQuarkusEvents {
           .putAll(super.getConfigOverrides())
           .put("nessie.version.store.type", IN_MEMORY.name())
           .put("quarkus.http.auth.basic", "true")
+          // Need a dummy URL to satisfy the Quarkus OIDC extension.
+          .put("quarkus.oidc.auth-server-url", "http://127.255.0.0:0/auth/realms/unset/")
           .putAll(AuthenticationEnabledProfile.AUTH_CONFIG_OVERRIDES)
           .putAll(AuthenticationEnabledProfile.SECURITY_CONFIG)
           .build();
     }
   }
 
-  @Inject Instance<EventSubscribers> subscribers;
   @Inject Instance<MeterRegistry> registries;
 
   @Override
-  protected NessieClientBuilder<?> customizeClient(
-      NessieClientBuilder<?> builder, NessieApiVersion apiVersion) {
+  protected NessieClientBuilder customizeClient(
+      NessieClientBuilder builder, NessieApiVersion apiVersion) {
     return builder.withAuthentication(BasicAuthenticationProvider.create("test_user", "test_user"));
   }
 
@@ -68,11 +67,6 @@ public class TestQuarkusEventsEnabledAuthEnabled extends AbstractQuarkusEvents {
   @Override
   protected String eventInitiator() {
     return "test_user";
-  }
-
-  @Override
-  protected MockEventSubscriber subscriber() {
-    return (MockEventSubscriber) subscribers.get().getSubscribers().get(0);
   }
 
   @Override

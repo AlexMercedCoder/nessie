@@ -15,10 +15,14 @@
  */
 package org.projectnessie.versioned.transfer;
 
+import static java.util.Objects.requireNonNull;
 import static org.projectnessie.versioned.VersionStore.KeyRestrictions.NO_KEY_RESTRICTIONS;
+import static org.projectnessie.versioned.storage.common.objtypes.StandardObjType.COMMIT;
+import static org.projectnessie.versioned.storage.versionstore.TypeMapping.hashToObjId;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.google.common.hash.Hasher;
+import com.google.common.hash.Hashing;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
@@ -37,17 +41,20 @@ import org.projectnessie.versioned.ReferenceInfo;
 import org.projectnessie.versioned.ReferenceNotFoundException;
 import org.projectnessie.versioned.VersionStore;
 import org.projectnessie.versioned.paging.PaginationIterator;
-import org.projectnessie.versioned.persist.adapter.spi.AbstractDatabaseAdapter;
-import org.projectnessie.versioned.storage.common.objtypes.Hashes;
+import org.projectnessie.versioned.storage.common.exceptions.ObjNotFoundException;
+import org.projectnessie.versioned.storage.common.objtypes.CommitObj;
+import org.projectnessie.versioned.storage.common.persist.ObjId;
+import org.projectnessie.versioned.storage.common.persist.Reference;
+import org.projectnessie.versioned.storage.versionstore.RefMapping;
+import org.projectnessie.versioned.storage.versionstore.TypeMapping;
 import org.projectnessie.versioned.store.DefaultStoreWorker;
 import org.projectnessie.versioned.transfer.files.ExportFileSupplier;
+import org.projectnessie.versioned.transfer.serialize.TransferTypes;
 import org.projectnessie.versioned.transfer.serialize.TransferTypes.Commit;
 import org.projectnessie.versioned.transfer.serialize.TransferTypes.ExportVersion;
 import org.projectnessie.versioned.transfer.serialize.TransferTypes.HeadsAndForks;
-import org.projectnessie.versioned.transfer.serialize.TransferTypes.NamedReference;
 import org.projectnessie.versioned.transfer.serialize.TransferTypes.Operation;
 import org.projectnessie.versioned.transfer.serialize.TransferTypes.OperationType;
-import org.projectnessie.versioned.transfer.serialize.TransferTypes.RefType;
 
 /**
  * Creates export artifacts by generating artificial commits from the latest content object values
@@ -56,20 +63,18 @@ import org.projectnessie.versioned.transfer.serialize.TransferTypes.RefType;
 final class ExportContents extends ExportCommon {
   private final VersionStore store;
 
-  private ByteString lastCommitId = AbstractDatabaseAdapter.NO_ANCESTOR.asBytes();
+  private ByteString lastCommitId = ObjId.EMPTY_OBJ_ID.asBytes();
 
-  ExportContents(ExportFileSupplier exportFiles, NessieExporter exporter) {
-    super(exportFiles, exporter);
+  ExportContents(
+      ExportFileSupplier exportFiles, NessieExporter exporter, ExportVersion exportVersion) {
+    super(exportFiles, exporter, exportVersion);
     store = exporter.versionStore();
   }
 
   @Override
-  ExportVersion getExportVersion() {
-    return ExportVersion.V1;
+  void prepare(ExportContext exportContext) {
+    // nop
   }
-
-  @Override
-  void writeRepositoryDescription() {}
 
   private <T> List<T> take(int n, Iterator<T> it) {
     List<T> result = new ArrayList<>(n);
@@ -89,7 +94,15 @@ final class ExportContents extends ExportCommon {
       throw new RuntimeException(e);
     }
 
-    long startMicors = TimeUnit.MILLISECONDS.toMicros(currentTimestampMillis());
+    try {
+      CommitObj commit =
+          exporter.persist().fetchTypedObj(hashToObjId(ref.getHash()), COMMIT, CommitObj.class);
+      handleGenericObjs(transferRelatedObjects.commitRelatedObjects(commit));
+    } catch (ObjNotFoundException e) {
+      // ignore
+    }
+
+    long startMicros = TimeUnit.MILLISECONDS.toMicros(currentTimestampMillis());
 
     long seq = 0;
     try (PaginationIterator<KeyEntry> entries =
@@ -108,7 +121,7 @@ final class ExportContents extends ExportCommon {
                         ref.getNamedRef().getName(), seq + 1)));
         long micros = TimeUnit.MILLISECONDS.toMicros(currentTimestampMillis());
 
-        Hasher hasher = Hashes.newHasher();
+        Hasher hasher = Hashing.sha256().newHasher();
         hasher.putBytes(meta.asReadOnlyByteBuffer());
         hasher.putBytes(lastCommitId.asReadOnlyByteBuffer());
         hasher.putLong(seq);
@@ -124,11 +137,16 @@ final class ExportContents extends ExportCommon {
         Map<ContentKey, ContentResult> values =
             store.getValues(
                 ref.getHash(),
-                batch.stream().map(e -> e.getKey().contentKey()).collect(Collectors.toList()));
+                batch.stream().map(e -> e.getKey().contentKey()).collect(Collectors.toList()),
+                false);
         for (Map.Entry<ContentKey, ContentResult> entry : values.entrySet()) {
-          Operation op = putOperationFromCommit(entry.getKey(), entry.getValue().content()).build();
+          ContentKey key = entry.getKey();
+          Content content = entry.getValue().content();
+          Operation op = putOperationFromCommit(key, requireNonNull(content, "content")).build();
           hasher.putBytes(op.toByteArray());
           commitBuilder.addOperations(op);
+
+          handleGenericObjs(transferRelatedObjects.contentRelatedObjects(content));
         }
 
         ByteString commitId = ByteString.copyFrom(hasher.hash().asBytes());
@@ -143,26 +161,34 @@ final class ExportContents extends ExportCommon {
     }
 
     return HeadsAndForks.newBuilder()
-        .setScanStartedAtInMicros(startMicors)
+        .setScanStartedAtInMicros(startMicros)
         .addHeads(lastCommitId)
         .build();
   }
 
   @Override
   void exportReferences(ExportContext exportContext) {
-    exportContext.writeNamedReference(
-        NamedReference.newBuilder()
-            .setRefType(RefType.Branch)
-            .setCommitId(lastCommitId)
-            .setName(exporter.contentsFromBranch())
-            .build());
+    Reference reference =
+        exporter.persist().fetchReference(RefMapping.asBranchName(exporter.contentsFromBranch()));
+    handleGenericObjs(transferRelatedObjects.referenceRelatedObjects(reference));
+
+    ObjId extendedInfoObj = reference.extendedInfoObj();
+    TransferTypes.Ref.Builder refBuilder =
+        TransferTypes.Ref.newBuilder().setName(reference.name()).setPointer(lastCommitId);
+    if (extendedInfoObj != null) {
+      refBuilder.setExtendedInfoObj(extendedInfoObj.asBytes());
+    }
+    refBuilder.setCreatedAtMicros(exporter.persist().config().currentTimeMicros());
+
+    exportContext.writeRef(refBuilder.build());
+
     exporter.progressListener().progress(ProgressEvent.NAMED_REFERENCE_WRITTEN);
   }
 
   private Operation.Builder putOperationFromCommit(ContentKey key, Content value) {
     return Operation.newBuilder()
         .setOperationType(OperationType.Put)
-        .addAllContentKey(key.getElements())
+        .addContentKey(TypeMapping.keyToStoreKey(key).rawString())
         .setContentId(value.getId())
         .setPayload(DefaultStoreWorker.payloadForContent(value))
         .setValue(contentToValue(value));

@@ -17,7 +17,7 @@ package org.projectnessie.versioned;
 
 import static org.projectnessie.versioned.ResultType.CONTENT_RESULT;
 
-import javax.annotation.Nullable;
+import jakarta.annotation.Nullable;
 import org.immutables.value.Value;
 import org.projectnessie.model.Content;
 import org.projectnessie.model.Documentation;
@@ -34,11 +34,11 @@ public interface ContentResult extends Result {
   IdentifiedContentKey identifiedKey();
 
   @Value.Parameter(order = 2)
+  @Nullable
   Content content();
 
   @Value.Parameter(order = 3)
   @Nullable
-  @jakarta.annotation.Nullable
   Documentation documentation();
 
   static ContentResult contentResult(

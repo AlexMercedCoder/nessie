@@ -18,13 +18,14 @@ package org.projectnessie.services.impl;
 import static java.util.Collections.emptyList;
 import static java.util.Collections.emptyMap;
 import static java.util.Collections.emptySet;
-import static org.assertj.core.api.Assumptions.assumeThat;
 import static org.assertj.core.api.InstanceOfAssertFactories.list;
 import static org.assertj.core.api.InstanceOfAssertFactories.type;
 import static org.projectnessie.model.CommitMeta.fromMessage;
 import static org.projectnessie.model.FetchOption.MINIMAL;
 import static org.projectnessie.model.MergeBehavior.NORMAL;
+import static org.projectnessie.model.Namespace.Empty.EMPTY_NAMESPACE;
 import static org.projectnessie.services.impl.AbstractTestContents.contentAndOperationTypes;
+import static org.projectnessie.versioned.RequestMeta.API_WRITE;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -57,12 +58,12 @@ import org.projectnessie.services.impl.AbstractTestContents.ContentAndOperationT
 
 public abstract class AbstractTestNamespace extends BaseTestServiceImpl {
 
-  @ParameterizedTest
+  @ParameterizedTest(name = "{displayName}[{index}]")
   @ValueSource(strings = {"a.b.c", "a.b\u001Dc.d", "a.b.c.d", "a.b\u0000c.d"})
   public void testNamespaces(String namespaceName) throws BaseNessieClientServerException {
     Namespace ns = Namespace.parse(namespaceName);
     Branch branch = ensureNamespacesForKeysExist(createBranch("testNamespaces"), ns.toContentKey());
-    Namespace namespace = namespaceApi().createNamespace(branch.getName(), ns);
+    Namespace namespace = namespaceApi().createNamespace(branch.getName(), ns, API_WRITE);
 
     soft.assertThat(namespace)
         .isNotNull()
@@ -75,7 +76,7 @@ public abstract class AbstractTestNamespace extends BaseTestServiceImpl {
     // the namespace in the error message will contain the representation with u001D
     String namespaceInErrorMsg = namespaceName.replace("\u0000", "\u001D");
 
-    soft.assertThatThrownBy(() -> namespaceApi().createNamespace(branch.getName(), ns))
+    soft.assertThatThrownBy(() -> namespaceApi().createNamespace(branch.getName(), ns, API_WRITE))
         .cause()
         .isInstanceOf(NessieNamespaceAlreadyExistsException.class)
         .hasMessage(String.format("Namespace '%s' already exists", namespaceInErrorMsg));
@@ -100,7 +101,9 @@ public abstract class AbstractTestNamespace extends BaseTestServiceImpl {
     Branch branch = createBranch("namespace");
 
     ThrowingExtractor<String, Namespace, ?> createNamespace =
-        identifier -> namespaceApi().createNamespace(branch.getName(), Namespace.parse(identifier));
+        identifier ->
+            namespaceApi()
+                .createNamespace(branch.getName(), Namespace.parse(identifier), API_WRITE);
 
     Namespace a = createNamespace.apply("a");
     Namespace ab = createNamespace.apply("a.b");
@@ -117,11 +120,11 @@ public abstract class AbstractTestNamespace extends BaseTestServiceImpl {
     }
 
     soft.assertThat(
-            namespaceApi().getNamespaces(branch.getName(), null, Namespace.EMPTY).getNamespaces())
+            namespaceApi().getNamespaces(branch.getName(), null, EMPTY_NAMESPACE).getNamespaces())
         .containsExactlyInAnyOrder(one, two, three, four, a, ab, x, xy, o);
 
     soft.assertThat(
-            namespaceApi().getNamespaces(branch.getName(), null, Namespace.EMPTY).getNamespaces())
+            namespaceApi().getNamespaces(branch.getName(), null, EMPTY_NAMESPACE).getNamespaces())
         .containsExactlyInAnyOrder(one, two, three, four, a, ab, x, xy, o);
 
     Namespace nsA = Namespace.of("a");
@@ -200,45 +203,6 @@ public abstract class AbstractTestNamespace extends BaseTestServiceImpl {
   }
 
   @Test
-  public void testNamespaceMerge() throws BaseNessieClientServerException {
-    assumeThat(databaseAdapter).isNotNull();
-
-    Branch base = createBranch("merge-base");
-    base =
-        commit(
-                base,
-                fromMessage("root"),
-                Put.of(ContentKey.of("root"), IcebergTable.of("/dev/null", 42, 42, 42, 42)))
-            .getTargetBranch();
-
-    Namespace ns = Namespace.parse("a.b.c");
-    Branch branch =
-        ensureNamespacesForKeysExist(createBranch("merge-branch", base), ns.toContentKey());
-    // create the same namespace on both branches
-    namespaceApi().createNamespace(branch.getName(), ns);
-
-    base = (Branch) getReference(base.getName());
-    branch = (Branch) getReference(branch.getName());
-    treeApi()
-        .mergeRefIntoBranch(
-            base.getName(),
-            base.getHash(),
-            branch.getName(),
-            branch.getHash(),
-            null,
-            emptyList(),
-            NORMAL,
-            false,
-            false,
-            false);
-
-    soft.assertThat(entries(base.getName(), null).stream().map(EntriesResponse.Entry::getName))
-        .contains(ns.toContentKey());
-
-    soft.assertThat(namespaceApi().getNamespace(base.getName(), null, ns)).isNotNull();
-  }
-
-  @Test
   public void testNamespaceMergeWithConflict() throws BaseNessieClientServerException {
     Branch base = createBranch("merge-base");
     base =
@@ -252,7 +216,7 @@ public abstract class AbstractTestNamespace extends BaseTestServiceImpl {
     Namespace ns = Namespace.parse("a.b.c");
     base = ensureNamespacesForKeysExist(base, ns.toContentKey());
     // create a namespace on the base branch
-    namespaceApi().createNamespace(base.getName(), ns);
+    namespaceApi().createNamespace(base.getName(), ns, API_WRITE);
     base = (Branch) getReference(base.getName());
 
     // create a table with the same name on the other branch
@@ -289,7 +253,7 @@ public abstract class AbstractTestNamespace extends BaseTestServiceImpl {
     List<LogEntry> log = commitLog(base.getName(), MINIMAL, base.getHash(), null, null);
     // merging should not have been possible ("test-merge-branch1" shouldn't be in the commits)
     soft.assertThat(log.stream().map(LogEntry::getCommitMeta).map(CommitMeta::getMessage))
-        .containsExactly("create namespace a.b.c");
+        .containsExactly("create namespace 'a.b.c'");
 
     List<EntriesResponse.Entry> entries = entries(base.getName(), null);
     soft.assertThat(entries.stream().map(EntriesResponse.Entry::getName))
@@ -309,7 +273,7 @@ public abstract class AbstractTestNamespace extends BaseTestServiceImpl {
     commit(branch, fromMessage("add table"), Put.of(key, icebergTable));
 
     Namespace ns = Namespace.of(elements);
-    soft.assertThatThrownBy(() -> namespaceApi().createNamespace(branch.getName(), ns))
+    soft.assertThatThrownBy(() -> namespaceApi().createNamespace(branch.getName(), ns, API_WRITE))
         .cause()
         .isInstanceOf(NessieNamespaceAlreadyExistsException.class)
         .hasMessage("Another content object with name 'a.b.c' already exists");
@@ -338,7 +302,8 @@ public abstract class AbstractTestNamespace extends BaseTestServiceImpl {
         identifier -> {
           Namespace namespace = Namespace.parse(identifier);
 
-          Namespace created = namespaceApi().createNamespace(branch.getName(), namespace);
+          Namespace created =
+              namespaceApi().createNamespace(branch.getName(), namespace, API_WRITE);
           soft.assertThat(created)
               .isNotNull()
               .extracting(Namespace::getElements, Namespace::toPathString)
@@ -347,7 +312,8 @@ public abstract class AbstractTestNamespace extends BaseTestServiceImpl {
           soft.assertThat(namespaceApi().getNamespace(branch.getName(), null, namespace))
               .isEqualTo(created);
 
-          soft.assertThatThrownBy(() -> namespaceApi().createNamespace(branch.getName(), namespace))
+          soft.assertThatThrownBy(
+                  () -> namespaceApi().createNamespace(branch.getName(), namespace, API_WRITE))
               .cause()
               .isInstanceOf(NessieNamespaceAlreadyExistsException.class)
               .hasMessage(String.format("Namespace '%s' already exists", namespace.name()));
@@ -363,7 +329,7 @@ public abstract class AbstractTestNamespace extends BaseTestServiceImpl {
 
     // retrieval by prefix
     soft.assertThat(
-            namespaceApi().getNamespaces(branch.getName(), null, Namespace.EMPTY).getNamespaces())
+            namespaceApi().getNamespaces(branch.getName(), null, EMPTY_NAMESPACE).getNamespaces())
         .containsAll(namespaces);
 
     soft.assertThat(
@@ -397,7 +363,7 @@ public abstract class AbstractTestNamespace extends BaseTestServiceImpl {
     }
 
     soft.assertThat(
-            namespaceApi().getNamespaces(branch.getName(), null, Namespace.EMPTY).getNamespaces())
+            namespaceApi().getNamespaces(branch.getName(), null, EMPTY_NAMESPACE).getNamespaces())
         .extracting(Namespace::toContentKey)
         .containsExactlyInAnyOrder(
             Namespace.parse("a").toContentKey(),
@@ -410,18 +376,19 @@ public abstract class AbstractTestNamespace extends BaseTestServiceImpl {
   public void testEmptyNamespace() throws BaseNessieClientServerException {
     Branch branch = createBranch("emptyNamespace");
     // can't create/fetch/delete an empty namespace due to empty REST path
-    soft.assertThatThrownBy(() -> namespaceApi().createNamespace(branch.getName(), Namespace.EMPTY))
+    soft.assertThatThrownBy(
+            () -> namespaceApi().createNamespace(branch.getName(), EMPTY_NAMESPACE, API_WRITE))
         .isInstanceOf(Exception.class);
 
     soft.assertThatThrownBy(
-            () -> namespaceApi().getNamespace(branch.getName(), null, Namespace.EMPTY))
+            () -> namespaceApi().getNamespace(branch.getName(), null, EMPTY_NAMESPACE))
         .isInstanceOf(Exception.class);
 
-    soft.assertThatThrownBy(() -> namespaceApi().deleteNamespace(branch.getName(), Namespace.EMPTY))
+    soft.assertThatThrownBy(() -> namespaceApi().deleteNamespace(branch.getName(), EMPTY_NAMESPACE))
         .isInstanceOf(Exception.class);
 
     soft.assertThat(
-            namespaceApi().getNamespaces(branch.getName(), null, Namespace.EMPTY).getNamespaces())
+            namespaceApi().getNamespaces(branch.getName(), null, EMPTY_NAMESPACE).getNamespaces())
         .isEmpty();
 
     ContentKey keyWithoutNamespace = ContentKey.of("icebergTable");
@@ -431,7 +398,7 @@ public abstract class AbstractTestNamespace extends BaseTestServiceImpl {
         Put.of(keyWithoutNamespace, IcebergTable.of("icebergTable", 42, 42, 42, 42)));
 
     soft.assertThat(
-            namespaceApi().getNamespaces(branch.getName(), null, Namespace.EMPTY).getNamespaces())
+            namespaceApi().getNamespaces(branch.getName(), null, EMPTY_NAMESPACE).getNamespaces())
         .isEmpty();
   }
 
@@ -446,7 +413,8 @@ public abstract class AbstractTestNamespace extends BaseTestServiceImpl {
 
     Namespace ns =
         namespaceApi()
-            .createNamespace(branch.getName(), Namespace.of(namespace.getElements(), properties));
+            .createNamespace(
+                branch.getName(), Namespace.of(namespace.getElements(), properties), API_WRITE);
     soft.assertThat(ns.getProperties()).isEqualTo(properties);
     soft.assertThat(ns.getId()).isNotNull();
     String nsId = ns.getId();
@@ -455,7 +423,11 @@ public abstract class AbstractTestNamespace extends BaseTestServiceImpl {
             () ->
                 namespaceApi()
                     .updateProperties(
-                        branch.getName(), Namespace.of("non-existing"), properties, emptySet()))
+                        branch.getName(),
+                        Namespace.of("non-existing"),
+                        properties,
+                        emptySet(),
+                        API_WRITE))
         .isInstanceOf(NessieNamespaceNotFoundException.class)
         .hasMessage("Namespace 'non-existing' does not exist");
 
@@ -468,11 +440,12 @@ public abstract class AbstractTestNamespace extends BaseTestServiceImpl {
                         branch.getName(),
                         Namespace.of("non-existing"),
                         emptyMap(),
-                        properties.keySet()))
+                        properties.keySet(),
+                        API_WRITE))
         .isInstanceOf(NessieNamespaceNotFoundException.class)
         .hasMessage("Namespace 'non-existing' does not exist");
 
-    namespaceApi().updateProperties(branch.getName(), namespace, properties, emptySet());
+    namespaceApi().updateProperties(branch.getName(), namespace, properties, emptySet(), API_WRITE);
 
     // namespace does not exist at the previous hash
     soft.assertThatThrownBy(
@@ -489,7 +462,8 @@ public abstract class AbstractTestNamespace extends BaseTestServiceImpl {
             updated.getName(),
             namespace,
             ImmutableMap.of("key3", "val3", "key1", "xyz"),
-            ImmutableSet.of("key2", "key5"));
+            ImmutableSet.of("key2", "key5"),
+            API_WRITE);
 
     // "updated" still points to the hash prior to the update
     soft.assertThat(

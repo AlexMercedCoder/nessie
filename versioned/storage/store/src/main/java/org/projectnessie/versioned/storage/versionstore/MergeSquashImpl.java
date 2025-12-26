@@ -20,19 +20,16 @@ import static org.projectnessie.versioned.storage.common.logic.Logics.commitLogi
 import static org.projectnessie.versioned.storage.versionstore.TypeMapping.hashToObjId;
 import static org.projectnessie.versioned.storage.versionstore.TypeMapping.objIdToHash;
 
+import jakarta.annotation.Nonnull;
+import jakarta.annotation.Nullable;
 import java.util.NoSuchElementException;
 import java.util.Optional;
-import javax.annotation.Nonnull;
-import javax.annotation.Nullable;
 import org.projectnessie.model.CommitMeta;
 import org.projectnessie.versioned.BranchName;
-import org.projectnessie.versioned.Commit;
 import org.projectnessie.versioned.Hash;
-import org.projectnessie.versioned.ImmutableMergeResult;
 import org.projectnessie.versioned.MergeResult;
 import org.projectnessie.versioned.ReferenceConflictException;
 import org.projectnessie.versioned.ReferenceNotFoundException;
-import org.projectnessie.versioned.ResultType;
 import org.projectnessie.versioned.VersionStore.MergeOp;
 import org.projectnessie.versioned.storage.common.exceptions.ObjNotFoundException;
 import org.projectnessie.versioned.storage.common.logic.CommitLogic;
@@ -45,17 +42,17 @@ import org.projectnessie.versioned.storage.common.persist.Reference;
 final class MergeSquashImpl extends BaseMergeTransplantSquash implements Merge {
 
   MergeSquashImpl(
-      @Nonnull @jakarta.annotation.Nonnull BranchName branch,
-      @Nonnull @jakarta.annotation.Nonnull Optional<Hash> referenceHash,
-      @Nonnull @jakarta.annotation.Nonnull Persist persist,
-      @Nonnull @jakarta.annotation.Nonnull Reference reference,
-      @Nullable @jakarta.annotation.Nullable CommitObj head)
+      @Nonnull BranchName branch,
+      @Nonnull Optional<Hash> referenceHash,
+      @Nonnull Persist persist,
+      @Nonnull Reference reference,
+      @Nullable CommitObj head)
       throws ReferenceNotFoundException {
     super(branch, referenceHash, persist, reference, head);
   }
 
   @Override
-  public MergeResult<Commit> merge(Optional<?> retryState, MergeOp mergeOp)
+  public MergeResult merge(Optional<?> retryState, MergeOp mergeOp)
       throws ReferenceNotFoundException, RetryException, ReferenceConflictException {
     ObjId fromId = hashToObjId(mergeOp.fromHash());
     ObjId commonAncestorId = identifyMergeBase(fromId);
@@ -63,11 +60,15 @@ final class MergeSquashImpl extends BaseMergeTransplantSquash implements Merge {
     MergeTransplantContext mergeTransplantContext =
         loadSourceCommitsForMerge(fromId, commonAncestorId, mergeOp);
 
-    ImmutableMergeResult.Builder<Commit> mergeResult =
-        prepareMergeResult()
-            .resultType(ResultType.MERGE)
+    MergeResult.Builder mergeResult =
+        MergeResult.builder()
+            .targetBranch(branch)
+            .effectiveTargetHash(objIdToHash(headId()))
             .sourceRef(mergeOp.fromRef())
+            .sourceHash(mergeOp.fromHash())
             .commonAncestor(objIdToHash(commonAncestorId));
+
+    referenceHash.ifPresent(mergeResult::expectedHash);
 
     if (fromId.equals(commonAncestorId)) {
       return mergeResult
@@ -90,9 +91,7 @@ final class MergeSquashImpl extends BaseMergeTransplantSquash implements Merge {
   }
 
   private MergeTransplantContext loadSourceCommitsForMerge(
-      @Nonnull @jakarta.annotation.Nonnull ObjId startCommitId,
-      @Nonnull @jakarta.annotation.Nonnull ObjId endCommitId,
-      @Nonnull @jakarta.annotation.Nonnull MergeOp mergeOp) {
+      @Nonnull ObjId startCommitId, @Nonnull ObjId endCommitId, @Nonnull MergeOp mergeOp) {
     CommitObj[] startEndCommits;
     try {
       startEndCommits = commitLogic(persist).fetchCommits(startCommitId, endCommitId);

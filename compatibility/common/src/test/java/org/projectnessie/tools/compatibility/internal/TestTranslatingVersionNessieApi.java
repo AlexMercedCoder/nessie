@@ -17,6 +17,7 @@ package org.projectnessie.tools.compatibility.internal;
 
 import static java.util.Collections.singletonList;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.projectnessie.tools.compatibility.api.Version.NEW_STORAGE_MODEL_WITH_COMPAT_TESTING;
 import static org.projectnessie.tools.compatibility.internal.Util.withClassLoader;
 
 import java.util.ArrayList;
@@ -34,8 +35,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.projectnessie.client.api.NessieApiV1;
-import org.projectnessie.client.http.v1api.HttpApiV1;
 import org.projectnessie.client.rest.NessieInternalServerException;
+import org.projectnessie.client.rest.v1.HttpApiV1;
 import org.projectnessie.error.BaseNessieClientServerException;
 import org.projectnessie.error.ErrorCode;
 import org.projectnessie.error.ErrorCodeAware;
@@ -44,7 +45,6 @@ import org.projectnessie.error.NessieBackendThrottledException;
 import org.projectnessie.error.NessieBadRequestException;
 import org.projectnessie.error.NessieContentNotFoundException;
 import org.projectnessie.error.NessieForbiddenException;
-import org.projectnessie.error.NessieRefLogNotFoundException;
 import org.projectnessie.error.NessieReferenceAlreadyExistsException;
 import org.projectnessie.error.NessieReferenceConflictException;
 import org.projectnessie.error.NessieReferenceNotFoundException;
@@ -65,7 +65,7 @@ class TestTranslatingVersionNessieApi {
   static void init() throws Exception {
     oldVersionClassLoader =
         OldNessie.oldNessieClassLoader(
-            Version.parseVersion("0.42.0"), singletonList("nessie-client"));
+            NEW_STORAGE_MODEL_WITH_COMPAT_TESTING, singletonList("nessie-client"));
   }
 
   @Test
@@ -344,11 +344,7 @@ class TestTranslatingVersionNessieApi {
         Arguments.of(
             NessieReferenceNotFoundException.class,
             "org.projectnessie.error.NessieReferenceNotFoundException",
-            ErrorCode.REFERENCE_NOT_FOUND),
-        Arguments.of(
-            NessieRefLogNotFoundException.class,
-            "org.projectnessie.error.NessieRefLogNotFoundException",
-            ErrorCode.REFLOG_NOT_FOUND));
+            ErrorCode.REFERENCE_NOT_FOUND));
   }
 
   @ParameterizedTest
@@ -428,7 +424,7 @@ class TestTranslatingVersionNessieApi {
     return OldNessieApiHolder.createNessieClient(
         oldVersionClassLoader,
         new ClientKey(
-            Version.parseVersion("0.42.0"),
+            NEW_STORAGE_MODEL_WITH_COMPAT_TESTING,
             "org.projectnessie.client.http.HttpClientBuilder",
             NessieApiV1.class,
             Collections.singletonMap("nessie.uri", "http://127.42.42.42:19120")));

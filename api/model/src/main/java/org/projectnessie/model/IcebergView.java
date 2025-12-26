@@ -42,21 +42,29 @@ public abstract class IcebergView extends IcebergContent {
   @jakarta.validation.constraints.NotNull
   @NotBlank
   @jakarta.validation.constraints.NotBlank
+  @Override
   public abstract String getMetadataLocation();
 
   /** Corresponds to Iceberg's {@code currentVersionId}. */
+  @Override
   public abstract long getVersionId();
 
   public abstract int getSchemaId();
 
   @NotBlank
   @jakarta.validation.constraints.NotBlank
-  @NotNull
-  @jakarta.validation.constraints.NotNull
+  @Nullable
+  @jakarta.annotation.Nullable
+  @JsonInclude(JsonInclude.Include.NON_NULL)
+  @Deprecated
+  @SuppressWarnings("DeprecatedIsStillUsed")
   public abstract String getSqlText();
 
   @Nullable
-  @jakarta.annotation.Nullable // TODO this is currently undefined in Iceberg
+  @jakarta.annotation.Nullable
+  @JsonInclude(JsonInclude.Include.NON_NULL)
+  @Deprecated
+  @SuppressWarnings("DeprecatedIsStillUsed")
   public abstract String getDialect();
 
   @Override
@@ -80,6 +88,24 @@ public abstract class IcebergView extends IcebergContent {
     return ImmutableIcebergView.builder();
   }
 
+  public static IcebergView of(String metadataLocation, long versionId, int schemaId) {
+    return builder()
+        .metadataLocation(metadataLocation)
+        .versionId(versionId)
+        .schemaId(schemaId)
+        .build();
+  }
+
+  public static IcebergView of(String id, String metadataLocation, long versionId, int schemaId) {
+    return builder()
+        .id(id)
+        .metadataLocation(metadataLocation)
+        .versionId(versionId)
+        .schemaId(schemaId)
+        .build();
+  }
+
+  @Deprecated
   public static IcebergView of(
       String metadataLocation, long versionId, int schemaId, String dialect, String sqlText) {
     return builder()
@@ -91,6 +117,7 @@ public abstract class IcebergView extends IcebergContent {
         .build();
   }
 
+  @Deprecated
   public static IcebergView of(
       String id,
       String metadataLocation,

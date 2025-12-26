@@ -18,7 +18,6 @@ package org.projectnessie.gc.files.tests;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
-import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -33,6 +32,7 @@ import org.projectnessie.gc.files.DeleteSummary;
 import org.projectnessie.gc.files.FileDeleter;
 import org.projectnessie.gc.files.FileReference;
 import org.projectnessie.gc.files.FilesLister;
+import org.projectnessie.storage.uri.StorageUri;
 
 public abstract class AbstractFiles {
 
@@ -45,7 +45,7 @@ public abstract class AbstractFiles {
 
   @Test
   public void deleteNonExisting() {
-    assertThat(deleter().delete(FileReference.of(baseUri().resolve("fileX"), baseUri(), 123L)))
+    assertThat(deleter().delete(FileReference.of(StorageUri.of("fileX"), baseUri(), 123L)))
         .isEqualTo(DeleteResult.SUCCESS);
   }
 
@@ -133,7 +133,7 @@ public abstract class AbstractFiles {
                 .deleteMultiple(
                     baseUri(),
                     IntStream.rangeClosed(1, deletes)
-                        .mapToObj(i -> baseUri().resolve(dirAndFilename(i)))
+                        .mapToObj(i -> StorageUri.of(dirAndFilename(i)))
                         .map(p -> FileReference.of(p, baseUri(), -1L))))
         .isEqualTo(DeleteSummary.of(deletes, 0L));
 
@@ -142,7 +142,7 @@ public abstract class AbstractFiles {
     }
   }
 
-  protected abstract URI baseUri();
+  protected abstract StorageUri baseUri();
 
   protected abstract FilesLister lister();
 
@@ -159,7 +159,7 @@ public abstract class AbstractFiles {
         Files.createFile(f);
         FileReference fileReference =
             FileReference.of(
-                baseUri().relativize(f.toUri()),
+                baseUri().relativize(StorageUri.of(f.toUri())),
                 baseUri(),
                 Files.getLastModifiedTime(f).toMillis());
         r.add(fileReference);

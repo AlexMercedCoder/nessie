@@ -17,7 +17,6 @@ package org.projectnessie.versioned.transfer;
 
 import static java.util.Objects.requireNonNull;
 import static org.projectnessie.versioned.storage.common.indexes.StoreIndexElement.indexElement;
-import static org.projectnessie.versioned.storage.common.logic.Logics.indexesLogic;
 import static org.projectnessie.versioned.storage.common.objtypes.CommitOp.Action.ADD;
 import static org.projectnessie.versioned.storage.common.objtypes.CommitOp.Action.REMOVE;
 import static org.projectnessie.versioned.storage.common.objtypes.CommitOp.commitOp;
@@ -32,9 +31,11 @@ import org.projectnessie.versioned.storage.batching.BatchingPersist;
 import org.projectnessie.versioned.storage.batching.WriteBatching;
 import org.projectnessie.versioned.storage.common.exceptions.ObjNotFoundException;
 import org.projectnessie.versioned.storage.common.exceptions.ObjTooLargeException;
+import org.projectnessie.versioned.storage.common.exceptions.RetryTimeoutException;
 import org.projectnessie.versioned.storage.common.indexes.StoreIndex;
 import org.projectnessie.versioned.storage.common.indexes.StoreKey;
-import org.projectnessie.versioned.storage.common.logic.IndexesLogic;
+import org.projectnessie.versioned.storage.common.logic.ImmutableRepositoryDescription;
+import org.projectnessie.versioned.storage.common.logic.RepositoryDescription;
 import org.projectnessie.versioned.storage.common.objtypes.CommitOp;
 import org.projectnessie.versioned.storage.common.objtypes.ContentValueObj;
 import org.projectnessie.versioned.storage.common.persist.ObjId;
@@ -42,6 +43,7 @@ import org.projectnessie.versioned.transfer.serialize.TransferTypes.Commit;
 import org.projectnessie.versioned.transfer.serialize.TransferTypes.ExportMeta;
 import org.projectnessie.versioned.transfer.serialize.TransferTypes.HeadsAndForks;
 import org.projectnessie.versioned.transfer.serialize.TransferTypes.Operation;
+import org.projectnessie.versioned.transfer.serialize.TransferTypes.RelatedObj;
 
 abstract class ImportPersistCommon extends ImportCommon {
   protected final BatchingPersist persist;
@@ -69,12 +71,13 @@ abstract class ImportPersistCommon extends ImportCommon {
   @Override
   void importFinalize(HeadsAndForks headsAndForks) {
     try {
-      IndexesLogic indexesLogic = indexesLogic(persist);
       for (ByteString head : headsAndForks.getHeadsList()) {
         try {
-          indexesLogic.completeIndexesInCommitChain(
-              ObjId.objIdFromBytes(head),
-              () -> importer.progressListener().progress(ProgressEvent.FINALIZE_PROGRESS));
+          importer
+              .indexesLogic()
+              .completeIndexesInCommitChain(
+                  ObjId.objIdFromBytes(head),
+                  () -> importer.progressListener().progress(ProgressEvent.FINALIZE_PROGRESS));
         } catch (ObjNotFoundException e) {
           throw new RuntimeException(e);
         }
@@ -108,7 +111,49 @@ abstract class ImportPersistCommon extends ImportCommon {
     return commitCount;
   }
 
+  @Override
+  long importGeneric() throws IOException {
+    long genericCount = 0L;
+    try {
+      for (String fileName : exportMeta.getGenericObjFilesList()) {
+        try (InputStream input = importFiles.newFileInput(fileName)) {
+          while (true) {
+            RelatedObj generic = RelatedObj.parseDelimitedFrom(input);
+            if (generic == null) {
+              break;
+            }
+            processGeneric(generic);
+            genericCount++;
+          }
+        } catch (ObjTooLargeException e) {
+          throw new RuntimeException(e);
+        }
+      }
+    } finally {
+      persist.flush();
+    }
+    return genericCount;
+  }
+
+  @Override
+  void markRepositoryImported() {
+    RepositoryDescription initialDescription =
+        requireNonNull(importer.repositoryLogic().fetchRepositoryDescription());
+    ImmutableRepositoryDescription updatedDescription =
+        ImmutableRepositoryDescription.builder()
+            .from(initialDescription)
+            .repositoryImportedTime(importer.persist().config().clock().instant())
+            .build();
+    try {
+      importer.repositoryLogic().updateRepositoryDescription(updatedDescription);
+    } catch (RetryTimeoutException e) {
+      throw new RuntimeException(e);
+    }
+  }
+
   abstract void processCommit(Commit commit) throws IOException, ObjTooLargeException;
+
+  abstract void processGeneric(RelatedObj genericObj) throws IOException, ObjTooLargeException;
 
   void processCommitOp(StoreIndex<CommitOp> index, Operation op, StoreKey storeKey) {
     byte payload = (byte) op.getPayload();

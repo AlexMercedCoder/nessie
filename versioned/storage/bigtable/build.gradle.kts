@@ -16,12 +16,9 @@
 
 import org.apache.tools.ant.taskdefs.condition.Os
 
-plugins {
-  id("nessie-conventions-server")
-  id("nessie-jacoco")
-}
+plugins { id("nessie-conventions-java11") }
 
-extra["maven.name"] = "Nessie - Storage - BigTable"
+publishingHelper { mavenName = "Nessie - Storage - BigTable" }
 
 description = "Storage implementation for BigTable."
 
@@ -32,29 +29,22 @@ dependencies {
   implementation(platform(libs.google.cloud.bigtable.bom))
   implementation("com.google.cloud:google-cloud-bigtable")
 
-  // javax/jakarta
+  compileOnly(project(":nessie-doc-generator-annotations"))
   compileOnly(libs.jakarta.validation.api)
-  compileOnly(libs.javax.validation.api)
   compileOnly(libs.jakarta.annotation.api)
-  compileOnly(libs.findbugs.jsr305)
 
-  compileOnly(libs.errorprone.annotations)
   implementation(libs.guava)
+  implementation(libs.slf4j.api)
 
-  compileOnly(libs.testcontainers.testcontainers)
-  compileOnly(libs.docker.java.api)
+  compileOnly(project(":nessie-immutables-std"))
+  annotationProcessor(project(":nessie-immutables-std", configuration = "processor"))
 
-  compileOnly(libs.immutables.builder)
-  compileOnly(libs.immutables.value.annotations)
-  annotationProcessor(libs.immutables.value.processor)
-
-  compileOnly(project(":nessie-versioned-storage-testextension"))
-
+  intTestImplementation(project(":nessie-versioned-storage-bigtable-tests"))
   intTestImplementation(project(":nessie-versioned-storage-common-tests"))
   intTestImplementation(project(":nessie-versioned-storage-testextension"))
   intTestImplementation(project(":nessie-versioned-tests"))
-  intTestRuntimeOnly(libs.testcontainers.testcontainers)
-  intTestRuntimeOnly(libs.docker.java.api)
+  intTestRuntimeOnly(platform(libs.testcontainers.bom))
+  intTestRuntimeOnly("org.testcontainers:testcontainers")
   intTestImplementation(platform(libs.junit.bom))
   intTestImplementation(libs.bundles.junit.testing)
   intTestRuntimeOnly(libs.logback.classic)

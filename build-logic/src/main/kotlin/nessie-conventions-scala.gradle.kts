@@ -14,19 +14,19 @@
  * limitations under the License.
  */
 
-// Scala project, Java 11
+// Conventions for "Nessie internal" Scala projects, not Spark, not client facing.
 
 plugins {
+  id("nessie-common-java")
   scala
-  `maven-publish`
-  signing
-  id("nessie-common-base")
-  id("nessie-common-src")
-  id("nessie-java")
   id("nessie-scala")
-  id("nessie-testing")
 }
 
-tasks.withType<JavaCompile>().configureEach { options.release.set(11) }
+tasks.withType<JavaCompile>().configureEach { options.release = 21 }
 
-tasks.withType<ScalaCompile>().configureEach { options.release.set(11) }
+tasks.withType<ScalaCompile>().configureEach {
+  options.release = 21
+  scalaCompileOptions.additionalParameters.add("-release:21")
+  sourceCompatibility = "21"
+  targetCompatibility = "21"
+}

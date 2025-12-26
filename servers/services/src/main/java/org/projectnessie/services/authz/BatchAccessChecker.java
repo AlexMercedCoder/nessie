@@ -15,12 +15,15 @@
  */
 package org.projectnessie.services.authz;
 
+import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import java.util.Map;
+import java.util.Set;
 import org.projectnessie.model.Branch;
 import org.projectnessie.model.ContentKey;
 import org.projectnessie.model.Detached;
 import org.projectnessie.model.IdentifiedContentKey;
 import org.projectnessie.model.Operation;
+import org.projectnessie.model.RepositoryConfig;
 import org.projectnessie.model.Tag;
 import org.projectnessie.versioned.NamedRef;
 
@@ -52,6 +55,8 @@ public interface BatchAccessChecker {
    */
   Map<Check, String> check();
 
+  ApiContext getApiContext();
+
   /**
    * Convenience methods that throws an {@link AccessCheckException}, if {@link #check()} returns a
    * non-empty map.
@@ -66,6 +71,7 @@ public interface BatchAccessChecker {
     }
   }
 
+  @CanIgnoreReturnValue
   BatchAccessChecker can(Check check);
 
   /**
@@ -74,6 +80,7 @@ public interface BatchAccessChecker {
    *
    * @param ref The {@link NamedRef} to check
    */
+  @CanIgnoreReturnValue
   BatchAccessChecker canViewReference(NamedRef ref);
 
   /**
@@ -81,6 +88,7 @@ public interface BatchAccessChecker {
    *
    * @param ref The {@link NamedRef} to check
    */
+  @CanIgnoreReturnValue
   BatchAccessChecker canCreateReference(NamedRef ref);
 
   /**
@@ -91,6 +99,7 @@ public interface BatchAccessChecker {
    *
    * @param ref The {@link NamedRef} to check not granted.
    */
+  @CanIgnoreReturnValue
   BatchAccessChecker canAssignRefToHash(NamedRef ref);
 
   /**
@@ -98,6 +107,7 @@ public interface BatchAccessChecker {
    *
    * @param ref The {@link NamedRef} to check
    */
+  @CanIgnoreReturnValue
   BatchAccessChecker canDeleteReference(NamedRef ref);
 
   /**
@@ -108,6 +118,7 @@ public interface BatchAccessChecker {
    *
    * @param ref The {@link NamedRef} to check
    */
+  @CanIgnoreReturnValue
   BatchAccessChecker canReadEntries(NamedRef ref);
 
   /**
@@ -122,7 +133,13 @@ public interface BatchAccessChecker {
    *
    * @param ref current reference
    * @param identifiedKey content key / ID / type to check
+   * @param actions contextual information, API actions/operations performed
    */
+  @CanIgnoreReturnValue
+  BatchAccessChecker canReadContentKey(
+      NamedRef ref, IdentifiedContentKey identifiedKey, Set<String> actions);
+
+  @CanIgnoreReturnValue
   BatchAccessChecker canReadContentKey(NamedRef ref, IdentifiedContentKey identifiedKey);
 
   /**
@@ -133,6 +150,7 @@ public interface BatchAccessChecker {
    *
    * @param ref The {@link NamedRef} to check
    */
+  @CanIgnoreReturnValue
   BatchAccessChecker canListCommitLog(NamedRef ref);
 
   /**
@@ -143,6 +161,7 @@ public interface BatchAccessChecker {
    *
    * @param ref The {@link NamedRef} to check
    */
+  @CanIgnoreReturnValue
   BatchAccessChecker canCommitChangeAgainstReference(NamedRef ref);
 
   /**
@@ -153,7 +172,13 @@ public interface BatchAccessChecker {
    *
    * @param ref The {@link NamedRef} to check
    * @param identifiedKey content key / ID / type to check
+   * @param actions contextual information, API actions/operations performed
    */
+  @CanIgnoreReturnValue
+  BatchAccessChecker canReadEntityValue(
+      NamedRef ref, IdentifiedContentKey identifiedKey, Set<String> actions);
+
+  @CanIgnoreReturnValue
   BatchAccessChecker canReadEntityValue(NamedRef ref, IdentifiedContentKey identifiedKey);
 
   /**
@@ -165,7 +190,13 @@ public interface BatchAccessChecker {
    *
    * @param ref The {@link NamedRef} to check
    * @param identifiedKey content key / ID / type to check
+   * @param actions contextual information, API actions/operations performed
    */
+  @CanIgnoreReturnValue
+  BatchAccessChecker canCreateEntity(
+      NamedRef ref, IdentifiedContentKey identifiedKey, Set<String> actions);
+
+  @CanIgnoreReturnValue
   BatchAccessChecker canCreateEntity(NamedRef ref, IdentifiedContentKey identifiedKey);
 
   /**
@@ -178,6 +209,11 @@ public interface BatchAccessChecker {
    * @param ref The {@link NamedRef} to check
    * @param identifiedKey content key / ID / type to check
    */
+  @CanIgnoreReturnValue
+  BatchAccessChecker canUpdateEntity(
+      NamedRef ref, IdentifiedContentKey identifiedKey, Set<String> actions);
+
+  @CanIgnoreReturnValue
   BatchAccessChecker canUpdateEntity(NamedRef ref, IdentifiedContentKey identifiedKey);
 
   /**
@@ -189,9 +225,18 @@ public interface BatchAccessChecker {
    *
    * @param ref The {@link NamedRef} to check
    * @param identifiedKey content key / ID / type to check
+   * @param actions contextual information, API actions/operations performed
    */
+  @CanIgnoreReturnValue
+  BatchAccessChecker canDeleteEntity(
+      NamedRef ref, IdentifiedContentKey identifiedKey, Set<String> actions);
+
+  @CanIgnoreReturnValue
   BatchAccessChecker canDeleteEntity(NamedRef ref, IdentifiedContentKey identifiedKey);
 
-  /** Checks whether the given role/principal is allowed to view the reflog entries. */
-  BatchAccessChecker canViewRefLog();
+  @CanIgnoreReturnValue
+  BatchAccessChecker canReadRepositoryConfig(RepositoryConfig.Type repositoryConfigType);
+
+  @CanIgnoreReturnValue
+  BatchAccessChecker canUpdateRepositoryConfig(RepositoryConfig.Type repositoryConfigType);
 }

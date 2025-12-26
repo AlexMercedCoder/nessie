@@ -21,22 +21,26 @@ import static org.projectnessie.services.authz.Check.canViewReference;
 
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableSet;
-import java.security.Principal;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.BiPredicate;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
-import java.util.function.Supplier;
 import org.projectnessie.error.NessieNotFoundException;
 import org.projectnessie.error.NessieReferenceNotFoundException;
+import org.projectnessie.model.Content;
 import org.projectnessie.model.ContentKey;
 import org.projectnessie.model.DiffResponse.DiffEntry;
+import org.projectnessie.services.authz.AccessContext;
+import org.projectnessie.services.authz.ApiContext;
 import org.projectnessie.services.authz.Authorizer;
 import org.projectnessie.services.authz.AuthzPaginationIterator;
 import org.projectnessie.services.authz.Check;
 import org.projectnessie.services.config.ServerConfig;
+import org.projectnessie.services.hash.HashValidator;
+import org.projectnessie.services.hash.ResolvedHash;
 import org.projectnessie.services.spi.DiffService;
 import org.projectnessie.services.spi.PagedResponseHandler;
 import org.projectnessie.versioned.Diff;
@@ -53,8 +57,9 @@ public class DiffApiImpl extends BaseApiImpl implements DiffService {
       ServerConfig config,
       VersionStore store,
       Authorizer authorizer,
-      Supplier<Principal> principal) {
-    super(config, store, authorizer, principal);
+      AccessContext accessContext,
+      ApiContext apiContext) {
+    super(config, store, authorizer, accessContext, apiContext);
   }
 
   @Override
@@ -73,22 +78,31 @@ public class DiffApiImpl extends BaseApiImpl implements DiffService {
       List<ContentKey> requestedKeys,
       String filter)
       throws NessieNotFoundException {
-    WithHash<NamedRef> from = namedRefWithHashOrThrow(fromRef, fromHash);
-    WithHash<NamedRef> to = namedRefWithHashOrThrow(toRef, toHash);
-    NamedRef fromNamedRef = from.getValue();
-    NamedRef toNamedRef = to.getValue();
-    fromReference.accept(from);
-    toReference.accept(to);
-
-    startAccessCheck().canViewReference(fromNamedRef).canViewReference(toNamedRef).checkAndThrow();
 
     try {
-      Predicate<ContentKey> contentKeyPredicate = null;
+      ResolvedHash from =
+          getHashResolver().resolveHashOnRef(fromRef, fromHash, new HashValidator("\"From\" hash"));
+      ResolvedHash to =
+          getHashResolver().resolveHashOnRef(toRef, toHash, new HashValidator("\"To\" hash"));
+      NamedRef fromNamedRef = from.getNamedRef();
+      NamedRef toNamedRef = to.getNamedRef();
+      fromReference.accept(from);
+      toReference.accept(to);
+
+      startAccessCheck()
+          .canViewReference(fromNamedRef)
+          .canViewReference(toNamedRef)
+          .checkAndThrow();
+
+      BiPredicate<ContentKey, Content.Type> contentKeyPredicate = null;
       if (requestedKeys != null && !requestedKeys.isEmpty()) {
-        contentKeyPredicate = new HashSet<>(requestedKeys)::contains;
+        Set<ContentKey> requestedKeysSet = new HashSet<>(requestedKeys);
+        contentKeyPredicate = (key, type) -> requestedKeysSet.contains(key);
       }
       if (!Strings.isNullOrEmpty(filter)) {
-        Predicate<ContentKey> filterPredicate = filterOnContentKey(filter);
+        Predicate<ContentKey> contentKeyFilter = filterOnContentKey(filter);
+        BiPredicate<ContentKey, Content.Type> filterPredicate =
+            (key, type) -> contentKeyFilter.test(key);
         contentKeyPredicate =
             contentKeyPredicate != null
                 ? contentKeyPredicate.and(filterPredicate)
@@ -110,7 +124,7 @@ public class DiffApiImpl extends BaseApiImpl implements DiffService {
 
         AuthzPaginationIterator<Diff> authz =
             new AuthzPaginationIterator<Diff>(
-                diffs, super::startAccessCheck, getConfig().accessChecksBatchSize()) {
+                diffs, super::startAccessCheck, getServerConfig().accessChecksBatchSize()) {
               @Override
               protected Set<Check> checksForEntry(Diff entry) {
                 if (entry.getFromValue().isPresent()) {

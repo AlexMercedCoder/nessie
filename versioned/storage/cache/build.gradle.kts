@@ -14,12 +14,9 @@
  * limitations under the License.
  */
 
-plugins {
-  id("nessie-conventions-server")
-  id("nessie-jacoco")
-}
+plugins { id("nessie-conventions-java11") }
 
-extra["maven.name"] = "Nessie - Storage - Cache"
+publishingHelper { mavenName = "Nessie - Storage - Cache" }
 
 description = "Provides caching functionality, bounded by heap pressure."
 
@@ -27,24 +24,28 @@ dependencies {
   implementation(project(":nessie-versioned-storage-common"))
   implementation(project(":nessie-versioned-storage-common-serialize"))
 
-  // javax/jakarta
   compileOnly(libs.jakarta.validation.api)
-  compileOnly(libs.javax.validation.api)
   compileOnly(libs.jakarta.annotation.api)
-  compileOnly(libs.findbugs.jsr305)
 
   compileOnly(libs.errorprone.annotations)
 
   implementation(libs.guava)
   implementation(libs.caffeine)
+  implementation(libs.micrometer.core)
 
-  compileOnly(libs.immutables.builder)
-  compileOnly(libs.immutables.value.annotations)
-  annotationProcessor(libs.immutables.value.processor)
+  compileOnly(project(":nessie-immutables-std"))
+  annotationProcessor(project(":nessie-immutables-std", configuration = "processor"))
 
   testImplementation(project(":nessie-versioned-storage-common-tests"))
   testImplementation(project(":nessie-versioned-storage-testextension"))
   testImplementation(project(":nessie-versioned-storage-inmemory"))
+
+  testCompileOnly(project(":nessie-immutables-std"))
+  testAnnotationProcessor(project(":nessie-immutables-std", configuration = "processor"))
+
+  testImplementation(platform(libs.jackson.bom))
+  testImplementation("com.fasterxml.jackson.core:jackson-annotations")
+  testImplementation("com.fasterxml.jackson.core:jackson-databind")
 
   testImplementation(platform(libs.junit.bom))
   testImplementation(libs.bundles.junit.testing)

@@ -23,10 +23,4 @@ import org.projectnessie.quarkus.tests.profiles.QuarkusTestProfilePersistInmemor
 @QuarkusTest
 @TestProfile(QuarkusTestProfilePersistInmemory.class)
 @NessieApiVersions // all versions
-class TestQuarkusRestInMemoryPersist extends AbstractQuarkusRestWithMetrics {
-
-  @Override
-  protected boolean fullPagingSupport() {
-    return true;
-  }
-}
+public class TestQuarkusRestInMemoryPersist extends AbstractQuarkusRestWithMetrics {}

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 Dremio
+ * Copyright (C) 2023 Dremio
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,61 +15,50 @@
  */
 package org.projectnessie.versioned.storage.common.persist;
 
-import org.projectnessie.versioned.storage.common.logic.InternalRef;
-import org.projectnessie.versioned.storage.common.objtypes.CommitObj;
-import org.projectnessie.versioned.storage.common.objtypes.ContentValueObj;
-import org.projectnessie.versioned.storage.common.objtypes.IndexObj;
-import org.projectnessie.versioned.storage.common.objtypes.IndexSegmentsObj;
-import org.projectnessie.versioned.storage.common.objtypes.RefObj;
-import org.projectnessie.versioned.storage.common.objtypes.StringObj;
-import org.projectnessie.versioned.storage.common.objtypes.TagObj;
+import java.util.function.LongSupplier;
 
-public enum ObjType {
+public interface ObjType {
+
+  /** Must be unique among all registered object types. */
+  String name();
+
+  /** Must be unique among all registered object types. */
+  String shortName();
+
+  /** The target class that objects of this type should be serialized from and deserialized to. */
+  Class<? extends Obj> targetClass();
+
   /**
-   * Identifies a named reference and contains the initial referencee.
+   * Allows an object type to define how long a particular object instance can be cached.
    *
-   * <p>Managed in the well-known internal reference {@link InternalRef#REF_REFS}.
+   * <p>{@value #CACHE_UNLIMITED}, which is the default implementation, defines that an object
+   * instance can be cached forever.
    *
-   * <p>{@link Obj} is a {@link RefObj}.
+   * <p>{@value #NOT_CACHED} defines that an object instance must never be cached.
+   *
+   * <p>A positive value defines the timestamp in microseconds since epoch when the cached object
+   * can be evicted
    */
-  REF("r"),
-
-  /** {@link Obj} is a {@link CommitObj}. */
-  COMMIT("c"),
-
-  /** {@link Obj} is a {@link TagObj}. */
-  TAG("t"),
-
-  /** {@link Obj} is a {@link ContentValueObj}. */
-  VALUE("v"),
-
-  /** {@link Obj} is a {@link StringObj}. */
-  STRING("s"),
-
-  /** {@link Obj} is a {@link IndexSegmentsObj}. */
-  INDEX_SEGMENTS("I"),
-
-  /** {@link Obj} is a {@link IndexObj}. */
-  INDEX("i");
-
-  private static final ObjType[] ALL_OBJ_TYPES = ObjType.values();
-
-  private final String shortName;
-
-  ObjType(String shortName) {
-    this.shortName = shortName;
+  default long cachedObjectExpiresAtMicros(Obj obj, LongSupplier clock) {
+    return CACHE_UNLIMITED;
   }
 
-  public static ObjType fromShortName(String shortName) {
-    for (ObjType type : ALL_OBJ_TYPES) {
-      if (type.shortName().equals(shortName)) {
-        return type;
-      }
-    }
-    throw new IllegalStateException("Unknown object short type name " + shortName);
+  /**
+   * Allows an object type to define how long the fact of a non-existing object instance can be
+   * cached.
+   *
+   * <p>{@value #CACHE_UNLIMITED} defines that an object instance can be cached forever.
+   *
+   * <p>{@value #NOT_CACHED}, which is the default implementation, defines that an object instance
+   * must never be cached.
+   *
+   * <p>A positive value defines the timestamp in microseconds since epoch when the negative-cache
+   * sentinel can be evicted
+   */
+  default long negativeCacheExpiresAtMicros(LongSupplier clock) {
+    return NOT_CACHED;
   }
 
-  public String shortName() {
-    return shortName;
-  }
+  long CACHE_UNLIMITED = -1L;
+  long NOT_CACHED = 0L;
 }

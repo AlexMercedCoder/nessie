@@ -28,7 +28,6 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Function;
 import org.junit.jupiter.api.extension.ExtensionContext;
-import org.junit.jupiter.api.extension.ExtensionContext.Store.CloseableResource;
 import org.projectnessie.client.api.NessieApi;
 import org.projectnessie.tools.compatibility.api.NessieAPI;
 import org.projectnessie.tools.compatibility.api.NessieApiBuilderProperty;
@@ -36,7 +35,7 @@ import org.projectnessie.tools.compatibility.api.Version;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-abstract class AbstractNessieApiHolder implements CloseableResource {
+abstract class AbstractNessieApiHolder implements AutoCloseable {
   private static final Logger LOGGER = LoggerFactory.getLogger(AbstractNessieApiHolder.class);
 
   protected final ClientKey clientKey;
@@ -56,7 +55,7 @@ abstract class AbstractNessieApiHolder implements CloseableResource {
           .getApiInstance();
     } else {
       return context
-          .getStore(Util.NAMESPACE)
+          .getStore(Util.EXTENSION_CONTEXT_NAMESPACE)
           .getOrComputeIfAbsent(
               clientKey, k -> new OldNessieApiHolder(context, k), OldNessieApiHolder.class)
           .getApiInstance();
@@ -75,8 +74,7 @@ abstract class AbstractNessieApiHolder implements CloseableResource {
     Class<? extends NessieApi> apiType = (Class<? extends NessieApi>) field.getType();
     Map<String, String> configs =
         buildApiBuilderConfig(context, field, apiType, nessieServerSupplier);
-    ClientKey clientKey = new ClientKey(version, nessieAPI.builderClassName(), apiType, configs);
-    return clientKey;
+    return new ClientKey(version, nessieAPI.builderClassName(), apiType, configs);
   }
 
   private static Map<String, String> buildApiBuilderConfig(
@@ -120,8 +118,30 @@ abstract class AbstractNessieApiHolder implements CloseableResource {
    */
   protected static AutoCloseable createNessieClient(ClassLoader classLoader, ClientKey clientKey) {
     try {
-      Class<?> builderClazz = classLoader.loadClass(clientKey.getBuilderClass());
-      Object builderInstance = builderClazz.getMethod("builder").invoke(null);
+      Object builderInstance;
+
+      Class<?> nessieClientBuilderClass =
+          classLoader.loadClass("org.projectnessie.client.NessieClientBuilder");
+      String builderClass = clientKey.getBuilderClass();
+      if (NessieAPI.DEFAULT_BUILDER_CLASS_NAME.equals(builderClass)) {
+        builderClass = null;
+      }
+
+      try {
+        // New functionality using NessieClientBuilder and the service loader mechanism.
+        Method createClientBuilderMethod =
+            nessieClientBuilderClass.getDeclaredMethod(
+                "createClientBuilder", String.class, String.class);
+        builderInstance = createClientBuilderMethod.invoke(null, null, builderClass);
+      } catch (NoSuchMethodException ignore) {
+        if (builderClass == null) {
+          // Fall back to legacy (and now removed) HttpClientBuilder. See
+          // https://github.com/projectnessie/nessie/pull/7803
+          builderClass = "org.projectnessie.client.http.HttpClientBuilder";
+        }
+        Class<?> builderClazz = classLoader.loadClass(builderClass);
+        builderInstance = builderClazz.getMethod("builder").invoke(null);
+      }
 
       Method fromConfigMethod = builderInstance.getClass().getMethod("fromConfig", Function.class);
       Function<String, String> getCfg =

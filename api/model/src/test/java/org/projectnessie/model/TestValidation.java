@@ -17,6 +17,7 @@ package org.projectnessie.model;
 
 import static org.projectnessie.model.Validation.FORBIDDEN_REF_NAME_MESSAGE;
 import static org.projectnessie.model.Validation.HASH_MESSAGE;
+import static org.projectnessie.model.Validation.HASH_OR_RELATIVE_COMMIT_SPEC_MESSAGE;
 import static org.projectnessie.model.Validation.HASH_OR_RELATIVE_COMMIT_SPEC_PATTERN;
 import static org.projectnessie.model.Validation.REF_NAME_MESSAGE;
 import static org.projectnessie.model.Validation.REF_NAME_PATH_PATTERN;
@@ -24,6 +25,7 @@ import static org.projectnessie.model.Validation.RELATIVE_COMMIT_SPEC_PART_PATTE
 import static org.projectnessie.model.Validation.isForbiddenReferenceName;
 import static org.projectnessie.model.Validation.validateForbiddenReferenceName;
 import static org.projectnessie.model.Validation.validateHash;
+import static org.projectnessie.model.Validation.validateHashOrRelativeSpec;
 import static org.projectnessie.model.Validation.validateReferenceName;
 import static org.projectnessie.model.Validation.validateReferenceNameOrHash;
 
@@ -112,6 +114,34 @@ class TestValidation {
   }
 
   @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "1122334455667788990011223344556677889900112233445566778899001122",
+        "abcDEF4242424242424242424242BEEF00DEAD42112233445566778899001122",
+        "0011223344556677",
+        "11223344556677889900",
+        "cafebabedeadbeef",
+        "CAFEBABEDEADBEEF",
+        "caffee20",
+        "20caffee",
+        "20caff22",
+        "~2",
+        "^3",
+        "*1234567890",
+        "*2023-07-27T16:14:23.123456789Z",
+        "*2023-07-27T16:14:23.123456Z",
+        "*2023-07-27T16:14:23.123Z",
+        "*2023-07-27T16:14:23Z",
+        "1122334455667788990011223344556677889900112233445566778899001122~2",
+        "11223344556677889900^3",
+        "cafebabedeadbeef*1234567890",
+        "cafebabedeadbeef*2023-07-27T16:14:23.123456Z",
+      })
+  void validHashOrRelativeSpecs(String hash) {
+    soft.assertThatCode(() -> validateHashOrRelativeSpec(hash)).doesNotThrowAnyException();
+  }
+
+  @ParameterizedTest
   @ValueSource(strings = {"", "abc/", ".foo", "abc/def/../blah", "abc/de..blah", "abc/de@{blah"})
   void invalidHashes(String hash) {
     String referenceName = "thisIsAValidName";
@@ -119,11 +149,14 @@ class TestValidation {
         .isThrownBy(() -> validateHash(hash))
         .withMessage(HASH_MESSAGE + " - but was: " + hash);
     soft.assertThatIllegalArgumentException()
+        .isThrownBy(() -> validateHashOrRelativeSpec(hash))
+        .withMessage(HASH_OR_RELATIVE_COMMIT_SPEC_MESSAGE + " - but was: " + hash);
+    soft.assertThatIllegalArgumentException()
         .isThrownBy(() -> Branch.of(referenceName, hash))
-        .withMessage(HASH_MESSAGE + " - but was: " + hash);
+        .withMessage(HASH_OR_RELATIVE_COMMIT_SPEC_MESSAGE + " - but was: " + hash);
     soft.assertThatIllegalArgumentException()
         .isThrownBy(() -> Tag.of(referenceName, hash))
-        .withMessage(HASH_MESSAGE + " - but was: " + hash);
+        .withMessage(HASH_OR_RELATIVE_COMMIT_SPEC_MESSAGE + " - but was: " + hash);
   }
 
   @ParameterizedTest
@@ -156,10 +189,10 @@ class TestValidation {
   void validNamesAndInvalidHashes(String referenceName, String hash) {
     soft.assertThatIllegalArgumentException()
         .isThrownBy(() -> Branch.of(referenceName, hash))
-        .withMessage(HASH_MESSAGE + " - but was: " + hash);
+        .withMessage(HASH_OR_RELATIVE_COMMIT_SPEC_MESSAGE + " - but was: " + hash);
     soft.assertThatIllegalArgumentException()
         .isThrownBy(() -> Tag.of(referenceName, hash))
-        .withMessage(HASH_MESSAGE + " - but was: " + hash);
+        .withMessage(HASH_OR_RELATIVE_COMMIT_SPEC_MESSAGE + " - but was: " + hash);
   }
 
   @ParameterizedTest
@@ -249,5 +282,28 @@ class TestValidation {
     soft.assertThat(matcher.group(1)).isEqualTo(ref);
     soft.assertThat(matcher.group(2)).isEqualTo(hashOnRef);
     soft.assertThat(matcher.group(3)).isEqualTo(relativeSpec);
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "abcDEF4242424242424242424242BEEF00DEAD42112233445566778899001122",
+        "1P12",
+        "PT10D",
+        "2011-12-03T10:15:30",
+        "2011-12-03 10:15:30"
+      })
+  void invalidDefaultCutOffPolicy(String cutOffPolicy) {
+    soft.assertThatIllegalArgumentException()
+        .isThrownBy(() -> Validation.validateDefaultCutOffPolicy(cutOffPolicy))
+        .withMessageContaining("Failed to parse default-cutoff-value");
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {"123", "P10D", "p20D", "p10d", "PT20.3S", "P2DT3H4M", "2011-12-03T10:15:30Z"})
+  void validateDefaultCutOffPolicy(String cutOffPolicy) {
+    soft.assertThatCode(() -> Validation.validateDefaultCutOffPolicy(cutOffPolicy))
+        .doesNotThrowAnyException();
   }
 }

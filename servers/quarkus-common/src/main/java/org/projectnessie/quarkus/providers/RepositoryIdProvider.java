@@ -15,23 +15,18 @@
  */
 package org.projectnessie.quarkus.providers;
 
-import javax.enterprise.context.ApplicationScoped;
-import javax.enterprise.inject.Produces;
-import javax.inject.Named;
-import javax.inject.Singleton;
-import org.projectnessie.quarkus.config.QuarkusVersionStoreAdvancedConfig;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.inject.Produces;
+import jakarta.inject.Singleton;
 import org.projectnessie.versioned.storage.common.config.StoreConfig;
 
 @ApplicationScoped
 public class RepositoryIdProvider {
 
-  /** The name of the CDI bean that provides the repository ID. */
-  public static final String REPOSITORY_ID_BEAN_NAME = "nessie.beans.repository-id";
-
   /**
    * Produces a bean containing the (system-wide) repository id.
    *
-   * <p>A bean named {@value #REPOSITORY_ID_BEAN_NAME} of type String is required by Nessie events
+   * <p>A bean qualified as {@link RepositoryId} of type String is required by Nessie events
    * notification system.
    *
    * <p>Currently, the bean is a singleton produced from Nessie's configuration, but this could
@@ -40,13 +35,8 @@ public class RepositoryIdProvider {
    */
   @Produces
   @Singleton
-  @Named(REPOSITORY_ID_BEAN_NAME)
-  public String produceRepositoryId(
-      StoreConfig config, QuarkusVersionStoreAdvancedConfig legacyConfig) {
-    String repositoryId = config.repositoryId();
-    if (repositoryId.isEmpty()) {
-      repositoryId = legacyConfig.getRepositoryId();
-    }
-    return repositoryId;
+  @RepositoryId
+  public String produceRepositoryId(StoreConfig config) {
+    return config.repositoryId();
   }
 }

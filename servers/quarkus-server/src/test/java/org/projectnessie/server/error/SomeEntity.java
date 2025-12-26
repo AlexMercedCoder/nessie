@@ -17,23 +17,19 @@ package org.projectnessie.server.error;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import javax.validation.constraints.Max;
-import javax.validation.constraints.Min;
-import javax.validation.constraints.NotNull;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotNull;
 
 /** Just a dummy entity. */
-public class SomeEntity {
-  @NotNull
-  @Min(3)
-  @Max(42)
-  private final Integer value;
-
+public record SomeEntity(@NotNull @Min(3) @Max(42) Integer value) {
   @JsonCreator
   public SomeEntity(@JsonProperty(value = "value", required = true) Integer value) {
     this.value = value;
   }
 
-  public Integer getValue() {
+  @Override
+  public Integer value() {
     return value;
   }
 }

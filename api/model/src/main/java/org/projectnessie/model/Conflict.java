@@ -15,6 +15,7 @@
  */
 package org.projectnessie.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.JsonDeserializer;
@@ -23,15 +24,27 @@ import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import java.io.IOException;
 import java.util.Locale;
 import javax.annotation.Nullable;
+import org.eclipse.microprofile.openapi.annotations.enums.SchemaType;
+import org.eclipse.microprofile.openapi.annotations.media.Schema;
+import org.eclipse.microprofile.openapi.annotations.media.SchemaProperty;
 import org.immutables.value.Value;
 
+@Schema(
+    type = SchemaType.OBJECT,
+    title = "Per Content Key conflict details",
+    properties = {
+      @SchemaProperty(name = "conflictType", description = "Conflict type (enum)."),
+      @SchemaProperty(name = "key", description = "The conflicting Content Key."),
+      @SchemaProperty(name = "message", description = "Conflict details.")
+    })
 @Value.Immutable
 @JsonSerialize(as = ImmutableConflict.class)
 @JsonDeserialize(as = ImmutableConflict.class)
+@JsonIgnoreProperties(
+    // need to ignore unknown properties as this type can be used in `ReferenceConflicts`
+    ignoreUnknown = true)
 public interface Conflict {
   @Value.Parameter(order = 1)
-  @Nullable
-  @jakarta.annotation.Nullable
   @JsonDeserialize(using = ConflictType.Deserializer.class)
   ConflictType conflictType();
 
@@ -44,7 +57,7 @@ public interface Conflict {
   String message();
 
   static Conflict conflict(
-      @Nullable @jakarta.annotation.Nullable ConflictType conflictType,
+      ConflictType conflictType,
       @Nullable @jakarta.annotation.Nullable ContentKey key,
       String message) {
     return ImmutableConflict.of(conflictType, key, message);
@@ -81,7 +94,7 @@ public interface Conflict {
     /** A namespace must be empty before it can be deleted. */
     NAMESPACE_NOT_EMPTY,
 
-    /** Reference is not at the expected hash. */
+    /** Reference is not at the expected hash, reported for reference assignment and deletion. */
     UNEXPECTED_HASH,
 
     /** Generic key conflict, reported for merges and transplants. */
@@ -102,11 +115,17 @@ public interface Conflict {
     }
 
     public static final class Deserializer extends JsonDeserializer<ConflictType> {
+
+      @Override
+      public ConflictType getNullValue(DeserializationContext ctxt) {
+        return UNKNOWN;
+      }
+
       @Override
       public ConflictType deserialize(JsonParser p, DeserializationContext ctxt)
           throws IOException {
         String name = p.readValueAs(String.class);
-        return name != null ? ConflictType.parse(name) : null;
+        return ConflictType.parse(name);
       }
     }
   }

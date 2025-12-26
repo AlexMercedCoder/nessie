@@ -15,19 +15,29 @@
  */
 
 plugins {
-  id("nessie-conventions-iceberg")
-  id("nessie-jacoco")
+  id("nessie-conventions-unpublished-tool")
   alias(libs.plugins.nessie.run)
 }
 
-extra["maven.name"] = "Nessie - GC - Integration tests"
+tasks.withType<JavaCompile>().configureEach { options.release = 11 }
 
-val sparkScala = useSparkScalaVersionsForProject("3.3", "2.12")
+publishingHelper { mavenName = "Nessie - GC - Integration tests" }
+
+val sparkScala = useSparkScalaVersionsForProject("3.5", "2.12")
 
 dependencies {
   implementation(libs.hadoop.client)
-  implementation(libs.iceberg.core)
-  implementation(libs.iceberg.aws)
+
+  implementation(platform(libs.iceberg.bom))
+
+  // Enforce a single version of Netty among dependencies
+  // (Spark, Hadoop and Azure)
+  implementation(enforcedPlatform(libs.netty.bom))
+
+  implementation("org.apache.iceberg:iceberg-core")
+  implementation("org.apache.iceberg:iceberg-aws")
+  implementation("org.apache.iceberg:iceberg-gcp")
+  implementation("org.apache.iceberg:iceberg-azure")
 
   compileOnly(libs.errorprone.annotations)
   compileOnly(libs.microprofile.openapi)
@@ -38,8 +48,8 @@ dependencies {
   implementation(nessieProject("nessie-gc-iceberg"))
   implementation(nessieProject("nessie-gc-iceberg-mock"))
   implementation(nessieProject("nessie-gc-iceberg-files"))
-  implementation(nessieProject("nessie-s3mock"))
-  implementation(nessieProject("nessie-s3minio"))
+  implementation(nessieProject("nessie-object-storage-mock"))
+  implementation(nessieProject("nessie-minio-testcontainer"))
 
   implementation(platform(libs.jackson.bom))
 
@@ -55,6 +65,9 @@ dependencies {
       "nessie-spark-extensions-${sparkScala.sparkMajorVersion}_${sparkScala.scalaMajorVersion}"
     )
   )
+  intTestImplementation(
+    nessieProject("nessie-spark-extensions-base_${sparkScala.scalaMajorVersion}")
+  )
 
   intTestImplementation("org.apache.spark:spark-sql_${sparkScala.scalaMajorVersion}") {
     forSpark(sparkScala.sparkVersion)
@@ -66,13 +79,21 @@ dependencies {
     forSpark(sparkScala.sparkVersion)
   }
 
-  intTestRuntimeOnly(libs.iceberg.nessie)
-  intTestRuntimeOnly(libs.iceberg.core)
+  intTestRuntimeOnly(platform(libs.iceberg.bom))
+  intTestRuntimeOnly("org.apache.iceberg:iceberg-nessie")
+  intTestRuntimeOnly("org.apache.iceberg:iceberg-core")
+  intTestRuntimeOnly("org.apache.iceberg:iceberg-hive-metastore")
+  intTestRuntimeOnly("org.apache.iceberg:iceberg-aws")
+  intTestRuntimeOnly("org.apache.iceberg:iceberg-gcp")
+  intTestRuntimeOnly("org.apache.iceberg:iceberg-azure")
+  // Reference the exact Iceberg version here, because the iceberg-bom might not contain all
+  // Spark/Flink deps :(
   intTestRuntimeOnly(
     "org.apache.iceberg:iceberg-spark-${sparkScala.sparkMajorVersion}_${sparkScala.scalaMajorVersion}:${libs.versions.iceberg.get()}"
   )
-  intTestRuntimeOnly(libs.iceberg.hive.metastore)
-  intTestRuntimeOnly(libs.iceberg.aws)
+  intTestRuntimeOnly(
+    "org.apache.iceberg:iceberg-spark-extensions-${sparkScala.sparkMajorVersion}_${sparkScala.scalaMajorVersion}:${libs.versions.iceberg.get()}"
+  )
 
   intTestRuntimeOnly(libs.hadoop.client)
   intTestRuntimeOnly(libs.hadoop.aws)
@@ -86,13 +107,25 @@ dependencies {
   intTestRuntimeOnly("software.amazon.awssdk:glue")
   intTestRuntimeOnly("software.amazon.awssdk:kms")
 
-  intTestCompileOnly(libs.immutables.builder)
-  intTestCompileOnly(libs.immutables.value.annotations)
-  intTestAnnotationProcessor(libs.immutables.value.processor)
+  intTestImplementation(platform(libs.google.cloud.storage.bom))
+  intTestRuntimeOnly(platform(libs.google.cloud.libraries.bom))
+  intTestImplementation("com.google.cloud:google-cloud-storage")
+  intTestRuntimeOnly("com.google.cloud:google-cloud-nio")
+  intTestRuntimeOnly(libs.google.cloud.bigdataoss.gcs.connector)
+  intTestRuntimeOnly(libs.google.cloud.bigdataoss.gcsio) {
+    // brings junit:junit + hamcrest :(
+    exclude("io.grpc", "grpc-testing")
+  }
+
+  intTestImplementation(nessieProject("nessie-azurite-testcontainer"))
+  intTestImplementation(nessieProject("nessie-gcs-testcontainer"))
+  intTestRuntimeOnly(libs.hadoop.azure)
+
+  intTestCompileOnly(nessieProject("nessie-immutables-std"))
+  intTestAnnotationProcessor(nessieProject("nessie-immutables-std", configuration = "processor"))
 
   intTestRuntimeOnly(libs.logback.classic)
 
-  // javax/jakarta
   intTestCompileOnly(libs.jakarta.validation.api)
   intTestCompileOnly(libs.jakarta.annotation.api)
 
@@ -111,13 +144,16 @@ nessieQuarkusApp {
   systemProperties.put("nessie.server.send-stacktrace-to-client", "true")
 }
 
-forceJava11ForTests()
+forceJavaVersionForTests(sparkScala.runtimeJavaVersion)
+
+// Spark stuff is veeery sticky
+tasks.named<Test>("intTest").configure { forkEvery = 1 }
 
 tasks.withType(Test::class.java).configureEach {
   systemProperty("aws.region", "us-east-1")
-  val tmpdir = project.buildDir.resolve("tmpdir")
   jvmArgumentProviders.add(
     CommandLineArgumentProvider {
+      val tmpdir = project.layout.buildDirectory.get().asFile.resolve("tmpdir")
       tmpdir.mkdirs()
       listOf("-Djava.io.tmpdir=$tmpdir")
     }

@@ -15,14 +15,14 @@
  */
 
 tasks.withType<ScalaCompile>().configureEach {
-  scalaCompileOptions.keepAliveMode.set(KeepAliveMode.DAEMON)
+  scalaCompileOptions.keepAliveMode = KeepAliveMode.DAEMON
   scalaCompileOptions.encoding = "UTF-8"
 }
 
 val scaladoc = tasks.named<ScalaDoc>("scaladoc")
 
 if (extensions.findByName("jandex") != null) {
-  scaladoc.configure { dependsOn(tasks.named("processJandexIndex")) }
+  scaladoc.configure { dependsOn(tasks.named("jandex")) }
 }
 
 val scaladocJar = tasks.register<Jar>("scaladocJar")
@@ -31,8 +31,8 @@ scaladocJar.configure {
   dependsOn(scaladoc)
   val baseJar = tasks.getByName<Jar>("jar")
   from(scaladoc.get().destinationDir)
-  destinationDirectory.set(baseJar.destinationDirectory)
-  archiveClassifier.set("scaladoc")
+  destinationDirectory = baseJar.destinationDirectory
+  archiveClassifier = "scaladoc"
 }
 
 tasks.named("assemble").configure { dependsOn(scaladocJar) }

@@ -19,8 +19,8 @@ import static com.google.common.collect.Maps.immutableEntry;
 import static java.util.stream.Collectors.toSet;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
-import static org.junit.jupiter.api.Assumptions.abort;
 import static org.projectnessie.model.CommitMeta.fromMessage;
+import static org.projectnessie.versioned.RequestMeta.API_WRITE;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -59,27 +59,6 @@ public abstract class AbstractTestEntries extends BaseTestServiceImpl {
   public void entriesPaging(int numKeys) throws BaseNessieClientServerException {
     Branch branch =
         ensureNamespacesForKeysExist(createBranch("entriesPaging"), ContentKey.of("key", "0"));
-    try {
-      treeApi()
-          .getEntries(
-              branch.getName(),
-              branch.getHash(),
-              null,
-              null,
-              "666f6f",
-              false,
-              new UnlimitedListResponseHandler<>(),
-              h -> {},
-              null,
-              null,
-              null,
-              null);
-    } catch (IllegalArgumentException e) {
-      if (!e.getMessage().contains("Paging not supported")) {
-        throw e;
-      }
-      abort("DatabaseAdapter implementations / PersistVersionStore do not support paging");
-    }
 
     IntFunction<ContentKey> contentKey = i -> ContentKey.of("key", Integer.toString(i));
     IntFunction<IcebergTable> table = i -> IcebergTable.of("meta" + i, 1, 2, 3, 4);
@@ -120,7 +99,7 @@ public abstract class AbstractTestEntries extends BaseTestServiceImpl {
     ContentKey a = ContentKey.of("a");
     ContentKey b = ContentKey.of("b");
     IcebergTable tam = IcebergTable.of("path1", 42, 42, 42, 42);
-    IcebergView tb = IcebergView.of("pathx", 1, 1, "select * from table", "Dremio");
+    IcebergView tb = IcebergView.of("pathx", 1, 1);
     branch = commit(branch, fromMessage("commit"), Put.of(a, tam), Put.of(b, tb)).getTargetBranch();
     List<EntriesResponse.Entry> entries = entries(refMode.transform(branch));
     Map<ContentKey, Content.Type> expect =
@@ -404,7 +383,7 @@ public abstract class AbstractTestEntries extends BaseTestServiceImpl {
     ContentKey a = ContentKey.of("a");
     ContentKey b = ContentKey.of("b");
     IcebergTable ta = IcebergTable.of("path1", 42, 42, 42, 42);
-    IcebergView tb = IcebergView.of("pathx", 1, 1, "select * from table", "Dremio");
+    IcebergView tb = IcebergView.of("pathx", 1, 1);
     branch =
         commit(branch, fromMessage("commit 1"), Put.of(a, ta), Put.of(b, tb)).getTargetBranch();
     List<EntriesResponse.Entry> entries = entries(Detached.of(branch.getHash()));
@@ -429,7 +408,8 @@ public abstract class AbstractTestEntries extends BaseTestServiceImpl {
       soft.assertThat(namespaceApi().getNamespace(reference.getName(), reference.getHash(), ns))
           .isNotNull();
 
-      soft.assertThatThrownBy(() -> namespaceApi().createNamespace(reference.getName(), ns))
+      soft.assertThatThrownBy(
+              () -> namespaceApi().createNamespace(reference.getName(), ns, API_WRITE))
           .cause()
           .isInstanceOf(NessieNamespaceAlreadyExistsException.class)
           .hasMessage(String.format("Namespace '%s' already exists", namespace));

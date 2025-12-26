@@ -39,10 +39,10 @@ import static org.projectnessie.versioned.storage.common.logic.Logics.referenceL
 import static org.projectnessie.versioned.storage.common.objtypes.CommitHeaders.EMPTY_COMMIT_HEADERS;
 import static org.projectnessie.versioned.storage.common.objtypes.CommitHeaders.newCommitHeaders;
 import static org.projectnessie.versioned.storage.common.objtypes.CommitObj.commitBuilder;
+import static org.projectnessie.versioned.storage.common.objtypes.StandardObjType.COMMIT;
 import static org.projectnessie.versioned.storage.common.persist.ObjId.EMPTY_OBJ_ID;
 import static org.projectnessie.versioned.storage.common.persist.ObjId.objIdFromString;
 import static org.projectnessie.versioned.storage.common.persist.ObjId.randomObjId;
-import static org.projectnessie.versioned.storage.common.persist.ObjType.COMMIT;
 import static org.projectnessie.versioned.storage.common.persist.Reference.reference;
 import static org.projectnessie.versioned.storage.versionstore.RefMapping.NO_ANCESTOR;
 import static org.projectnessie.versioned.storage.versionstore.RefMapping.REFS_HEADS;
@@ -315,17 +315,12 @@ public class TestRefMapping {
     soft.assertThatCode(
             () ->
                 RefMapping.verifyExpectedHash(
-                    Hash.of("1234"), BranchName.of("foo-branch"), Optional.of(Hash.of("1234"))))
-        .doesNotThrowAnyException();
-    soft.assertThatCode(
-            () ->
-                RefMapping.verifyExpectedHash(
-                    Hash.of("1234"), BranchName.of("foo-branch"), Optional.empty()))
+                    Hash.of("1234"), BranchName.of("foo-branch"), Hash.of("1234")))
         .doesNotThrowAnyException();
     soft.assertThatThrownBy(
             () ->
                 RefMapping.verifyExpectedHash(
-                    Hash.of("1234"), BranchName.of("foo-branch"), Optional.of(Hash.of("5678"))))
+                    Hash.of("1234"), BranchName.of("foo-branch"), Hash.of("5678")))
         .isInstanceOf(ReferenceConflictException.class)
         .hasMessage("Named-reference 'foo-branch' is not at expected hash '5678', but at '1234'.");
   }
@@ -403,12 +398,22 @@ public class TestRefMapping {
     soft.assertThat(refMapping.resolveNamedRef("tag")).isEqualTo(tag);
     soft.assertThat(refMapping.resolveNamedRef(BranchName.of("branch"))).isEqualTo(branch);
     soft.assertThat(refMapping.resolveNamedRef(TagName.of("tag"))).isEqualTo(tag);
+    soft.assertThat(refMapping.resolveNamedRefForUpdate(BranchName.of("branch"))).isEqualTo(branch);
+    soft.assertThat(refMapping.resolveNamedRefForUpdate(TagName.of("tag"))).isEqualTo(tag);
 
     soft.assertThat(refMapping.resolveNamedRef("empty")).isEqualTo(emptyBranch);
     soft.assertThat(refMapping.resolveNamedRef(BranchName.of("empty"))).isEqualTo(emptyBranch);
     soft.assertThat(refMapping.resolveNamedRef(TagName.of("empty"))).isEqualTo(emptyTag);
+    soft.assertThat(refMapping.resolveNamedRefForUpdate(BranchName.of("empty")))
+        .isEqualTo(emptyBranch);
+    soft.assertThat(refMapping.resolveNamedRefForUpdate(TagName.of("empty"))).isEqualTo(emptyTag);
 
     soft.assertThatThrownBy(() -> refMapping.resolveNamedRef("does-not-exist"))
+        .isInstanceOf(ReferenceNotFoundException.class);
+    soft.assertThatThrownBy(
+            () -> refMapping.resolveNamedRefForUpdate(BranchName.of("does-not-exist")))
+        .isInstanceOf(ReferenceNotFoundException.class);
+    soft.assertThatThrownBy(() -> refMapping.resolveNamedRefForUpdate(TagName.of("does-not-exist")))
         .isInstanceOf(ReferenceNotFoundException.class);
 
     soft.assertThat(refMapping.resolveNamedRefHead(branch))
@@ -426,6 +431,11 @@ public class TestRefMapping {
     soft.assertThat(refMapping.resolveRefHead(TagName.of("tag")))
         .isEqualTo(persist.fetchTypedObj(commitId, COMMIT, CommitObj.class));
     soft.assertThat(refMapping.resolveRefHead(Hash.of(commitId.toString())))
+        .isEqualTo(persist.fetchTypedObj(commitId, COMMIT, CommitObj.class));
+
+    soft.assertThat(refMapping.resolveRefHeadForUpdate(BranchName.of("branch")))
+        .isEqualTo(persist.fetchTypedObj(commitId, COMMIT, CommitObj.class));
+    soft.assertThat(refMapping.resolveRefHeadForUpdate(TagName.of("tag")))
         .isEqualTo(persist.fetchTypedObj(commitId, COMMIT, CommitObj.class));
 
     soft.assertThat(refMapping.resolveNamedRefHead(emptyBranch)).isNull();

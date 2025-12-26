@@ -19,6 +19,7 @@ import static com.google.common.collect.Maps.immutableEntry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.projectnessie.services.authz.ApiContext.apiContext;
 
 import com.google.common.collect.ImmutableMap;
 import java.util.Arrays;
@@ -43,7 +44,6 @@ public class TestBatchAccessChecker {
     BatchAccessChecker checker = newAccessChecker(checks -> Collections.emptyMap());
     checker
         .canViewReference(BranchName.of("foo"))
-        .canViewRefLog()
         .canListCommitLog(TagName.of("bar"))
         .canReadEntries(DetachedRef.INSTANCE);
     assertThatCode(checker::checkAndThrow).doesNotThrowAnyException();
@@ -64,8 +64,8 @@ public class TestBatchAccessChecker {
 
   @Test
   public void doubleChecks() {
-    Check checkRefLog = Check.check(CheckType.VIEW_REFLOG);
-    String msgRefLog = "no, you must not";
+    Check checkViewRef = Check.check(CheckType.VIEW_REFERENCE, BranchName.of("foo"));
+    String msgViewRef = "no, you must not";
 
     Check checkListTagCommits = Check.check(CheckType.LIST_COMMIT_LOG, TagName.of("bar"));
     String msgListTagCommits = "don't look into bar";
@@ -73,20 +73,19 @@ public class TestBatchAccessChecker {
     BatchAccessChecker checker =
         newAccessChecker(
             checks ->
-                ImmutableMap.of(checkRefLog, msgRefLog, checkListTagCommits, msgListTagCommits));
+                ImmutableMap.of(checkViewRef, msgViewRef, checkListTagCommits, msgListTagCommits));
     checker
         .canViewReference(BranchName.of("foo"))
-        .canViewRefLog()
         .canListCommitLog(TagName.of("bar"))
         .canReadEntries(DetachedRef.INSTANCE);
     assertThat(checker.check())
         .containsExactly(
-            immutableEntry(checkRefLog, msgRefLog),
+            immutableEntry(checkViewRef, msgViewRef),
             immutableEntry(checkListTagCommits, msgListTagCommits));
 
     assertThatThrownBy(checker::checkAndThrow)
         .isInstanceOf(AccessCheckException.class)
-        .hasMessage("%s, %s", msgRefLog, msgListTagCommits);
+        .hasMessage("%s, %s", msgViewRef, msgListTagCommits);
   }
 
   @Test
@@ -141,7 +140,7 @@ public class TestBatchAccessChecker {
         checker.canReadEntries(c.ref());
         break;
       case READ_CONTENT_KEY:
-        checker.canReadContentKey(c.ref(), c.identifiedKey());
+        checker.canReadContentKey(c.ref(), c.identifiedKey(), c.actions());
         break;
       case ASSIGN_REFERENCE_TO_HASH:
         checker.canAssignRefToHash(c.ref());
@@ -153,19 +152,22 @@ public class TestBatchAccessChecker {
         checker.canCommitChangeAgainstReference(c.ref());
         break;
       case READ_ENTITY_VALUE:
-        checker.canReadEntityValue(c.ref(), c.identifiedKey());
+        checker.canReadEntityValue(c.ref(), c.identifiedKey(), c.actions());
         break;
       case CREATE_ENTITY:
-        checker.canCreateEntity(c.ref(), c.identifiedKey());
+        checker.canCreateEntity(c.ref(), c.identifiedKey(), c.actions());
         break;
       case UPDATE_ENTITY:
-        checker.canUpdateEntity(c.ref(), c.identifiedKey());
+        checker.canUpdateEntity(c.ref(), c.identifiedKey(), c.actions());
         break;
       case DELETE_ENTITY:
-        checker.canDeleteEntity(c.ref(), c.identifiedKey());
+        checker.canDeleteEntity(c.ref(), c.identifiedKey(), c.actions());
         break;
-      case VIEW_REFLOG:
-        checker.canViewRefLog();
+      case READ_REPOSITORY_CONFIG:
+        checker.canReadRepositoryConfig(c.repositoryConfigType());
+        break;
+      case UPDATE_REPOSITORY_CONFIG:
+        checker.canUpdateRepositoryConfig(c.repositoryConfigType());
         break;
       default:
         throw new IllegalArgumentException("Unsupported: " + c);
@@ -190,7 +192,7 @@ public class TestBatchAccessChecker {
 
   static BatchAccessChecker newAccessChecker(
       Function<Collection<Check>, Map<Check, String>> check) {
-    return new AbstractBatchAccessChecker() {
+    return new AbstractBatchAccessChecker(apiContext("Nessie", 1)) {
       @Override
       public Map<Check, String> check() {
         return check.apply(getChecks());

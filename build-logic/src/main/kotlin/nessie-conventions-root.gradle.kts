@@ -16,6 +16,7 @@
 
 // Nessie root project
 
+import copiedcode.CopiedCodeCheckerPlugin
 import java.util.Properties
 import org.jetbrains.gradle.ext.ActionDelegationConfig
 import org.jetbrains.gradle.ext.copyright
@@ -35,43 +36,52 @@ plugins {
 loadNessieProjects(rootProject)
 
 val projectName = rootProject.file("ide-name.txt").readText().trim()
-val ideName = "$projectName ${rootProject.version.toString().replace(Regex("^([0-9.]+).*"), "$1")}"
+val ideName =
+  "$projectName ${rootProject.version.toString().replace(Regex("^([0-9.]+).*"), "$1")} [in ../${rootProject.rootDir.name}]"
 
 if (System.getProperty("idea.sync.active").toBoolean()) {
+
   idea {
     module {
       name = ideName
       isDownloadSources = true // this is the default BTW
       inheritOutputDirs = true
 
-      val sparkScalaProps = Properties()
-      val integrationsDir = projectDir.resolve("integrations")
+      // The NesQuEIT project includes the Nessie sources as two Gradle builds - one for everything
+      // except Iceberg and one for the rest that has dependencies to Iceberg, which uses
+      // `nessie-iceberg/` as the build root directory. This variable needs to refer to the Nessie
+      // "main source" root directory.
+      val nessieRootProjectDir =
+        if (projectDir.resolve("integrations").exists()) projectDir else projectDir.resolve("..")
+      val integrationsDir = nessieRootProjectDir.resolve("integrations")
       val sparkExtensionsDir = integrationsDir.resolve("spark-extensions")
+      val buildToolsIT = nessieRootProjectDir.resolve("build-tools-integration-tests")
+
+      val sparkScalaProps = Properties()
       integrationsDir.resolve("spark-scala.properties").reader().use { sparkScalaProps.load(it) }
-      val sparkExtensionsBuildDirs =
-        sparkScalaProps
-          .getProperty("sparkVersions")
-          .split(",")
-          .map { sparkVersion -> sparkExtensionsDir.resolve("v$sparkVersion/build") }
-          .toSet()
-      val buildToolsIT = projectDir.resolve("build-tools-integration-tests")
+
       excludeDirs =
         excludeDirs +
           setOf(
             // Do not index the .mvn folders
-            projectDir.resolve(".mvn"),
+            nessieRootProjectDir.resolve(".mvn"),
             // And more...
-            projectDir.resolve(".idea"),
-            projectDir.resolve("site/venv"),
-            projectDir.resolve("nessie-iceberg/.gradle"),
+            nessieRootProjectDir.resolve(".idea"),
+            nessieRootProjectDir.resolve("site/venv"),
+            nessieRootProjectDir.resolve("nessie-iceberg/.gradle"),
             buildToolsIT.resolve(".gradle"),
             buildToolsIT.resolve("build"),
             buildToolsIT.resolve("target"),
             // somehow those are not automatically excluded...
             integrationsDir.resolve("spark-extensions-base/build"),
-            integrationsDir.resolve("spark-extensions-basetests/build")
+            integrationsDir.resolve("spark-extensions-basetests/build"),
           ) +
-          sparkExtensionsBuildDirs
+          allprojects.map { prj -> prj.layout.buildDirectory.asFile.get() } +
+          sparkScalaProps
+            .getProperty("sparkVersions")
+            .split(",")
+            .map { sparkVersion -> sparkExtensionsDir.resolve("v$sparkVersion/build") }
+            .toSet()
     }
 
     this.project.settings {
@@ -98,7 +108,7 @@ if (System.getProperty("idea.sync.active").toBoolean()) {
             .resolve("gradle.properties")
             .reader()
             .use {
-              val rules = java.util.Properties()
+              val rules = Properties()
               rules.load(it)
               rules
             }
@@ -157,5 +167,14 @@ abstract class ListChildProjectsTask : DefaultTask() {
         .filter { it.path.startsWith(prefix) }
         .forEach { writer.write("$exclude${it.path}:$task\n") }
     }
+  }
+}
+
+apply<CopiedCodeCheckerPlugin>()
+
+allprojects {
+  tasks.register("codeChecks").configure {
+    group = "build"
+    description = "Runs code style and license checks"
   }
 }

@@ -15,14 +15,9 @@
  */
 package org.projectnessie.versioned.storage.bigtable;
 
-import com.google.api.gax.retrying.RetrySettings;
-import com.google.cloud.bigtable.data.v2.BigtableDataSettings;
-import com.google.cloud.bigtable.data.v2.stub.EnhancedBigtableStubSettings;
-import java.util.List;
-import javax.annotation.Nonnull;
+import jakarta.annotation.Nonnull;
 import org.projectnessie.versioned.storage.common.persist.Backend;
 import org.projectnessie.versioned.storage.common.persist.BackendFactory;
-import org.threeten.bp.Duration;
 
 public class BigTableBackendFactory implements BackendFactory<BigTableBackendConfig> {
 
@@ -30,43 +25,21 @@ public class BigTableBackendFactory implements BackendFactory<BigTableBackendCon
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
   public String name() {
     return NAME;
   }
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
   public BigTableBackendConfig newConfigInstance() {
+    // Note: this method should not be called and will throw because dataClient is not set.
+    // BigTableBackendConfig instances cannot be constructed using this method.
     return BigTableBackendConfig.builder().build();
   }
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public Backend buildBackend(@Nonnull @jakarta.annotation.Nonnull BigTableBackendConfig config) {
-    return new BigTableBackend(config, false);
-  }
-
-  public static void configureDataClient(BigtableDataSettings.Builder settings) {
-    Duration maxRetryDelay = Duration.ofSeconds(1);
-
-    EnhancedBigtableStubSettings.Builder stubSettings = settings.stubSettings();
-    for (RetrySettings.Builder retrySettings :
-        List.of(
-            stubSettings.readRowSettings().retrySettings(),
-            stubSettings.readRowsSettings().retrySettings(),
-            stubSettings.bulkReadRowsSettings().retrySettings(),
-            stubSettings.mutateRowSettings().retrySettings(),
-            stubSettings.bulkMutateRowsSettings().retrySettings(),
-            stubSettings.readChangeStreamSettings().retrySettings())) {
-      // The max-retry-delay is 1 minute, which is pretty high for us.
-      retrySettings.setMaxRetryDelay(maxRetryDelay);
-    }
-
-    // Enable tracing & metrics
-    BigtableDataSettings.enableOpenCensusStats();
-    BigtableDataSettings.enableGfeOpenCensusStats();
+  public Backend buildBackend(@Nonnull BigTableBackendConfig config) {
+    return new BigTableBackend(config);
   }
 }

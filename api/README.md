@@ -3,7 +3,7 @@
 The Nessie `ConfigApi` (v2) allows the caller to retrieve the server's 'specVersion', which is a semver string
 defining the behaviour of the Nessie Server.
 
-The currently defined Nessie Specification is [2.0.0-beta.1](NESSIE-SPEC-2-0.md).
+The currently defined Nessie Specification version is [2.2.0](NESSIE-SPEC-2-0.md).
 
 # Nessie Model and API
 
@@ -33,9 +33,7 @@ Clients built in `java` should build against the API of the `client` module.
 Clients build in other languages can generate language-specific bindings from the published OpenAPI specification of
 the Nessie API.
 
-The published version of the Nessie OpenAPI specification is available on [SwaggerHub](https://app.swaggerhub.com/apis/projectnessie/nessie).
-
-The current development version is available from a running Nessie server at http://localhost:19120/q/swagger-ui.
+The current development version is available from a running Nessie server at http://localhost:9000/q/swagger-ui.
 
 # Migrating from API v1 to v2
 

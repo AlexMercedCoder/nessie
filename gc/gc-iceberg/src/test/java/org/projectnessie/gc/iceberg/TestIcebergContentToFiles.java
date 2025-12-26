@@ -15,28 +15,38 @@
  */
 package org.projectnessie.gc.iceberg;
 
+import static java.util.Collections.singletonList;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.projectnessie.gc.contents.ContentReference.icebergContent;
 import static org.projectnessie.gc.iceberg.mocks.IcebergFileIOMocking.dataFilePath;
 import static org.projectnessie.gc.iceberg.mocks.IcebergFileIOMocking.manifestFileLocation;
 import static org.projectnessie.gc.iceberg.mocks.IcebergFileIOMocking.manifestListLocation;
 import static org.projectnessie.gc.iceberg.mocks.IcebergFileIOMocking.tableBase;
 import static org.projectnessie.gc.iceberg.mocks.IcebergFileIOMocking.tableMetadataLocation;
+import static org.projectnessie.gc.iceberg.mocks.IcebergFileIOMocking.viewMetadataLocation;
+import static org.projectnessie.model.Content.Type.ICEBERG_TABLE;
+import static org.projectnessie.model.Content.Type.ICEBERG_VIEW;
 
 import com.google.common.collect.ImmutableSet;
-import java.net.URI;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Stream;
 import org.apache.iceberg.ManifestFile;
+import org.apache.iceberg.Schema;
 import org.apache.iceberg.Snapshot;
 import org.apache.iceberg.TableMetadata;
+import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.exceptions.NotFoundException;
 import org.apache.iceberg.io.FileIO;
 import org.apache.iceberg.io.InputFile;
+import org.apache.iceberg.types.Types;
+import org.apache.iceberg.view.ImmutableSQLViewRepresentation;
+import org.apache.iceberg.view.ImmutableViewVersion;
+import org.apache.iceberg.view.ViewMetadata;
 import org.assertj.core.api.SoftAssertions;
 import org.assertj.core.api.junit.jupiter.InjectSoftAssertions;
 import org.assertj.core.api.junit.jupiter.SoftAssertionsExtension;
@@ -53,6 +63,7 @@ import org.projectnessie.gc.iceberg.mocks.ImmutableMockTableMetadata;
 import org.projectnessie.gc.iceberg.mocks.MockSnapshot;
 import org.projectnessie.gc.iceberg.mocks.MockTableMetadata;
 import org.projectnessie.model.ContentKey;
+import org.projectnessie.storage.uri.StorageUri;
 
 /**
  * Unit test that uses mocked Iceberg content (metadata, manifest list, manifest file) to identify
@@ -67,36 +78,73 @@ public class TestIcebergContentToFiles {
   @InjectSoftAssertions SoftAssertions soft;
 
   static Stream<Arguments> contentToFiles() {
-    String table1 = UUID.randomUUID().toString();
-    MockSnapshot snapshot1 =
+    String tableId = UUID.randomUUID().toString();
+    String tableMetaLocation = tableMetadataLocation(tableId, 0);
+    MockSnapshot tableSnapshot =
         ImmutableMockSnapshot.builder()
-            .manifestListLocation(manifestListLocation(table1, 0))
-            .tableUuid(table1)
+            .manifestListLocation(manifestListLocation(tableId, 0))
+            .tableUuid(tableId)
             .build();
-    MockTableMetadata tableMetadata1 =
+    MockTableMetadata tableMetadata =
         ImmutableMockTableMetadata.builder()
-            .location(tableBase(table1))
-            .tableUuid(table1)
-            .addSnapshots(snapshot1)
+            .location(tableBase(tableId))
+            .tableUuid(tableId)
+            .addSnapshots(tableSnapshot)
             .build();
-    IcebergFileIOMocking fileIO1 = IcebergFileIOMocking.forSingleSnapshot(tableMetadata1);
-    ContentReference contentReference1 =
-        ContentReference.icebergTable(
-            "cid", "12345678", ContentKey.of("foo", "bar"), tableMetadataLocation(table1, 0), 0L);
-    URI base1 = URI.create(tableBase(table1));
+    IcebergFileIOMocking fileIO1 = IcebergFileIOMocking.forSingleSnapshot(tableMetadata);
+    ContentReference contentReferenceTable =
+        icebergContent(
+            ICEBERG_TABLE, "cid", "12345678", ContentKey.of("foo", "bar"), tableMetaLocation, 0L);
+    StorageUri baseTable = StorageUri.of(tableBase(tableId));
 
-    Arguments args1 =
+    String viewId = UUID.randomUUID().toString();
+    String viewMetaLocation = viewMetadataLocation(viewId, 42);
+    Schema viewSchema =
+        new Schema(1, singletonList(Types.NestedField.required(1, "foo", Types.IntegerType.get())));
+    ViewMetadata viewMetadata =
+        ViewMetadata.builder()
+            .assignUUID(viewId)
+            .addSchema(viewSchema)
+            .setCurrentVersion(
+                ImmutableViewVersion.builder()
+                    .versionId(42)
+                    .schemaId(viewSchema.schemaId())
+                    .addRepresentations(
+                        ImmutableSQLViewRepresentation.builder()
+                            .sql("SELECT")
+                            .dialect("nessie")
+                            .build())
+                    .timestampMillis(0L)
+                    .defaultNamespace(Namespace.of("foo"))
+                    .build(),
+                viewSchema)
+            .setLocation(tableBase(viewId))
+            .build();
+    IcebergFileIOMocking fileIO2 = IcebergFileIOMocking.forSingleVersion(viewMetadata);
+    ContentReference contentReferenceView =
+        icebergContent(
+            ICEBERG_VIEW, "cid", "12345678", ContentKey.of("foo", "bar"), viewMetaLocation, 0L);
+    StorageUri baseView = StorageUri.of(tableBase(viewId));
+
+    Arguments argsTable =
         arguments(
             fileIO1,
-            contentReference1,
+            contentReferenceTable,
             ImmutableSet.of(
-                URI.create(tableMetadataLocation(table1, 0)),
-                URI.create(manifestListLocation(table1, 0)),
-                URI.create(manifestFileLocation(table1, 0, 0)),
-                URI.create(dataFilePath(table1, 0, 0, 0))),
-            ImmutableSet.of(base1));
+                StorageUri.of(tableMetaLocation),
+                StorageUri.of(manifestListLocation(tableId, 0)),
+                StorageUri.of(manifestFileLocation(tableId, 0, 0)),
+                StorageUri.of(dataFilePath(tableId, 0, 0, 0))),
+            ImmutableSet.of(baseTable));
 
-    return Stream.of(args1);
+    Arguments argsView =
+        arguments(
+            fileIO2,
+            contentReferenceView,
+            ImmutableSet.of(StorageUri.of(viewMetaLocation)),
+            ImmutableSet.of(baseView));
+
+    return Stream.of(argsTable, argsView);
   }
 
   @ParameterizedTest
@@ -104,14 +152,14 @@ public class TestIcebergContentToFiles {
   public void contentToFiles(
       IcebergFileIOMocking fileIO,
       ContentReference contentReference,
-      Set<URI> expectedFiles,
-      Set<URI> basePaths) {
+      Set<StorageUri> expectedFiles,
+      Set<StorageUri> basePaths) {
     IcebergContentToFiles contentToFiles = IcebergContentToFiles.builder().io(fileIO).build();
     try (Stream<FileReference> extractFiles = contentToFiles.extractFiles(contentReference)) {
       assertThat(extractFiles)
           .allSatisfy(f -> assertThat(f.base()).isIn(basePaths))
-          .allSatisfy(f -> assertThat(f.base()).extracting(URI::isAbsolute).isEqualTo(true))
-          .allSatisfy(f -> assertThat(f.path()).extracting(URI::isAbsolute).isEqualTo(false))
+          .allSatisfy(f -> assertThat(f.base()).extracting(StorageUri::scheme).isNotNull())
+          .allSatisfy(f -> assertThat(f.path()).extracting(StorageUri::scheme).isNull())
           .allSatisfy(f -> assertThat(f.modificationTimeMillisEpoch()).isEqualTo(-1L))
           .allSatisfy(f -> assertThat(f.absolutePath()).isEqualTo(f.base().resolve(f.path())))
           .map(FileReference::absolutePath)
@@ -126,13 +174,13 @@ public class TestIcebergContentToFiles {
 
     when(inputFile.location()).thenReturn("/blah.metadata.json");
     when(inputFile.newStream()).thenThrow(new NotFoundException("mocked"));
-    when(fileIO.newInputFile(any())).thenReturn(inputFile);
+    when(fileIO.newInputFile(any(String.class))).thenReturn(inputFile);
 
     IcebergContentToFiles contentToFiles = IcebergContentToFiles.builder().io(fileIO).build();
     try (Stream<FileReference> extractFiles =
         contentToFiles.extractFiles(
-            ContentReference.icebergTable(
-                "cid", "1234", ContentKey.of("foo"), "/blah.metadata.json", 42L))) {
+            icebergContent(
+                ICEBERG_TABLE, "cid", "1234", ContentKey.of("foo"), "/blah.metadata.json", 42L))) {
       assertThat(extractFiles).isEmpty();
     }
   }
@@ -140,7 +188,7 @@ public class TestIcebergContentToFiles {
   @Test
   public void safeAgainstMissingTrailingSlash() {
     String noSlash = "file:///foo/bar/baz";
-    URI expectedBaseUri = URI.create(noSlash + "/");
+    StorageUri expectedBaseUri = StorageUri.of(noSlash + "/");
 
     TableMetadata tableMetadataWithTrailingSlash = mock(TableMetadata.class);
     TableMetadata tableMetadataWithoutTrailingSlash = mock(TableMetadata.class);
@@ -149,7 +197,7 @@ public class TestIcebergContentToFiles {
     when(tableMetadataWithoutTrailingSlash.location()).thenReturn(noSlash);
 
     ContentReference contentReference =
-        ContentReference.icebergTable("cid", "abcd", ContentKey.of("abc"), "/table-metadata", 42L);
+        icebergContent(ICEBERG_TABLE, "cid", "abcd", ContentKey.of("abc"), "/table-metadata", 42L);
 
     soft.assertThat(IcebergContentToFiles.baseUri(tableMetadataWithTrailingSlash, contentReference))
         .isEqualTo(expectedBaseUri);
@@ -161,51 +209,37 @@ public class TestIcebergContentToFiles {
   @Test
   public void checkUri() {
     ContentReference contentReference =
-        ContentReference.icebergTable("a", "b", ContentKey.of("foo"), "x", 42);
+        icebergContent(ICEBERG_TABLE, "a", "b", ContentKey.of("foo"), "x", 42);
 
-    soft.assertThat(
-            IcebergContentToFiles.checkUri("meep", URI.create("/foo/bar/baz"), contentReference))
-        .isEqualTo(URI.create("file:///foo/bar/baz"));
-    soft.assertThat(
-            IcebergContentToFiles.checkUri(
-                "meep", URI.create("file:///foo/bar/baz"), contentReference))
-        .isEqualTo(URI.create("file:///foo/bar/baz"));
-    soft.assertThat(
-            IcebergContentToFiles.checkUri(
-                "meep", URI.create("http://foo/bar/baz"), contentReference))
-        .isEqualTo(URI.create("http://foo/bar/baz"));
+    soft.assertThat(IcebergContentToFiles.checkUri("meep", "/foo/bar/baz", contentReference))
+        .isEqualTo(StorageUri.of("file:///foo/bar/baz"));
+    soft.assertThat(IcebergContentToFiles.checkUri("meep", "file:///foo/bar/baz", contentReference))
+        .isEqualTo(StorageUri.of("file:///foo/bar/baz"));
+    soft.assertThat(IcebergContentToFiles.checkUri("meep", "http://foo/bar/baz", contentReference))
+        .isEqualTo(StorageUri.of("http://foo/bar/baz"));
     soft.assertThatIllegalArgumentException()
-        .isThrownBy(
-            () ->
-                IcebergContentToFiles.checkUri("meep", URI.create("foo/bar/baz"), contentReference))
+        .isThrownBy(() -> IcebergContentToFiles.checkUri("meep", "foo/bar/baz", contentReference))
         .withMessage(
             "Iceberg content reference points to the meep URI '%s' as content-key foo on commit b without a scheme and with a relative path, which is not supported.",
-            URI.create("foo/bar/baz"));
+            StorageUri.of("foo/bar/baz"));
 
     // Note: the following is a completely valid file-scheme URI, pointing to the root directory
     // on the host "location"!
     soft.assertThatIllegalArgumentException()
         .isThrownBy(
-            () ->
-                IcebergContentToFiles.checkUri(
-                    "meep", URI.create("file://location"), contentReference))
+            () -> IcebergContentToFiles.checkUri("meep", "file://location", contentReference))
         .withMessageContaining("points to the host-specific meep URI ");
 
-    soft.assertThat(
-            IcebergContentToFiles.checkUri("meep", URI.create("file:/location"), contentReference))
-        .isEqualTo(URI.create("file:///location"));
+    soft.assertThat(IcebergContentToFiles.checkUri("meep", "file:/location", contentReference))
+        .isEqualTo(StorageUri.of("file:///location"));
 
     soft.assertThatIllegalArgumentException()
-        .isThrownBy(
-            () -> IcebergContentToFiles.checkUri("meep", URI.create("location"), contentReference))
+        .isThrownBy(() -> IcebergContentToFiles.checkUri("meep", "location", contentReference))
         .withMessageContaining("points to the meep URI ")
         .withMessageContaining("without a scheme and with a relative path, which is not supported");
 
     soft.assertThatIllegalArgumentException()
-        .isThrownBy(
-            () ->
-                IcebergContentToFiles.checkUri(
-                    "meep", URI.create("file:location"), contentReference))
+        .isThrownBy(() -> IcebergContentToFiles.checkUri("meep", "file:location", contentReference))
         .withMessageContaining("points to the meep URI ")
         .withMessageContaining("with a non-absolute scheme-specific-part location");
   }
@@ -213,74 +247,74 @@ public class TestIcebergContentToFiles {
   @Test
   public void elementaryUrisFromSnapshot() {
     ContentReference contentReference =
-        ContentReference.icebergTable("cid", "abcd", ContentKey.of("abc"), "/table-metadata", 42L);
+        icebergContent(ICEBERG_TABLE, "cid", "abcd", ContentKey.of("abc"), "/table-metadata", 42L);
 
     soft.assertThat(IcebergContentToFiles.elementaryUrisFromSnapshot(null, contentReference))
-        .containsExactly(URI.create("file:///table-metadata"));
+        .containsExactly(StorageUri.of("file:///table-metadata"));
 
     Snapshot snapshot = mock(Snapshot.class);
     when(snapshot.manifestListLocation()).thenReturn(null);
     soft.assertThat(IcebergContentToFiles.elementaryUrisFromSnapshot(snapshot, contentReference))
-        .containsExactly(URI.create("file:///table-metadata"));
+        .containsExactly(StorageUri.of("file:///table-metadata"));
 
     snapshot = mock(Snapshot.class);
     when(snapshot.manifestListLocation()).thenReturn("/manifest-list");
     soft.assertThat(IcebergContentToFiles.elementaryUrisFromSnapshot(snapshot, contentReference))
         .containsExactlyInAnyOrder(
-            URI.create("file:///table-metadata"), URI.create("file:///manifest-list"));
+            StorageUri.of("file:///table-metadata"), StorageUri.of("file:///manifest-list"));
 
     snapshot = mock(Snapshot.class);
     when(snapshot.manifestListLocation()).thenReturn("meep://manifest-list");
     soft.assertThat(IcebergContentToFiles.elementaryUrisFromSnapshot(snapshot, contentReference))
         .containsExactlyInAnyOrder(
-            URI.create("file:///table-metadata"), URI.create("meep://manifest-list"));
+            StorageUri.of("file:///table-metadata"), StorageUri.of("meep://manifest-list"));
   }
 
   @Test
   public void checkUriForBase() {
     ContentReference contentReference =
-        ContentReference.icebergTable("cid", "abcd", ContentKey.of("abc"), "/table-metadata", 42L);
+        icebergContent(ICEBERG_TABLE, "cid", "abcd", ContentKey.of("abc"), "/table-metadata", 42L);
 
     TableMetadata metadata = mock(TableMetadata.class);
     when(metadata.location()).thenReturn("meep://location");
     soft.assertThat(IcebergContentToFiles.baseUri(metadata, contentReference))
-        .isEqualTo(URI.create("meep://location/"));
+        .isEqualTo(StorageUri.of("meep://location/"));
 
     metadata = mock(TableMetadata.class);
     when(metadata.location()).thenReturn("/location");
     soft.assertThat(IcebergContentToFiles.baseUri(metadata, contentReference))
-        .isEqualTo(URI.create("file:///location/"));
+        .isEqualTo(StorageUri.of("file:///location/"));
 
     metadata = mock(TableMetadata.class);
     when(metadata.location()).thenReturn("file:/location");
     soft.assertThat(IcebergContentToFiles.baseUri(metadata, contentReference))
-        .isEqualTo(URI.create("file:///location/"));
+        .isEqualTo(StorageUri.of("file:///location/"));
 
     metadata = mock(TableMetadata.class);
     when(metadata.location()).thenReturn("file:///location");
     soft.assertThat(IcebergContentToFiles.baseUri(metadata, contentReference))
-        .isEqualTo(URI.create("file:///location/"));
+        .isEqualTo(StorageUri.of("file:///location/"));
   }
 
   @Test
   public void checkUriForManifest() {
     ContentReference contentReference =
-        ContentReference.icebergTable("cid", "abcd", ContentKey.of("abc"), "/table-metadata", 42L);
+        icebergContent(ICEBERG_TABLE, "cid", "abcd", ContentKey.of("abc"), "/table-metadata", 42L);
 
     ManifestFile manifestFile = mock(ManifestFile.class);
     when(manifestFile.path()).thenReturn("file:/foo/bar");
     soft.assertThat(IcebergContentToFiles.manifestFileUri(manifestFile, contentReference))
-        .isEqualTo(URI.create("file:///foo/bar"));
+        .isEqualTo(StorageUri.of("file:///foo/bar"));
 
     manifestFile = mock(ManifestFile.class);
     when(manifestFile.path()).thenReturn("file:///foo/bar");
     soft.assertThat(IcebergContentToFiles.manifestFileUri(manifestFile, contentReference))
-        .isEqualTo(URI.create("file:///foo/bar"));
+        .isEqualTo(StorageUri.of("file:///foo/bar"));
 
     manifestFile = mock(ManifestFile.class);
     when(manifestFile.path()).thenReturn("/foo/bar");
     soft.assertThat(IcebergContentToFiles.manifestFileUri(manifestFile, contentReference))
-        .isEqualTo(URI.create("file:///foo/bar"));
+        .isEqualTo(StorageUri.of("file:///foo/bar"));
 
     ManifestFile manifestFile2 = mock(ManifestFile.class);
     when(manifestFile2.path()).thenReturn(null);
@@ -292,15 +326,15 @@ public class TestIcebergContentToFiles {
   @Test
   public void checkUriForDataFile() {
     ContentReference contentReference =
-        ContentReference.icebergTable("cid", "abcd", ContentKey.of("abc"), "/table-metadata", 42L);
+        icebergContent(ICEBERG_TABLE, "cid", "abcd", ContentKey.of("abc"), "/table-metadata", 42L);
 
     soft.assertThat(IcebergContentToFiles.dataFileUri("file:/foo/bar", contentReference))
-        .isEqualTo(URI.create("file:///foo/bar"));
+        .isEqualTo(StorageUri.of("file:///foo/bar"));
 
     soft.assertThat(IcebergContentToFiles.dataFileUri("file:///foo/bar", contentReference))
-        .isEqualTo(URI.create("file:///foo/bar"));
+        .isEqualTo(StorageUri.of("file:///foo/bar"));
 
     soft.assertThat(IcebergContentToFiles.dataFileUri("/foo/bar", contentReference))
-        .isEqualTo(URI.create("file:///foo/bar"));
+        .isEqualTo(StorageUri.of("file:///foo/bar"));
   }
 }

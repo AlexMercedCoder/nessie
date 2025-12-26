@@ -16,18 +16,21 @@
 package org.projectnessie.versioned.tests;
 
 import static com.google.common.collect.Lists.newArrayList;
-import static org.assertj.core.api.Assumptions.assumeThat;
-import static org.projectnessie.model.IdentifiedContentKey.IdentifiedElement.identifiedElement;
+import static org.assertj.core.groups.Tuple.tuple;
 import static org.projectnessie.versioned.VersionStore.KeyRestrictions.NO_KEY_RESTRICTIONS;
 import static org.projectnessie.versioned.testworker.OnRefOnly.newOnRef;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import org.assertj.core.api.SoftAssertions;
 import org.assertj.core.api.junit.jupiter.InjectSoftAssertions;
 import org.assertj.core.api.junit.jupiter.SoftAssertionsExtension;
+import org.assertj.core.groups.Tuple;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.projectnessie.model.ContentKey;
 import org.projectnessie.model.IdentifiedContentKey;
 import org.projectnessie.model.Namespace;
@@ -39,6 +42,7 @@ import org.projectnessie.versioned.Ref;
 import org.projectnessie.versioned.VersionStore;
 import org.projectnessie.versioned.VersionStore.KeyRestrictions;
 import org.projectnessie.versioned.paging.PaginationIterator;
+import org.projectnessie.versioned.testworker.OnRefOnly;
 
 @ExtendWith(SoftAssertionsExtension.class)
 public abstract class AbstractEntries extends AbstractNestedVersionStore {
@@ -50,8 +54,6 @@ public abstract class AbstractEntries extends AbstractNestedVersionStore {
 
   @Test
   public void entriesWrongParameters() {
-    assumeThat(isNewStorageModel()).isTrue();
-
     soft.assertThatIllegalArgumentException()
         .isThrownBy(
             () ->
@@ -90,8 +92,6 @@ public abstract class AbstractEntries extends AbstractNestedVersionStore {
 
   @Test
   public void entriesRanges() throws Exception {
-    assumeThat(isNewStorageModel()).isTrue();
-
     BranchName branch = BranchName.of("foo");
     ContentKey key1 = ContentKey.of("k1");
     ContentKey key2 = ContentKey.of("k2");
@@ -151,7 +151,7 @@ public abstract class AbstractEntries extends AbstractNestedVersionStore {
             keysAsList(
                 initialCommit,
                 KeyRestrictions.builder()
-                    .contentKeyPredicate(k -> k.toPathString().startsWith(key2.toPathString()))
+                    .contentKeyPredicate((k, t) -> k.toPathString().startsWith(key2.toPathString()))
                     .build()))
         .map(e -> e.getKey().contentKey())
         .containsExactlyInAnyOrder(key2, key2a, key2b, key2c, key2d, key23, key23a, key23b);
@@ -160,6 +160,35 @@ public abstract class AbstractEntries extends AbstractNestedVersionStore {
   List<KeyEntry> keysAsList(Ref ref, KeyRestrictions keyRestrictions) throws Exception {
     try (PaginationIterator<KeyEntry> keys = store().getKeys(ref, null, false, keyRestrictions)) {
       return newArrayList(keys);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {0, 1, 49, 50, 51, 100, 101})
+  void getKeys(int numKeys) throws Exception {
+    BranchName branch = BranchName.of("foo");
+    Hash head = store().create(branch, Optional.empty()).getHash();
+
+    List<Tuple> expected = new ArrayList<>();
+    if (numKeys > 0) {
+      CommitBuilder commit = commit("Initial Commit");
+      for (int i = 0; i < numKeys; i++) {
+        ContentKey key = ContentKey.of("key" + i);
+        OnRefOnly value = newOnRef("key" + i);
+        commit.put(key, value);
+        expected.add(tuple(key, value));
+      }
+      head = commit.toBranch(branch);
+    }
+
+    try (PaginationIterator<KeyEntry> iter =
+        store().getKeys(head, null, true, NO_KEY_RESTRICTIONS)) {
+      soft.assertThat(iter)
+          .toIterable()
+          .extracting(
+              keyEntry -> keyEntry.getKey().contentKey(),
+              keyEntry -> keyEntry.getContent().withId(null))
+          .containsExactlyInAnyOrderElementsOf(expected);
     }
   }
 
@@ -179,61 +208,63 @@ public abstract class AbstractEntries extends AbstractNestedVersionStore {
             .put(key23a, newOnRef("v23a"))
             .toBranch(branch);
 
-    ContentResult content2 = store().getValue(commit, key2);
-    ContentResult content2a = store().getValue(commit, key2a);
-    ContentResult content23 = store().getValue(commit, key23);
-    ContentResult content23a = store().getValue(commit, key23a);
+    ContentResult content2 = store().getValue(commit, key2, false);
+    ContentResult content2a = store().getValue(commit, key2a, false);
+    ContentResult content23 = store().getValue(commit, key23, false);
+    ContentResult content23a = store().getValue(commit, key23a, false);
 
     try (PaginationIterator<KeyEntry> iter =
-        store.getKeys(commit, null, false, NO_KEY_RESTRICTIONS)) {
+        store.getKeys(commit, null, true, NO_KEY_RESTRICTIONS)) {
       soft.assertThat(iter)
           .toIterable()
-          .extracting(KeyEntry::getKey)
+          .extracting(KeyEntry::getKey, KeyEntry::getContent)
           .containsExactlyInAnyOrder(
-              content2.identifiedKey(),
-              content2a.identifiedKey(),
-              content23.identifiedKey(),
-              content23a.identifiedKey());
+              tuple(content2.identifiedKey(), content2.content()),
+              tuple(content2a.identifiedKey(), content2a.content()),
+              tuple(content23.identifiedKey(), content23.content()),
+              tuple(content23a.identifiedKey(), content23a.content()));
     }
 
-    if (isNewStorageModel()) {
-      soft.assertThat(store.getIdentifiedKeys(commit, newArrayList(key2, key2a, key23, key23a)))
-          .containsExactly(
-              content2.identifiedKey(),
-              content2a.identifiedKey(),
-              content23.identifiedKey(),
-              content23a.identifiedKey());
+    soft.assertThat(store.getIdentifiedKeys(commit, newArrayList(key2, key2a, key23, key23a)))
+        .containsExactly(
+            content2.identifiedKey(),
+            content2a.identifiedKey(),
+            content23.identifiedKey(),
+            content23a.identifiedKey());
 
-      soft.assertThat(content2a.identifiedKey().elements())
-          .startsWith(
-              content2
-                  .identifiedKey()
-                  .elements()
-                  .toArray(new IdentifiedContentKey.IdentifiedElement[0]));
-      soft.assertThat(content23.identifiedKey().elements())
-          .startsWith(
-              content2
-                  .identifiedKey()
-                  .elements()
-                  .toArray(new IdentifiedContentKey.IdentifiedElement[0]));
-      soft.assertThat(content23a.identifiedKey().elements())
-          .startsWith(
-              content23
-                  .identifiedKey()
-                  .elements()
-                  .toArray(new IdentifiedContentKey.IdentifiedElement[0]));
-    } else {
-      soft.assertThat(store.getIdentifiedKeys(commit, newArrayList(key2, key2a, key23, key23a)))
-          .extracting(IdentifiedContentKey::lastElement)
-          .extracting(IdentifiedContentKey.IdentifiedElement::element)
-          .containsExactly(key2.getName(), key2a.getName(), key23.getName(), key23a.getName());
+    soft.assertThat(content2a.identifiedKey().elements())
+        .startsWith(
+            content2
+                .identifiedKey()
+                .elements()
+                .toArray(new IdentifiedContentKey.IdentifiedElement[0]));
+    soft.assertThat(content23.identifiedKey().elements())
+        .startsWith(
+            content2
+                .identifiedKey()
+                .elements()
+                .toArray(new IdentifiedContentKey.IdentifiedElement[0]));
+    soft.assertThat(content23a.identifiedKey().elements())
+        .startsWith(
+            content23
+                .identifiedKey()
+                .elements()
+                .toArray(new IdentifiedContentKey.IdentifiedElement[0]));
 
-      soft.assertThat(content2a.identifiedKey().lastElement())
-          .isEqualTo(identifiedElement(key2a.getName(), content2a.content().getId()));
-      soft.assertThat(content23.identifiedKey().lastElement())
-          .isEqualTo(identifiedElement(key23.getName(), content23.content().getId()));
-      soft.assertThat(content23a.identifiedKey().lastElement())
-          .isEqualTo(identifiedElement(key23a.getName(), content23a.content().getId()));
+    commit = commit("Second Commit").delete(key2a).toBranch(branch);
+
+    try (PaginationIterator<KeyEntry> iter =
+        store.getKeys(commit, null, true, NO_KEY_RESTRICTIONS)) {
+      soft.assertThat(iter)
+          .toIterable()
+          .extracting(KeyEntry::getKey, KeyEntry::getContent)
+          .containsExactlyInAnyOrder(
+              tuple(content2.identifiedKey(), content2.content()),
+              tuple(content23.identifiedKey(), content23.content()),
+              tuple(content23a.identifiedKey(), content23a.content()));
     }
+
+    soft.assertThat(store.getIdentifiedKeys(commit, newArrayList(key2a)))
+        .containsOnly(content2a.identifiedKey());
   }
 }

@@ -17,6 +17,7 @@ package org.projectnessie.versioned.storage.versionstore;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.collect.Maps.newHashMapWithExpectedSize;
 import static com.google.common.collect.Sets.newHashSetWithExpectedSize;
 import static java.util.Objects.requireNonNull;
 import static org.agrona.collections.Hashing.DEFAULT_LOAD_FACTOR;
@@ -32,6 +33,7 @@ import static org.projectnessie.versioned.storage.common.logic.CreateCommit.newC
 import static org.projectnessie.versioned.storage.common.logic.Logics.commitLogic;
 import static org.projectnessie.versioned.storage.common.logic.Logics.indexesLogic;
 import static org.projectnessie.versioned.storage.common.objtypes.CommitOp.contentIdMaybe;
+import static org.projectnessie.versioned.storage.common.objtypes.UniqueIdObj.uniqueId;
 import static org.projectnessie.versioned.storage.common.persist.ObjId.EMPTY_OBJ_ID;
 import static org.projectnessie.versioned.storage.versionstore.RefMapping.referenceConflictException;
 import static org.projectnessie.versioned.storage.versionstore.RefMapping.referenceNotFound;
@@ -41,6 +43,8 @@ import static org.projectnessie.versioned.storage.versionstore.VersionStoreImpl.
 import static org.projectnessie.versioned.store.DefaultStoreWorker.contentTypeForPayload;
 import static org.projectnessie.versioned.store.DefaultStoreWorker.payloadForContent;
 
+import jakarta.annotation.Nonnull;
+import jakarta.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -52,31 +56,29 @@ import java.util.UUID;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.ObjIntConsumer;
-import javax.annotation.Nonnull;
-import javax.annotation.Nullable;
 import org.agrona.collections.Object2IntHashMap;
 import org.projectnessie.error.BaseNessieClientServerException;
 import org.projectnessie.model.CommitMeta;
 import org.projectnessie.model.Content;
 import org.projectnessie.model.ContentKey;
+import org.projectnessie.model.Operation;
+import org.projectnessie.model.Operation.Delete;
+import org.projectnessie.model.Operation.Put;
+import org.projectnessie.model.Operation.Unchanged;
 import org.projectnessie.versioned.BranchName;
-import org.projectnessie.versioned.Commit;
 import org.projectnessie.versioned.CommitResult;
 import org.projectnessie.versioned.CommitValidation;
-import org.projectnessie.versioned.Delete;
 import org.projectnessie.versioned.Hash;
 import org.projectnessie.versioned.ImmutableCommitResult;
 import org.projectnessie.versioned.ImmutableCommitValidation;
-import org.projectnessie.versioned.Operation;
-import org.projectnessie.versioned.Put;
 import org.projectnessie.versioned.ReferenceConflictException;
 import org.projectnessie.versioned.ReferenceNotFoundException;
-import org.projectnessie.versioned.Unchanged;
 import org.projectnessie.versioned.VersionStore.CommitValidator;
 import org.projectnessie.versioned.VersionStoreException;
 import org.projectnessie.versioned.storage.common.exceptions.CommitConflictException;
 import org.projectnessie.versioned.storage.common.exceptions.ObjNotFoundException;
 import org.projectnessie.versioned.storage.common.exceptions.ObjTooLargeException;
+import org.projectnessie.versioned.storage.common.exceptions.UnknownOperationResultException;
 import org.projectnessie.versioned.storage.common.indexes.StoreIndex;
 import org.projectnessie.versioned.storage.common.indexes.StoreIndexElement;
 import org.projectnessie.versioned.storage.common.indexes.StoreKey;
@@ -91,6 +93,7 @@ import org.projectnessie.versioned.storage.common.persist.Obj;
 import org.projectnessie.versioned.storage.common.persist.ObjId;
 import org.projectnessie.versioned.storage.common.persist.Persist;
 import org.projectnessie.versioned.storage.common.persist.Reference;
+import org.projectnessie.versioned.storage.common.persist.StoredObjResult;
 
 class CommitImpl extends BaseCommitHelper {
   private final StoreIndex<CommitOp> headIndex;
@@ -99,11 +102,11 @@ class CommitImpl extends BaseCommitHelper {
   private final CommitLogic commitLogic;
 
   CommitImpl(
-      @Nonnull @jakarta.annotation.Nonnull BranchName branch,
-      @Nonnull @jakarta.annotation.Nonnull Optional<Hash> referenceHash,
-      @Nonnull @jakarta.annotation.Nonnull Persist persist,
-      @Nonnull @jakarta.annotation.Nonnull Reference reference,
-      @Nullable @jakarta.annotation.Nullable CommitObj head)
+      @Nonnull BranchName branch,
+      @Nonnull Optional<Hash> referenceHash,
+      @Nonnull Persist persist,
+      @Nonnull Reference reference,
+      @Nullable CommitObj head)
       throws ReferenceNotFoundException {
     super(branch, referenceHash, persist, reference, head);
     commitLogic = commitLogic(persist);
@@ -143,14 +146,18 @@ class CommitImpl extends BaseCommitHelper {
   static class CommitRetryState {
     final Set<ObjId> storedContents = new HashSet<>();
     final Map<ContentKey, String> generatedContentIds = new HashMap<>();
+    // Contains the ID of the _successfully_ persisted CommitObj. This is not included in
+    // `storedContents`, because "contents" can be reused, but we have to check for hash-collisions
+    // for CommitObj.
+    ObjId commitPersisted;
   }
 
-  CommitResult<Commit> commit(
-      @Nonnull @jakarta.annotation.Nonnull Optional<?> retryState,
-      @Nonnull @jakarta.annotation.Nonnull CommitMeta metadata,
-      @Nonnull @jakarta.annotation.Nonnull List<Operation> operations,
-      @Nonnull @jakarta.annotation.Nonnull CommitValidator validator,
-      @Nonnull @jakarta.annotation.Nonnull BiConsumer<ContentKey, String> addedContents)
+  CommitResult commit(
+      @Nonnull Optional<?> retryState,
+      @Nonnull CommitMeta metadata,
+      @Nonnull List<Operation> operations,
+      @Nonnull CommitValidator validator,
+      @Nonnull BiConsumer<ContentKey, String> addedContents)
       throws ReferenceNotFoundException,
           ReferenceConflictException,
           RetryException,
@@ -161,9 +168,15 @@ class CommitImpl extends BaseCommitHelper {
     CommitRetryState commitRetryState =
         retryState.map(x -> (CommitRetryState) x).orElseGet(CommitRetryState::new);
 
+    // toStore holds the IDs of all (non-CommitObj) objects to be stored via
+    // `CommitLogic.storeCommit()`. If `storeCommit()` succeeds, we can add those IDs to
+    // `CommitRetryState.storedContents` to not store those objects during a retry.
+    // This mechanism ensures that we retry the store-objects in case that one fails with an
+    // `UnknownOperationResultException`.
+    Set<ObjId> toStore = new HashSet<>(commitRetryState.storedContents);
     Consumer<Obj> valueConsumer =
         obj -> {
-          if (commitRetryState.storedContents.add(obj.id())) {
+          if (toStore.add(obj.id())) {
             objectsToStore.add(obj);
           }
         };
@@ -184,11 +197,23 @@ class CommitImpl extends BaseCommitHelper {
 
     fromCommitMeta(metadata, commit);
 
+    CommitObj newHead;
     try {
-      CommitObj newHead = commitLogic.doCommit(commit.build(), objectsToStore);
+      CreateCommit createCommit = commit.build();
+      newHead = commitLogic.buildCommitObj(createCommit);
 
+      // If 'commitRetryState.storedContents' already contains the commit-ID, __we__ already
+      // successfully persisted that commit. This can happen, if the `Persist` implementation raised
+      // an `UnknownOperationResultException` in one of the following operations (reference bump for
+      // example).
+      StoredObjResult<CommitObj> stored = commitLogic.storeCommit(newHead, objectsToStore);
+      if (stored.obj().isPresent()) {
+        newHead = stored.obj().get();
+        commitRetryState.commitPersisted = newHead.id();
+        commitRetryState.storedContents.addAll(toStore);
+      }
       checkState(
-          newHead != null,
+          stored.stored() || newHead.id().equals(commitRetryState.commitPersisted),
           "Hash collision detected, a commit with the same parent commit, commit message, "
               + "headers/commit-metadata and operations already exists");
 
@@ -196,7 +221,7 @@ class CommitImpl extends BaseCommitHelper {
 
       commitRetryState.generatedContentIds.forEach(addedContents);
 
-      return ImmutableCommitResult.<Commit>builder()
+      return ImmutableCommitResult.builder()
           .commit(contentMapping.commitObjToCommit(true, newHead))
           .targetBranch((BranchName) RefMapping.referenceToNamedRef(reference))
           .build();
@@ -205,6 +230,8 @@ class CommitImpl extends BaseCommitHelper {
       throw referenceConflictException(e);
     } catch (ObjNotFoundException e) {
       throw referenceNotFound(e);
+    } catch (UnknownOperationResultException e) {
+      throw new RetryException(Optional.of(commitRetryState));
     }
   }
 
@@ -216,7 +243,7 @@ class CommitImpl extends BaseCommitHelper {
       ImmutableCommitValidation.Builder commitValidation)
       throws ObjNotFoundException, ReferenceConflictException {
     int num = operations.size();
-    Set<ContentKey> allKeys = newHashSetWithExpectedSize(num);
+    Map<ContentKey, Operation> allKeys = newHashMapWithExpectedSize(num);
 
     Set<StoreKey> storeKeysForHead =
         expectedIndex() != headIndex() ? newHashSetWithExpectedSize(operations.size()) : null;
@@ -225,7 +252,11 @@ class CommitImpl extends BaseCommitHelper {
     for (int i = 0; i < num; i++) {
       Operation operation = operations.get(i);
       ContentKey key = operation.getKey();
-      checkArgument(allKeys.add(key), "Duplicate key in commit operations: %s", key);
+      Operation previous = allKeys.put(key, operation);
+      checkDuplicateKey(previous, operation);
+      if (key.getElementCount() == 0) {
+        throw new IllegalStateException("Content key must not be empty");
+      }
       StoreKey storeKey = keyToStoreKey(key);
       storeKeys.add(storeKey);
       if (storeKeysForHead != null && operation instanceof Unchanged) {
@@ -234,7 +265,7 @@ class CommitImpl extends BaseCommitHelper {
     }
 
     expectedIndex().loadIfNecessary(new HashSet<>(storeKeys));
-    if (storeKeysForHead != null) {
+    if (storeKeysForHead != null && !storeKeysForHead.isEmpty()) {
       headIndex().loadIfNecessary(storeKeysForHead);
     }
 
@@ -284,6 +315,19 @@ class CommitImpl extends BaseCommitHelper {
     }
 
     validateNamespaces(newContent, deletedKeysAndPayload, headIndex());
+  }
+
+  private static void checkDuplicateKey(Operation previous, Operation current) {
+    if (previous != null) {
+      boolean reAdd =
+          previous instanceof Delete
+              && current instanceof Put
+              && ((Put) current).getContent().getId() == null;
+      if (!reAdd) {
+        throw new IllegalArgumentException(
+            "Duplicate key in commit operations: " + current.getKey());
+      }
+    }
   }
 
   private static void commitAddUnchanged(
@@ -385,7 +429,7 @@ class CommitImpl extends BaseCommitHelper {
       Map<ContentKey, Content> newContent,
       ImmutableCommitValidation.Builder commitValidation)
       throws ObjNotFoundException {
-    Content putValue = put.getValue();
+    Content putValue = put.getContent();
     ContentKey putKey = put.getKey();
     String putValueId = putValue.getId();
 
@@ -395,13 +439,22 @@ class CommitImpl extends BaseCommitHelper {
     String expectedContentIDString;
 
     StoreIndexElement<CommitOp> existing = expectedIndex.get(storeKey);
-    if (existing == null && putValueId != null) {
+
+    StoreKey deletedKey = null;
+    boolean storeKeyExists = existing != null && existing.content().action().exists();
+    if (!storeKeyExists && putValueId != null) {
       // Check for a Delete-op in the same commit, representing a rename operation.
       UUID expectedContentID = UUID.fromString(putValueId);
-      StoreKey deletedKey = deleted.remove(expectedContentID);
-      if (deletedKey != null) {
-        existing = expectedIndex.get(deletedKey);
-      }
+      deletedKey = deleted.remove(expectedContentID);
+      // consider a content as new content for rename operation to consider for namespace validation
+      newContent.put(putKey, putValue);
+    }
+    if (storeKeyExists && putValueId == null && deleted.containsValue(storeKey)) {
+      // Check for a Delete-op with same key in the same commit, representing a re-add operation.
+      deletedKey = storeKey;
+    }
+    if (deletedKey != null) {
+      existing = expectedIndex.get(deletedKey);
     }
 
     boolean exists = false;
@@ -416,18 +469,29 @@ class CommitImpl extends BaseCommitHelper {
                 ? existingContentID.toString()
                 : contentIdFromContent(existingValue);
 
-        checkArgument(
-            putValueId != null, "New value to update existing key '%s' has no content ID", putKey);
+        if (putValueId == null) {
 
-        checkArgument(
-            expectedContentIDString.equals(putValueId),
-            "Key '%s' already exists with content ID %s, which is different from "
-                + "the content ID %s in the operation",
-            putKey,
-            expectedContentIDString,
-            putValueId);
+          // re-add case: the existing content is deleted and the new content is added in the same
+          // commit
+          checkArgument(
+              deletedKey != null,
+              "New value to update existing key '%s' has no content ID",
+              putKey);
 
-        exists = true;
+          existingValue = null;
+
+        } else {
+
+          checkArgument(
+              expectedContentIDString.equals(putValueId),
+              "Key '%s' already exists with content ID %s, which is different from "
+                  + "the content ID %s in the operation",
+              putKey,
+              expectedContentIDString,
+              putValueId);
+
+          exists = true;
+        }
       }
     }
 
@@ -437,7 +501,18 @@ class CommitImpl extends BaseCommitHelper {
 
       putValueId =
           commitRetryState.generatedContentIds.computeIfAbsent(
-              putKey, x -> UUID.randomUUID().toString());
+              putKey,
+              x -> {
+                try {
+                  UUID generatedContentId;
+                  do {
+                    generatedContentId = UUID.randomUUID();
+                  } while (!persist.storeObj(uniqueId("content-id", generatedContentId)));
+                  return generatedContentId.toString();
+                } catch (ObjTooLargeException e) {
+                  throw new RuntimeException(e);
+                }
+              });
       putValue = putValue.withId(putValueId);
 
       newContent.put(putKey, putValue);
@@ -469,10 +544,10 @@ class CommitImpl extends BaseCommitHelper {
             exists ? UPDATE : CREATE));
   }
 
-  private String contentIdFromContent(@Nonnull @jakarta.annotation.Nonnull ObjId contentValueId)
-      throws ObjNotFoundException {
-    // TODO pre-load these objects, so they are bulk-loaded and in turn available via the cache
-    // https://github.com/projectnessie/nessie/issues/6673
+  private String contentIdFromContent(@Nonnull ObjId contentValueId) throws ObjNotFoundException {
+    // Ideally this should preload all required objects, so they are bulk-loaded and in turn
+    // available via the cache. But the probability of this function being called is effectively 0,
+    // so it is not worth the effort.
     return contentMapping.fetchContent(contentValueId).getId();
   }
 }

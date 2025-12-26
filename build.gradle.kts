@@ -14,15 +14,21 @@
  * limitations under the License.
  */
 
+import java.time.Duration
+import org.jetbrains.changelog.date
+import org.jetbrains.gradle.ext.settings
+import org.jetbrains.gradle.ext.taskTriggers
+
 plugins {
   eclipse
   id("nessie-conventions-root")
-  alias(libs.plugins.nexus.publish.plugin)
+  alias(libs.plugins.nmcp)
+  alias(libs.plugins.jetbrains.changelog)
 }
 
 apply<ReleaseSupportPlugin>()
 
-extra["maven.name"] = "Nessie"
+publishingHelper { mavenName = "Nessie" }
 
 description = "Transactional Catalog for Data Lakes"
 
@@ -38,8 +44,7 @@ val versionClientNessie: String =
 mapOf(
     "versionClientNessie" to versionClientNessie,
     "versionIceberg" to versionIceberg,
-    "versionJacoco" to libs.versions.jacoco.get(),
-    "versionJandex" to libs.versions.jandex.get()
+    "versionJandex" to libs.versions.jandex.get(),
   )
   .plus(loadProperties(file("integrations/spark-scala.properties")))
   .forEach { (k, v) -> extra[k.toString()] = v }
@@ -49,63 +54,137 @@ tasks.named<Wrapper>("wrapper").configure { distributionType = Wrapper.Distribut
 // Pass environment variables:
 //    ORG_GRADLE_PROJECT_sonatypeUsername
 //    ORG_GRADLE_PROJECT_sonatypePassword
-// OR in ~/.gradle/gradle.properties set
-//    sonatypeUsername
-//    sonatypePassword
-// Call targets:
-//    publishToSonatype
-//    closeAndReleaseSonatypeStagingRepository
-nexusPublishing {
-  transitionCheckOptions {
-    // default==60 (10 minutes), wait up to 60 minutes
-    maxRetries.set(360)
-    // default 10s
-    delayBetween.set(java.time.Duration.ofSeconds(10))
+// Gradle targets:
+//    publishAggregationToCentralPortal
+//    publishAggregationToCentralPortalSnapshots
+// Ref: Maven Central Publisher API:
+//    https://central.sonatype.org/publish/publish-portal-api/#uploading-a-deployment-bundle
+nmcpAggregation {
+  centralPortal {
+    username.value(provider { System.getenv("ORG_GRADLE_PROJECT_sonatypeUsername") })
+    password.value(provider { System.getenv("ORG_GRADLE_PROJECT_sonatypePassword") })
+    publishingType = if (System.getenv("CI") != null) "AUTOMATIC" else "USER_MANAGED"
+    publishingTimeout = Duration.ofMinutes(120)
+    validationTimeout = Duration.ofMinutes(120)
+    publicationName = "${project.name}-$version"
   }
-  repositories { sonatype() }
+  publishAllProjectsProbablyBreakingProjectIsolation()
 }
 
-val buildToolIntegrationGradle by tasks.registering(Exec::class)
+val buildToolIntegrationGradle by
+  tasks.registering(Exec::class) {
+    group = "Verification"
+    description =
+      "Checks whether the bom works fine with Gradle, requires preceding publishToMavenLocal in a separate Gradle invocation"
 
-buildToolIntegrationGradle.configure {
-  group = "Verification"
-  description =
-    "Checks whether the bom works fine with Gradle, requires preceding publishToMavenLocal in a separate Gradle invocation"
+    workingDir = file("build-tools-integration-tests")
+    commandLine("${project.projectDir}/gradlew", "-p", workingDir, "test")
+  }
 
-  workingDir = file("build-tools-integration-tests")
-  commandLine("${project.projectDir}/gradlew", "-p", workingDir, "test")
-}
+val buildToolIntegrationMaven by
+  tasks.registering(Exec::class) {
+    group = "Verification"
+    description =
+      "Checks whether the bom works fine with Maven, requires preceding publishToMavenLocal in a separate Gradle invocation"
 
-val buildToolIntegrationMaven by tasks.registering(Exec::class)
+    workingDir = file("build-tools-integration-tests")
+    commandLine("./mvnw", "--batch-mode", "clean", "test", "-Dnessie.version=${project.version}")
+  }
 
-buildToolIntegrationMaven.configure {
-  group = "Verification"
-  description =
-    "Checks whether the bom works fine with Maven, requires preceding publishToMavenLocal in a separate Gradle invocation"
+val buildToolsIntegrationTest by
+  tasks.registering {
+    group = "Verification"
+    description =
+      "Checks whether the bom works fine with build tools, requires preceding publishToMavenLocal in a separate Gradle invocation"
 
-  workingDir = file("build-tools-integration-tests")
-  commandLine("./mvnw", "--batch-mode", "clean", "test", "-Dnessie.version=${project.version}")
-}
+    dependsOn(buildToolIntegrationGradle)
+    dependsOn(buildToolIntegrationMaven)
+  }
 
-val buildToolsIntegrationTest by tasks.registering
+val buildToolsIntegrationClean by
+  tasks.registering(Delete::class) {
+    delete("build-tools-integration-tests/.gradle")
+    delete("build-tools-integration-tests/build")
+    delete("build-tools-integration-tests/target")
+  }
 
-buildToolsIntegrationTest.configure {
-  group = "Verification"
-  description =
-    "Checks whether the bom works fine with build tools, requires preceding publishToMavenLocal in a separate Gradle invocation"
-
-  dependsOn(buildToolIntegrationGradle)
-  dependsOn(buildToolIntegrationMaven)
-}
+val clean by tasks.getting(Delete::class) { dependsOn(buildToolsIntegrationClean) }
 
 publishingHelper {
-  nessieRepoName.set("nessie")
-  inceptionYear.set("2020")
+  nessieRepoName = "nessie"
+  inceptionYear = "2020"
 }
 
 spotless {
   kotlinGradle {
     // Must be repeated :( - there's no "addTarget" or so
-    target("nessie-iceberg/*.gradle.kts", "*.gradle.kts", "build-logic/*.gradle.kts")
+    target(
+      "nessie-iceberg/*.gradle.kts",
+      "*.gradle.kts",
+      "build-logic/*.gradle.kts",
+      "build-logic/src/**/*.kt*",
+    )
+  }
+}
+
+changelog {
+  repositoryUrl = "https://github.com/projectnessie/nessie"
+  title = "Nessie Changelog"
+  versionPrefix = "nessie-"
+  header = provider { "${version.get()} Release (${date()})" }
+  groups =
+    listOf(
+      "Highlights",
+      "Upgrade notes",
+      "Breaking changes",
+      "New Features",
+      "Changes",
+      "Deprecations",
+      "Fixes",
+      "Commits",
+    )
+  version = provider { project.version.toString() }
+}
+
+idea.project.settings { taskTriggers { afterSync(":nessie-protobuf-relocated:jar") } }
+
+copiedCodeChecks {
+  addDefaultContentTypes()
+
+  licenseFile = project.layout.projectDirectory.file("LICENSE")
+
+  scanDirectories {
+    register("build-logic") { srcDir("build-logic/src") }
+    register("misc") {
+      srcDir(".github")
+      srcDir("codestyle")
+      srcDir("design")
+      srcDir("grafana")
+    }
+    register("gradle") {
+      srcDir("gradle")
+      exclude("wrapper/*.jar")
+      exclude("wrapper/*.sha256")
+    }
+    register("helm") {
+      srcDir("helm")
+      exclude("nessie/LICENSE")
+    }
+    register("site") {
+      srcDir("site")
+      exclude("build/**")
+      exclude(".cache/**")
+      exclude("venv/**")
+      exclude("in-dev/generated-docs")
+    }
+    register("root") {
+      srcDir(".")
+      include("*")
+    }
+    register("tools") {
+      srcDir("tools")
+      include("dockerbuild")
+      include("tools/releases")
+    }
   }
 }

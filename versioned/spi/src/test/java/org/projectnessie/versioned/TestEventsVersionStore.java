@@ -35,7 +35,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
-import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -45,6 +44,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.projectnessie.model.CommitMeta;
 import org.projectnessie.model.ContentKey;
 import org.projectnessie.model.IcebergTable;
+import org.projectnessie.model.Operation;
+import org.projectnessie.model.Operation.Put;
 import org.projectnessie.versioned.VersionStore.CommitValidator;
 import org.projectnessie.versioned.VersionStore.MergeOp;
 import org.projectnessie.versioned.VersionStore.TransplantOp;
@@ -61,7 +62,6 @@ class TestEventsVersionStore {
   @Mock PaginationIterator<Commit> iteratorCommits;
   @Mock PaginationIterator<KeyEntry> iteratorKeyEntries;
   @Mock PaginationIterator<Diff> iteratorDiffs;
-  @Mock Stream<RefLogDetails> refLogDetails;
 
   BranchName branch1 = BranchName.of("branch1");
   BranchName branch2 = BranchName.of("branch2");
@@ -78,8 +78,8 @@ class TestEventsVersionStore {
 
   @Test
   void testCommitSuccess() throws Exception {
-    CommitResult<Commit> expectedResult =
-        CommitResult.<Commit>builder()
+    CommitResult expectedResult =
+        CommitResult.builder()
             .targetBranch(branch1)
             .commit(
                 ImmutableCommit.builder()
@@ -92,7 +92,7 @@ class TestEventsVersionStore {
             branch1, Optional.of(hash1), commitMeta, operations, validator, addedContents))
         .thenReturn(expectedResult);
     EventsVersionStore versionStore = new EventsVersionStore(delegate, sink);
-    CommitResult<Commit> actualResult =
+    CommitResult actualResult =
         versionStore.commit(
             branch1, Optional.of(hash1), commitMeta, operations, validator, addedContents);
     assertThat(actualResult).isEqualTo(expectedResult);
@@ -137,11 +137,10 @@ class TestEventsVersionStore {
   @Test
   void testTransplantDryRun() throws Exception {
     boolean dryRun = true;
-    MergeResult<Commit> expectedResult =
-        MergeResult.<Commit>builder()
+    TransplantResult expectedResult =
+        TransplantResult.builder()
             .sourceRef(branch1)
             .targetBranch(branch2)
-            .resultType(ResultType.TRANSPLANT)
             .effectiveTargetHash(hash1)
             .resultantTargetHash(hash2)
             .build();
@@ -156,7 +155,7 @@ class TestEventsVersionStore {
                 .build()))
         .thenReturn(expectedResult);
     EventsVersionStore versionStore = new EventsVersionStore(delegate, sink);
-    MergeResult<Commit> result =
+    TransplantResult result =
         versionStore.transplant(
             TransplantOp.builder()
                 .fromRef(branch1)
@@ -185,11 +184,10 @@ class TestEventsVersionStore {
   @Test
   void testTransplantSuccessful() throws Exception {
     boolean dryRun = false;
-    MergeResult<Commit> expectedResult =
-        MergeResult.<Commit>builder()
+    TransplantResult expectedResult =
+        TransplantResult.builder()
             .sourceRef(branch1)
             .targetBranch(branch2)
-            .resultType(ResultType.TRANSPLANT)
             .effectiveTargetHash(hash1)
             .resultantTargetHash(hash2)
             .wasApplied(true)
@@ -205,7 +203,7 @@ class TestEventsVersionStore {
                 .build()))
         .thenReturn(expectedResult);
     EventsVersionStore versionStore = new EventsVersionStore(delegate, sink);
-    MergeResult<Commit> result =
+    TransplantResult result =
         versionStore.transplant(
             TransplantOp.builder()
                 .fromRef(branch1)
@@ -274,11 +272,11 @@ class TestEventsVersionStore {
   @Test
   void testMergeDryRun() throws Exception {
     boolean dryRun = true;
-    MergeResult<Commit> expectedResult =
-        MergeResult.<Commit>builder()
+    MergeResult expectedResult =
+        MergeResult.builder()
             .sourceRef(branch1)
+            .sourceHash(hash1)
             .targetBranch(branch2)
-            .resultType(ResultType.MERGE)
             .effectiveTargetHash(hash1)
             .resultantTargetHash(hash2)
             .build();
@@ -292,7 +290,7 @@ class TestEventsVersionStore {
                 .build()))
         .thenReturn(expectedResult);
     EventsVersionStore versionStore = new EventsVersionStore(delegate, sink);
-    MergeResult<Commit> result =
+    MergeResult result =
         versionStore.merge(
             MergeOp.builder()
                 .fromRef(branch1)
@@ -319,11 +317,11 @@ class TestEventsVersionStore {
   @Test
   void testMergeSuccessful() throws Exception {
     boolean dryRun = false;
-    MergeResult<Commit> expectedResult =
-        MergeResult.<Commit>builder()
+    MergeResult expectedResult =
+        MergeResult.builder()
             .sourceRef(branch1)
+            .sourceHash(hash1)
             .targetBranch(branch2)
-            .resultType(ResultType.MERGE)
             .effectiveTargetHash(hash1)
             .resultantTargetHash(hash2)
             .wasApplied(true)
@@ -338,7 +336,7 @@ class TestEventsVersionStore {
                 .build()))
         .thenReturn(expectedResult);
     EventsVersionStore versionStore = new EventsVersionStore(delegate, sink);
-    MergeResult<Commit> result =
+    MergeResult result =
         versionStore.merge(
             MergeOp.builder()
                 .fromRef(branch1)
@@ -407,11 +405,11 @@ class TestEventsVersionStore {
             .previousHash(hash1)
             .currentHash(hash2)
             .build();
-    when(delegate.assign(branch1, Optional.of(hash1), hash2)).thenReturn(expectedResult);
+    when(delegate.assign(branch1, hash1, hash2)).thenReturn(expectedResult);
     EventsVersionStore versionStore = new EventsVersionStore(delegate, sink);
-    ReferenceAssignedResult actualResult = versionStore.assign(branch1, Optional.of(hash1), hash2);
+    ReferenceAssignedResult actualResult = versionStore.assign(branch1, hash1, hash2);
     assertThat(actualResult).isEqualTo(expectedResult);
-    verify(delegate).assign(branch1, Optional.of(hash1), hash2);
+    verify(delegate).assign(branch1, hash1, hash2);
     verify(sink).accept(expectedResult);
     verifyNoMoreInteractions(delegate, sink);
   }
@@ -419,15 +417,14 @@ class TestEventsVersionStore {
   @ParameterizedTest
   @ValueSource(classes = {ReferenceNotFoundException.class, ReferenceConflictException.class})
   void testAssignFailure(Class<? extends VersionStoreException> e) throws Exception {
-    when(delegate.assign(branch1, Optional.of(hash1), hash2))
+    when(delegate.assign(branch1, hash1, hash2))
         .thenAnswer(
             invocation -> {
               throw e.getConstructor(String.class).newInstance("irrelevant");
             });
     EventsVersionStore versionStore = new EventsVersionStore(delegate, sink);
-    assertThatThrownBy(() -> versionStore.assign(branch1, Optional.of(hash1), hash2))
-        .isInstanceOf(e);
-    verify(delegate).assign(branch1, Optional.of(hash1), hash2);
+    assertThatThrownBy(() -> versionStore.assign(branch1, hash1, hash2)).isInstanceOf(e);
+    verify(delegate).assign(branch1, hash1, hash2);
     verifyNoMoreInteractions(delegate, sink);
   }
 
@@ -462,11 +459,11 @@ class TestEventsVersionStore {
   void testDeleteSuccess() throws Exception {
     ReferenceDeletedResult expectedResult =
         ImmutableReferenceDeletedResult.builder().namedRef(branch1).hash(hash2).build();
-    when(delegate.delete(branch1, Optional.of(hash1))).thenReturn(expectedResult);
+    when(delegate.delete(branch1, hash1)).thenReturn(expectedResult);
     EventsVersionStore versionStore = new EventsVersionStore(delegate, sink);
-    ReferenceDeletedResult actualResult = versionStore.delete(branch1, Optional.of(hash1));
+    ReferenceDeletedResult actualResult = versionStore.delete(branch1, hash1);
     assertThat(actualResult).isEqualTo(expectedResult);
-    verify(delegate).delete(branch1, Optional.of(hash1));
+    verify(delegate).delete(branch1, hash1);
     verify(sink).accept(expectedResult);
     verifyNoMoreInteractions(delegate, sink);
   }
@@ -474,14 +471,14 @@ class TestEventsVersionStore {
   @ParameterizedTest
   @ValueSource(classes = {ReferenceNotFoundException.class, ReferenceConflictException.class})
   void testDeleteFailure(Class<? extends VersionStoreException> e) throws Exception {
-    when(delegate.delete(branch1, Optional.of(hash1)))
+    when(delegate.delete(branch1, hash1))
         .thenAnswer(
             invocation -> {
               throw e.getConstructor(String.class).newInstance("irrelevant");
             });
     EventsVersionStore versionStore = new EventsVersionStore(delegate, sink);
-    assertThatThrownBy(() -> versionStore.delete(branch1, Optional.of(hash1))).isInstanceOf(e);
-    verify(delegate).delete(branch1, Optional.of(hash1));
+    assertThatThrownBy(() -> versionStore.delete(branch1, hash1)).isInstanceOf(e);
+    verify(delegate).delete(branch1, hash1);
     verifyNoMoreInteractions(delegate, sink);
   }
 
@@ -559,9 +556,9 @@ class TestEventsVersionStore {
   void testGetValue() throws Exception {
     ContentResult contentResult =
         contentResult(identifiedContentKeyFromContent(key1, table1, x -> null), table1, null);
-    when(delegate.getValue(branch1, key1)).thenReturn(contentResult);
+    when(delegate.getValue(branch1, key1, false)).thenReturn(contentResult);
     EventsVersionStore versionStore = new EventsVersionStore(delegate, sink);
-    ContentResult result = versionStore.getValue(branch1, key1);
+    ContentResult result = versionStore.getValue(branch1, key1, false);
     assertThat(result).isEqualTo(contentResult);
     verifyNoMoreInteractions(delegate);
     verifyNoInteractions(sink);
@@ -575,10 +572,10 @@ class TestEventsVersionStore {
         contentResult(identifiedContentKeyFromContent(key2, table2, x -> null), table2, null);
     Map<ContentKey, ContentResult> expected =
         ImmutableMap.of(key1, contentResult1, key2, contentResult2);
-    when(delegate.getValues(branch1, Arrays.asList(key1, key2))).thenReturn(expected);
+    when(delegate.getValues(branch1, Arrays.asList(key1, key2), false)).thenReturn(expected);
     EventsVersionStore versionStore = new EventsVersionStore(delegate, sink);
     Map<ContentKey, ContentResult> result =
-        versionStore.getValues(branch1, Arrays.asList(key1, key2));
+        versionStore.getValues(branch1, Arrays.asList(key1, key2), false);
     assertThat(result).isEqualTo(expected);
     verifyNoMoreInteractions(delegate);
     verifyNoInteractions(sink);
@@ -591,17 +588,6 @@ class TestEventsVersionStore {
     PaginationIterator<Diff> result =
         versionStore.getDiffs(hash1, hash2, "token1", NO_KEY_RESTRICTIONS);
     assertThat(result).isSameAs(iteratorDiffs);
-    verifyNoMoreInteractions(delegate);
-    verifyNoInteractions(sink);
-  }
-
-  @SuppressWarnings("deprecation")
-  @Test
-  void testGetRefLog() throws Exception {
-    when(delegate.getRefLog(hash1)).thenReturn(refLogDetails);
-    EventsVersionStore versionStore = new EventsVersionStore(delegate, sink);
-    Stream<RefLogDetails> result = versionStore.getRefLog(hash1);
-    assertThat(result).isSameAs(refLogDetails);
     verifyNoMoreInteractions(delegate);
     verifyNoInteractions(sink);
   }

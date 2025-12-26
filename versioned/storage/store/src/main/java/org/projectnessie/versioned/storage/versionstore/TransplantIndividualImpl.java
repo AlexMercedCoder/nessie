@@ -22,29 +22,29 @@ import static org.projectnessie.versioned.storage.common.logic.CreateCommit.Remo
 import static org.projectnessie.versioned.storage.common.logic.CreateCommit.newCommitBuilder;
 import static org.projectnessie.versioned.storage.common.logic.Logics.commitLogic;
 import static org.projectnessie.versioned.storage.common.logic.Logics.indexesLogic;
+import static org.projectnessie.versioned.storage.common.objtypes.StandardObjType.COMMIT;
 import static org.projectnessie.versioned.storage.common.persist.ObjId.EMPTY_OBJ_ID;
 import static org.projectnessie.versioned.storage.versionstore.RefMapping.referenceNotFound;
 import static org.projectnessie.versioned.storage.versionstore.TypeMapping.fromCommitMeta;
+import static org.projectnessie.versioned.storage.versionstore.TypeMapping.objIdToHash;
 import static org.projectnessie.versioned.storage.versionstore.TypeMapping.toCommitMeta;
 
+import jakarta.annotation.Nonnull;
+import jakarta.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import javax.annotation.Nonnull;
-import javax.annotation.Nullable;
 import org.projectnessie.model.CommitMeta;
 import org.projectnessie.model.ContentKey;
 import org.projectnessie.versioned.BranchName;
-import org.projectnessie.versioned.Commit;
 import org.projectnessie.versioned.Hash;
-import org.projectnessie.versioned.ImmutableMergeResult;
 import org.projectnessie.versioned.MergeResult;
 import org.projectnessie.versioned.MetadataRewriter;
 import org.projectnessie.versioned.ReferenceConflictException;
 import org.projectnessie.versioned.ReferenceNotFoundException;
-import org.projectnessie.versioned.ResultType;
+import org.projectnessie.versioned.TransplantResult;
 import org.projectnessie.versioned.VersionStore;
 import org.projectnessie.versioned.VersionStore.TransplantOp;
 import org.projectnessie.versioned.storage.common.exceptions.ObjNotFoundException;
@@ -60,26 +60,32 @@ import org.projectnessie.versioned.storage.common.persist.Obj;
 import org.projectnessie.versioned.storage.common.persist.ObjId;
 import org.projectnessie.versioned.storage.common.persist.Persist;
 import org.projectnessie.versioned.storage.common.persist.Reference;
+import org.projectnessie.versioned.storage.common.persist.StoredObjResult;
 
 final class TransplantIndividualImpl extends BaseCommitHelper implements Transplant {
 
   TransplantIndividualImpl(
-      @Nonnull @jakarta.annotation.Nonnull BranchName branch,
-      @Nonnull @jakarta.annotation.Nonnull Optional<Hash> referenceHash,
-      @Nonnull @jakarta.annotation.Nonnull Persist persist,
-      @Nonnull @jakarta.annotation.Nonnull Reference reference,
-      @Nullable @jakarta.annotation.Nullable CommitObj head)
+      @Nonnull BranchName branch,
+      @Nonnull Optional<Hash> referenceHash,
+      @Nonnull Persist persist,
+      @Nonnull Reference reference,
+      @Nullable CommitObj head)
       throws ReferenceNotFoundException {
     super(branch, referenceHash, persist, reference, head);
   }
 
   @Override
-  public MergeResult<Commit> transplant(Optional<?> retryState, TransplantOp transplantOp)
+  public TransplantResult transplant(Optional<?> retryState, TransplantOp transplantOp)
       throws ReferenceNotFoundException, RetryException, ReferenceConflictException {
     MergeTransplantContext mergeTransplantContext = loadSourceCommitsForTransplant(transplantOp);
 
-    ImmutableMergeResult.Builder<Commit> mergeResult =
-        prepareMergeResult().resultType(ResultType.TRANSPLANT).sourceRef(transplantOp.fromRef());
+    TransplantResult.Builder transplantResult =
+        TransplantResult.builder()
+            .targetBranch(branch)
+            .effectiveTargetHash(objIdToHash(headId()))
+            .sourceRef(transplantOp.fromRef());
+
+    referenceHash.ifPresent(transplantResult::expectedHash);
 
     IndexesLogic indexesLogic = indexesLogic(persist);
     StoreIndex<CommitOp> sourceParentIndex =
@@ -114,9 +120,14 @@ final class TransplantIndividualImpl extends BaseCommitHelper implements Transpl
       empty = false;
       if (!transplantOp.dryRun()) {
         newHead = newCommit.id();
-        boolean committed = commitLogic.storeCommit(newCommit, objsToStore);
-        if (committed) {
-          mergeResult.addCreatedCommits(commitObjToCommit(newCommit));
+        StoredObjResult<CommitObj> committed = commitLogic.storeCommit(newCommit, objsToStore);
+        // Here we have to know whether "our" 'newCommit' object has been persisted or not.
+        // If not equal, we have to assume that the commit already existed - aka a "fast-forward
+        // transplant". This is only to maintain compatibility with (pre-)existing behavior.
+        // (This .equals has been introduced with https://github.com/projectnessie/nessie/pull/8533)
+        if (committed.stored()) {
+          newCommit = committed.obj().orElseThrow();
+          transplantResult.addCreatedCommits(commitObjToCommit(newCommit));
         }
       }
 
@@ -124,9 +135,10 @@ final class TransplantIndividualImpl extends BaseCommitHelper implements Transpl
       targetParentIndex = indexesLogic.buildCompleteIndex(newCommit, Optional.empty());
     }
 
-    boolean hasConflicts = recordKeyDetailsAndCheckConflicts(mergeResult, keyDetailsMap);
+    boolean hasConflicts = recordKeyDetailsAndCheckConflicts(transplantResult, keyDetailsMap);
 
-    return finishMergeTransplant(empty, mergeResult, newHead, transplantOp.dryRun(), hasConflicts);
+    return finishMergeTransplant(
+        empty, transplantResult, newHead, transplantOp.dryRun(), hasConflicts);
   }
 
   private CreateCommit cloneCommit(
@@ -142,15 +154,7 @@ final class TransplantIndividualImpl extends BaseCommitHelper implements Transpl
 
     IndexesLogic indexesLogic = indexesLogic(persist);
     for (StoreIndexElement<CommitOp> el : indexesLogic.commitOperations(sourceCommit)) {
-      StoreIndexElement<CommitOp> expected = sourceParentIndex.get(el.key());
-      ObjId expectedId = null;
-      if (expected != null) {
-        CommitOp expectedContent = expected.content();
-        if (expectedContent.action().exists()) {
-          expectedId = expectedContent.value();
-        }
-      }
-
+      ObjId expectedId = idForExpectedContent(el.key(), sourceParentIndex);
       CommitOp op = el.content();
       if (op.action().exists()) {
         createCommitBuilder.addAdds(
@@ -158,7 +162,8 @@ final class TransplantIndividualImpl extends BaseCommitHelper implements Transpl
                 el.key(), op.payload(), requireNonNull(op.value()), expectedId, op.contentId()));
       } else {
         createCommitBuilder.addRemoves(
-            commitRemove(el.key(), op.payload(), requireNonNull(expectedId), op.contentId()));
+            commitRemove(
+                el.key(), op.payload(), requireNonNull(expectedId, "expectedId"), op.contentId()));
       }
     }
 
@@ -176,11 +181,13 @@ final class TransplantIndividualImpl extends BaseCommitHelper implements Transpl
         branch.getName(),
         referenceHash.map(Hash::asString).orElse("not specified"));
 
-    Obj[] objs;
+    CommitObj[] objs;
     try {
       objs =
-          persist.fetchObjs(
-              commitHashes.stream().map(TypeMapping::hashToObjId).toArray(ObjId[]::new));
+          persist.fetchTypedObjs(
+              commitHashes.stream().map(TypeMapping::hashToObjId).toArray(ObjId[]::new),
+              COMMIT,
+              CommitObj.class);
     } catch (ObjNotFoundException e) {
       throw referenceNotFound(e);
     }
@@ -188,11 +195,7 @@ final class TransplantIndividualImpl extends BaseCommitHelper implements Transpl
     CommitObj parent = null;
     CommitLogic commitLogic = commitLogic(persist);
     for (int i = 0; i < objs.length; i++) {
-      Obj o = objs[i];
-      if (o == null) {
-        throw RefMapping.hashNotFound(commitHashes.get(i));
-      }
-      CommitObj commit = (CommitObj) o;
+      CommitObj commit = objs[i];
       if (i > 0) {
         if (!commit.directParent().equals(commits.get(i - 1).id())) {
           throw new IllegalArgumentException("Sequence of hashes is not contiguous.");

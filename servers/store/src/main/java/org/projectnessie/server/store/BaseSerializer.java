@@ -15,6 +15,8 @@
  */
 package org.projectnessie.server.store;
 
+import static com.google.common.base.Preconditions.checkArgument;
+
 import java.util.function.Supplier;
 import org.projectnessie.model.Content;
 import org.projectnessie.model.IcebergTable;
@@ -22,19 +24,20 @@ import org.projectnessie.model.IcebergView;
 import org.projectnessie.model.ImmutableDeltaLakeTable;
 import org.projectnessie.model.ImmutableIcebergTable;
 import org.projectnessie.model.ImmutableIcebergView;
+import org.projectnessie.model.ImmutableUDF;
 import org.projectnessie.model.Namespace;
 import org.projectnessie.model.UDF;
 import org.projectnessie.nessie.relocated.protobuf.ByteString;
 import org.projectnessie.nessie.relocated.protobuf.InvalidProtocolBufferException;
 import org.projectnessie.server.store.proto.ObjectTypes;
-import org.projectnessie.versioned.store.LegacyContentSerializer;
+import org.projectnessie.versioned.store.ContentSerializer;
 
 /**
  * Common content serialization functionality for Iceberg tables+views, Delta Lake tables +
  * namespaces.
  */
 @SuppressWarnings("deprecation")
-abstract class BaseSerializer<C extends Content> implements LegacyContentSerializer<C> {
+abstract class BaseSerializer<C extends Content> implements ContentSerializer<C> {
 
   @Override
   public ByteString toStoreOnReferenceState(C content) {
@@ -44,14 +47,12 @@ abstract class BaseSerializer<C extends Content> implements LegacyContentSeriali
   }
 
   @Override
-  public C valueFromStore(
-      int payload, ByteString onReferenceValue, Supplier<ByteString> globalState) {
+  public C valueFromStore(ByteString onReferenceValue) {
     ObjectTypes.Content content = parse(onReferenceValue);
-    return valueFromStore(content, globalState);
+    return valueFromStore(content);
   }
 
-  protected abstract C valueFromStore(
-      ObjectTypes.Content content, Supplier<ByteString> globalState);
+  protected abstract C valueFromStore(ObjectTypes.Content content);
 
   static ImmutableDeltaLakeTable valueFromStoreDeltaLakeTable(ObjectTypes.Content content) {
     ObjectTypes.DeltaLakeTable deltaLakeTable = content.getDeltaLakeTable();
@@ -68,7 +69,23 @@ abstract class BaseSerializer<C extends Content> implements LegacyContentSeriali
 
   static UDF valueFromStoreUDF(ObjectTypes.Content content) {
     ObjectTypes.UDF udf = content.getUdf();
-    return UDF.of(content.getId(), udf.getDialect(), udf.getSqlText());
+    ImmutableUDF.Builder builder = ImmutableUDF.builder().id(content.getId());
+    if (udf.hasDialect()) {
+      builder.dialect(udf.getDialect());
+    }
+    if (udf.hasSqlText()) {
+      builder.sqlText(udf.getSqlText());
+    }
+    if (udf.hasMetadataLocation()) {
+      builder.metadataLocation(udf.getMetadataLocation());
+    }
+    if (udf.hasVersionId()) {
+      builder.versionId(udf.getVersionId());
+    }
+    if (udf.hasSignatureId()) {
+      builder.signatureId(udf.getSignatureId());
+    }
+    return builder.build();
   }
 
   static Namespace valueFromStoreNamespace(ObjectTypes.Content content) {
@@ -80,11 +97,10 @@ abstract class BaseSerializer<C extends Content> implements LegacyContentSeriali
         .build();
   }
 
-  static IcebergTable valueFromStoreIcebergTable(
-      ObjectTypes.Content content, Supplier<String> metadataPointerSupplier) {
+  static IcebergTable valueFromStoreIcebergTable(ObjectTypes.Content content) {
     ObjectTypes.IcebergRefState table = content.getIcebergRefState();
-    String metadataLocation =
-        table.hasMetadataLocation() ? table.getMetadataLocation() : metadataPointerSupplier.get();
+    checkArgument(table.hasMetadataLocation());
+    String metadataLocation = table.getMetadataLocation();
 
     ImmutableIcebergTable.Builder tableBuilder =
         IcebergTable.builder()
@@ -98,22 +114,25 @@ abstract class BaseSerializer<C extends Content> implements LegacyContentSeriali
     return tableBuilder.build();
   }
 
-  static IcebergView valueFromStoreIcebergView(
-      ObjectTypes.Content content, Supplier<String> metadataPointerSupplier) {
+  static IcebergView valueFromStoreIcebergView(ObjectTypes.Content content) {
     ObjectTypes.IcebergViewState view = content.getIcebergViewState();
     // If the (protobuf) view has the metadataLocation attribute set, use that one, otherwise
     // it's an old representation using global state.
-    String metadataLocation =
-        view.hasMetadataLocation() ? view.getMetadataLocation() : metadataPointerSupplier.get();
+    checkArgument(view.hasMetadataLocation());
+    String metadataLocation = view.getMetadataLocation();
 
     ImmutableIcebergView.Builder viewBuilder =
         IcebergView.builder()
             .metadataLocation(metadataLocation)
             .versionId(view.getVersionId())
             .schemaId(view.getSchemaId())
-            .dialect(view.getDialect())
-            .sqlText(view.getSqlText())
             .id(content.getId());
+    if (view.hasDialect()) {
+      viewBuilder.dialect(view.getDialect());
+    }
+    if (view.hasSqlText()) {
+      viewBuilder.sqlText(view.getSqlText());
+    }
 
     return viewBuilder.build();
   }

@@ -15,7 +15,6 @@
  */
 package org.projectnessie.events.quarkus.config;
 
-import io.quarkus.runtime.annotations.StaticInitSafe;
 import io.smallrye.config.ConfigMapping;
 import io.smallrye.config.WithDefault;
 import io.smallrye.config.WithName;
@@ -23,7 +22,6 @@ import java.time.Duration;
 import java.util.Map;
 import org.projectnessie.events.service.EventConfig;
 
-@StaticInitSafe
 @ConfigMapping(prefix = "nessie.version.store.events")
 public interface QuarkusEventConfig extends EventConfig {
 
@@ -35,16 +33,6 @@ public interface QuarkusEventConfig extends EventConfig {
   @WithName("enable")
   @WithDefault("true")
   boolean isEnabled();
-
-  /** Whether metrics for events are enabled (enabled by default). */
-  @WithName("metrics.enable")
-  @WithDefault("true")
-  boolean isMetricsEnabled();
-
-  /** Whether tracing for events is enabled (enabled by default). */
-  @WithName("trace.enable")
-  @WithDefault("true")
-  boolean isTracingEnabled();
 
   @WithName("static-properties")
   @WithDefault("{}")

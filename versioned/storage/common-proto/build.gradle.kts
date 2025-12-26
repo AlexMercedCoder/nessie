@@ -19,12 +19,11 @@ import com.google.protobuf.gradle.ProtobufExtension
 import com.google.protobuf.gradle.ProtobufExtract
 
 plugins {
-  alias(libs.plugins.nessie.reflectionconfig)
-  id("nessie-conventions-server")
+  id("nessie-conventions-java11")
   alias(libs.plugins.protobuf)
 }
 
-extra["maven.name"] = "Nessie - Storage - Common proto"
+publishingHelper { mavenName = "Nessie - Storage - Common proto" }
 
 description = "Protobuf definition for the serialization for storage objects."
 
@@ -41,40 +40,21 @@ extensions.configure<ProtobufExtension> {
 }
 
 tasks.named<GenerateProtoTask>("generateProto").configure {
-  doLast(
-    ReplaceInFiles(
-      fileTree(project.buildDir.resolve("generated/source/proto/main")),
-      mapOf("com.google.protobuf" to "org.projectnessie.nessie.relocated.protobuf")
-    )
-  )
+  finalizedBy("updateGeneratedProtoFiles")
 }
 
-reflectionConfig {
-  // Consider classes that extend one of these classes...
-  classExtendsPatterns.set(
-    listOf(
-      "org.projectnessie.nessie.relocated.protobuf.GeneratedMessageV3",
-      "org.projectnessie.nessie.relocated.protobuf.GeneratedMessageV3.Builder"
-    )
-  )
-  // ... and classes the implement this interface.
-  classImplementsPatterns.set(
-    listOf("org.projectnessie.nessie.relocated.protobuf.ProtocolMessageEnum")
-  )
-  // Also include generated classes (e.g. google.protobuf.Empty) via the "runtimeClasspath",
-  // which contains the the "com.google.protobuf:protobuf-java" dependency.
-  includeConfigurations.set(listOf("runtimeClasspath"))
+tasks.register<ReplaceInFiles>("updateGeneratedProtoFiles") {
+  files.set(project.layout.buildDirectory.dir("generated/sources/proto/main"))
+  replacements.put("com.google.protobuf", "org.projectnessie.nessie.relocated.protobuf")
 }
 
 // The protobuf-plugin should ideally do this
-tasks.named<Jar>("sourcesJar").configure {
-  dependsOn(tasks.named("generateProto"), tasks.named("generateReflectionConfig"))
-}
+tasks.named<Jar>("sourcesJar").configure { dependsOn("generateProto") }
 
 tasks.withType(ProtobufExtract::class).configureEach {
   when (name) {
-    "extractIncludeTestProto" -> dependsOn(tasks.named("processJandexIndex"))
-    "extractIncludeTestFixturesProto" -> dependsOn(tasks.named("processJandexIndex"))
-    "extractIncludeIntTestProto" -> dependsOn(tasks.named("processJandexIndex"))
+    "extractIncludeTestProto" -> dependsOn(tasks.named("jandex"))
+    "extractIncludeTestFixturesProto" -> dependsOn(tasks.named("jandex"))
+    "extractIncludeIntTestProto" -> dependsOn(tasks.named("jandex"))
   }
 }

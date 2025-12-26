@@ -21,14 +21,12 @@ import com.google.common.collect.ImmutableMap;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
+import jakarta.enterprise.inject.Instance;
+import jakarta.inject.Inject;
 import java.util.Map;
-import javax.enterprise.inject.Instance;
-import javax.inject.Inject;
 import org.projectnessie.client.ext.NessieApiVersion;
 import org.projectnessie.client.ext.NessieApiVersions;
-import org.projectnessie.events.service.EventSubscribers;
 import org.projectnessie.server.events.EventsEnabledProfile;
-import org.projectnessie.server.events.fixtures.MockEventSubscriber;
 
 @QuarkusTest
 @TestProfile(TestQuarkusEventsEnabledAuthDisabled.Profile.class)
@@ -45,17 +43,11 @@ public class TestQuarkusEventsEnabledAuthDisabled extends AbstractQuarkusEvents 
     }
   }
 
-  @Inject Instance<EventSubscribers> subscribers;
   @Inject Instance<MeterRegistry> registries;
 
   @Override
   protected boolean eventsEnabled() {
     return true;
-  }
-
-  @Override
-  protected MockEventSubscriber subscriber() {
-    return (MockEventSubscriber) subscribers.get().getSubscribers().get(0);
   }
 
   @Override

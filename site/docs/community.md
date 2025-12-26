@@ -1,8 +1,16 @@
+---
+hide:
+  - navigation
+  - toc
+---
+
 # Community
 
 Nessie is developed as a consensus-driven open source product under the Apache 2.0
 license. Development is done in the open leveraging GitHub issues, PRs and using
 Google Groups as a mailing list.
+
+<img src="../img/nessie-swim.png" width="150" height="auto">
 
 ## Get In Touch
 
@@ -33,7 +41,7 @@ Google Groups as a mailing list.
 ## Contribution
 
 All contributors are welcome to Project Nessie. To get started, feel free to introduce yourself
-on Slack or our Google Group. Nessie is open to everyone!
+on [Zulip](https://project-nessie.zulipchat.com/) or our Google Group. Nessie is open to everyone!
 
 Please see the [CONTRIBUTING.md guide](https://github.com/projectnessie/nessie/blob/main/CONTRIBUTING.md) for more information
 on how to contribute.

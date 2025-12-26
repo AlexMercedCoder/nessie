@@ -31,7 +31,10 @@ import org.projectnessie.model.TestModelObjectsSerialization;
  */
 public class TestParamObjectsSerialization extends TestModelObjectsSerialization {
 
-  @SuppressWarnings("unused") // called by JUnit framework based on annotations in superclass
+  @SuppressWarnings({
+    "unused",
+    "deprecation"
+  }) // called by JUnit framework based on annotations in superclass
   static List<Case> goodCases() {
     final String branchName = "testBranch";
 
@@ -148,7 +151,34 @@ public class TestParamObjectsSerialization extends TestModelObjectsSerialization
                                             objectNode()
                                                 .set(
                                                     "elements",
-                                                    arrayNode().add("ignore").add("this")))))));
+                                                    arrayNode().add("ignore").add("this")))))),
+        // relative hashes
+        new Case(Merge.class)
+            .obj(ImmutableMerge.builder().fromRefName(branchName).fromHash("~1").build())
+            .jsonNode(o -> o.put("fromRefName", "testBranch").put("fromHash", "~1")),
+        new Case(Merge.class)
+            .obj(ImmutableMerge.builder().fromRefName(branchName).fromHash("cafebabe~1").build())
+            .jsonNode(o -> o.put("fromRefName", "testBranch").put("fromHash", "cafebabe~1")),
+        new Case(Transplant.class)
+            .obj(
+                ImmutableTransplant.builder()
+                    .fromRefName(branchName)
+                    .addHashesToTransplant("~1")
+                    .build())
+            .jsonNode(
+                o ->
+                    o.put("fromRefName", "testBranch")
+                        .set("hashesToTransplant", arrayNode().add("~1"))),
+        new Case(Transplant.class)
+            .obj(
+                ImmutableTransplant.builder()
+                    .fromRefName(branchName)
+                    .addHashesToTransplant("cafebabe~1")
+                    .build())
+            .jsonNode(
+                o ->
+                    o.put("fromRefName", "testBranch")
+                        .set("hashesToTransplant", arrayNode().add("cafebabe~1"))));
   }
 
   @SuppressWarnings("unused") // called by JUnit framework based on annotations in superclass

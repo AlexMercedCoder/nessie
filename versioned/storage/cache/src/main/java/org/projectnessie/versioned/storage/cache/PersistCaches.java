@@ -19,7 +19,13 @@ public final class PersistCaches {
   private PersistCaches() {}
 
   /** Produces a {@link CacheBackend} with the given maximum capacity. */
-  public static CacheBackend newBackend(long capacity) {
-    return CaffeineCacheBackend.builder().capacity(capacity).build();
+  public static CacheBackend newBackend(CacheConfig cacheConfig) {
+    return new CaffeineCacheBackend(cacheConfig);
+  }
+
+  /** Wraps distributed invalidations around a cache backend. */
+  public static CacheBackend wrapBackendForDistributedUsage(
+      DistributedCacheInvalidations distributedCacheInvalidations) {
+    return new DistributedInvalidationsCacheBackend(distributedCacheInvalidations);
   }
 }

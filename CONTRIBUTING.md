@@ -40,8 +40,12 @@ project.
 
 Common Gradle tasks:
 
+* Good "smoke check" after making changes:
+  `./gradlew sAp compileAll jar codeChecks`
 * Check whether everything compiles (no style checks):
   `./gradlew jar testClasses`
+* Run code and license checks (Spotless, Checkstyle and License checks):
+  `./gradlew codeChecks`
 * Automatically fix code style issues:
   `./gradlew spotlessApply` (abbreviated: `sAp`)
 * Publish to local Maven repo:
@@ -109,12 +113,12 @@ In June 2022 the Nessie code tree changed to the Gradle build tool. Existing clo
 can be migrated as follows:
 
 1. Close your IDE
-2. Run `git clean -xdf`
-3. Run `git pull`
-4. Run `./gradlew testClasses` to ensure the build works fine. The very first build will be slower,
+1. Run `git clean -xdf`
+1. Run `git pull`
+1. Run `./gradlew testClasses` to ensure the build works fine. The very first build will be slower,
    because it has to assemble the build plugins and download dependencies.
-6. Make sure that your IDE has no more "references to Maven" (nothing to do when using IntelliJ) 
-7. Open Nessie in your IDE
+1. Make sure that your IDE has no more "references to Maven" (nothing to do when using IntelliJ) 
+1. Open Nessie in your IDE
 
 Note: The Gradle build does *not* use the local Maven repository and dependencies there will not be
 used by default. See [Local Maven reposotiry](#local-maven-repository).
@@ -132,12 +136,6 @@ For the Spark tests to run with Java 16 or newer, you need to have Java 11 insta
 most likely find the Java 11 runtime required to run the Spark tests. Run `./gradlew javaToolchains`
 to see the Java toolchains that Gradle discovered. If Gradle could not locate your Java 11 runtime,
 consult the [docs](https://docs.gradle.org/current/userguide/toolchains.html).
-
-#### Building with Java 17 (and 16)
-
-Due to [JEP 396](https://openjdk.java.net/jeps/396), introduced in Java 16, a couple JVM options are required for
-[google-java-format](https://github.com/google/google-java-format#jdk-16) and [errorprone](https://errorprone.info/docs/installation)
-to work. These options are harmless when using Java 11.
 
 Apache Spark does **only** work with Java 11 (or 8), so all tests using Spark use the Gradle toolchain mechanism
 to force Java 11 for the execution of those tests.
@@ -212,6 +210,23 @@ git config core.eol lf
 git checkout main
 ```
 
+#### Testing custom/newer Quarkus versions
+
+Nessie releases use the Quarkus version defined in the `libs` version catalog using Gradle's `enforcedPlatform`
+dependency constraint mechanism. This means that the Quarkus version used by default is fixed and the dependencies
+defined by the Quarkus platform are enforced.
+
+For testing purposes, it is possible to use a different Quarkus version by setting the `quarkus.custom.version`
+system property.
+It is also possible to not enforce the Quarkus platform versions, i.e. using Gradle's `platform` dependency
+constraint mechanism, by setting the `quarkus.custom.noEnforcePlatform` system property to `true`.
+
+Example, to test against a pre-release Quarkus 3.28.0.CR1 version:
+```bash
+./gradlew -Dquarkus.custom.version=3.28.0.CR1 -Dquarkus.custom.noEnforcedPlatform=true test
+./gradlew -Dquarkus.custom.version=3.28.0.CR1 -Dquarkus.custom.noEnforcedPlatform=true intTest
+```
+
 ### Style guide
 
 Changes must adhere to the style guide and this will be verified by the continuous integration build.
@@ -258,14 +273,6 @@ Code coverage is measured using jacoco plus codecov.
 Upon submission of a pull request you will be asked to sign our contributor license agreement.
 Anyone can take part in the review process and once the community is happy and the build actions are passing a Pull Request will be merged. Support 
 must be unanimous for a change to be merged.
-
-All pull-requests automatically trigger CI runs. Two long-running parts of the CI workflow are
-skipped for PRs by default, but can be enabled using "labels" on the PR.
-* Quarkus native image generation + tests against the native image. The label `pr-native` label enables this.
-  The label `pr-native` label enables this, CI results do not appear as a separate job, because
-  those run as part of the "Java/Maven" workflow job.
-* Nessie-client tests against various combinations of Jackson versions.
-  The label `pr-jackson` label enables this and CI result will appear as a separate check.
 
 ### Reporting security issues
 

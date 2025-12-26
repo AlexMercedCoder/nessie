@@ -18,10 +18,10 @@ package org.projectnessie.events.quarkus.delivery;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.opentelemetry.api.trace.Tracer;
 import io.vertx.core.Vertx;
-import javax.enterprise.context.Dependent;
-import javax.enterprise.inject.Any;
-import javax.enterprise.inject.Instance;
-import javax.inject.Inject;
+import jakarta.enterprise.context.Dependent;
+import jakarta.enterprise.inject.Any;
+import jakarta.enterprise.inject.Instance;
+import jakarta.inject.Inject;
 import org.projectnessie.events.api.Event;
 import org.projectnessie.events.quarkus.config.QuarkusEventConfig;
 import org.projectnessie.events.spi.EventSubscriber;
@@ -44,13 +44,13 @@ public class EventDeliveryFactory {
       @Any Instance<MeterRegistry> registries) {
     this.config = config;
     this.vertx = vertx;
-    this.tracer = extractInstance(config.isTracingEnabled(), tracers);
-    this.registry = extractInstance(config.isMetricsEnabled(), registries);
+    this.tracer = extractInstance(tracers);
+    this.registry = extractInstance(registries);
     this.clock = registry == null ? null : new MicrometerClockAdapter(config.getClock());
   }
 
-  private static <T> T extractInstance(boolean enabled, Instance<T> instances) {
-    return enabled && instances != null && instances.isResolvable() ? instances.get() : null;
+  private static <T> T extractInstance(Instance<T> instances) {
+    return instances != null && instances.isResolvable() ? instances.get() : null;
   }
 
   public EventDelivery create(
@@ -71,13 +71,8 @@ public class EventDeliveryFactory {
     return delivery;
   }
 
-  private static class MicrometerClockAdapter implements io.micrometer.core.instrument.Clock {
-
-    private final java.time.Clock clock;
-
-    MicrometerClockAdapter(java.time.Clock clock) {
-      this.clock = clock;
-    }
+  private record MicrometerClockAdapter(java.time.Clock clock)
+      implements io.micrometer.core.instrument.Clock {
 
     @Override
     public long wallTime() {

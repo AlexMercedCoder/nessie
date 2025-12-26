@@ -19,8 +19,8 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static java.util.Objects.requireNonNull;
 
 import com.google.common.annotations.VisibleForTesting;
+import jakarta.annotation.Nonnull;
 import java.util.Arrays;
-import javax.annotation.Nonnull;
 import org.projectnessie.nessie.relocated.protobuf.ByteString;
 import org.projectnessie.nessie.relocated.protobuf.UnsafeByteOperations;
 
@@ -63,18 +63,16 @@ public abstract class Hash implements Ref {
    * @throws IllegalArgumentException if {@code hash} is not a valid representation of a hash
    * @throws NullPointerException if {@code hash} is {@code null}
    */
-  public static Hash of(@Nonnull @jakarta.annotation.Nonnull String hash) {
-    requireNonNull(hash);
+  public static Hash of(@Nonnull String hash) {
+    requireNonNull(hash, "hash string argument is null");
     int len = hash.length();
     checkArgument(
         len % 2 == 0 && len > 0, "hash length needs to be a multiple of two, was %s", len);
 
-    switch (len >> 1) {
-      case 32:
-        return new Hash256(hash);
-      default:
-        return new GenericHash(hash);
+    if (len >> 1 == 32) {
+      return new Hash256(hash);
     }
+    return new GenericHash(hash);
   }
 
   /**
@@ -84,13 +82,11 @@ public abstract class Hash implements Ref {
    * @return a {@code Hash} instance
    * @throws NullPointerException if {@code hash} is {@code null}
    */
-  public static Hash of(@Nonnull @jakarta.annotation.Nonnull ByteString bytes) {
-    switch (bytes.size()) {
-      case 32:
-        return new Hash256(bytes);
-      default:
-        return new GenericHash(bytes);
+  public static Hash of(@Nonnull ByteString bytes) {
+    if (bytes.size() == 32) {
+      return new Hash256(bytes);
     }
+    return new GenericHash(bytes);
   }
 
   @Override

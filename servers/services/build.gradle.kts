@@ -16,33 +16,27 @@
 
 import org.apache.tools.ant.taskdefs.condition.Os
 
-plugins {
-  id("nessie-conventions-server8")
-  id("nessie-jacoco")
-  alias(libs.plugins.annotations.stripper)
-}
+plugins { id("nessie-conventions-java11") }
 
-extra["maven.name"] = "Nessie - Services"
+publishingHelper { mavenName = "Nessie - Services" }
 
 dependencies {
   implementation(project(":nessie-model"))
+  implementation(project(":nessie-services-config"))
   implementation(project(":nessie-versioned-spi"))
-  implementation(libs.slf4j.api)
+  implementation(libs.slf4j.api) { version { require(libs.versions.slf4j.compat.get()) } }
 
   implementation(platform(libs.cel.bom))
-  implementation("org.projectnessie.cel:cel-tools")
-  implementation("org.projectnessie.cel:cel-jackson")
+  implementation("org.projectnessie.cel:cel-standalone")
 
-  compileOnly(libs.immutables.builder)
-  compileOnly(libs.immutables.value.annotations)
-  annotationProcessor(libs.immutables.value.processor)
+  compileOnly(project(":nessie-immutables-std"))
+  annotationProcessor(project(":nessie-immutables-std", configuration = "processor"))
   implementation(libs.guava)
 
-  // javax/jakarta
   compileOnly(libs.jakarta.validation.api)
-  compileOnly(libs.javax.validation.api)
   compileOnly(libs.jakarta.annotation.api)
-  compileOnly(libs.findbugs.jsr305)
+  compileOnly(libs.jakarta.inject.api)
+  compileOnly(libs.jakarta.enterprise.cdi.api)
 
   compileOnly(platform(libs.jackson.bom))
   compileOnly("com.fasterxml.jackson.core:jackson-annotations")
@@ -54,10 +48,6 @@ dependencies {
   testFixturesApi(project(":nessie-model"))
   testFixturesApi(project(":nessie-versioned-spi"))
 
-  testFixturesApi(project(":nessie-versioned-persist-adapter"))
-  testFixturesApi(project(":nessie-versioned-persist-store"))
-  testFixturesApi(project(":nessie-versioned-persist-testextension"))
-
   testFixturesApi(platform(libs.junit.bom))
   testFixturesApi(libs.bundles.junit.testing)
 
@@ -66,36 +56,29 @@ dependencies {
 
   testRuntimeOnly(project(":nessie-server-store"))
 
-  testImplementation(project(":nessie-versioned-persist-serialize"))
-  testImplementation(project(":nessie-versioned-persist-in-memory"))
-  testImplementation(project(":nessie-versioned-persist-in-memory-test"))
-  intTestImplementation(project(":nessie-versioned-persist-rocks"))
-  intTestImplementation(project(":nessie-versioned-persist-rocks-test"))
-  intTestImplementation(project(":nessie-versioned-persist-dynamodb"))
-  intTestImplementation(project(":nessie-versioned-persist-dynamodb-test"))
-  intTestImplementation(project(":nessie-versioned-persist-mongodb"))
-  intTestImplementation(project(":nessie-versioned-persist-mongodb-test"))
-  testImplementation(project(":nessie-versioned-persist-transactional"))
-  testImplementation(project(":nessie-versioned-persist-transactional-test"))
-
   testFixturesApi(project(":nessie-versioned-storage-common"))
   testFixturesApi(project(":nessie-versioned-storage-store"))
   testFixturesApi(project(":nessie-versioned-storage-testextension"))
-  testFixturesApi(project(":nessie-versioned-storage-inmemory"))
-  testFixturesApi(project(":nessie-versioned-storage-jdbc"))
+  testFixturesApi(project(":nessie-versioned-storage-inmemory-tests"))
+  testFixturesApi(project(":nessie-versioned-storage-jdbc-tests"))
+  testFixturesApi(project(":nessie-versioned-storage-jdbc2-tests"))
+  testFixturesApi(project(":nessie-services-config"))
   testFixturesImplementation(libs.logback.classic)
-  intTestImplementation(project(":nessie-versioned-storage-cassandra"))
-  intTestImplementation(project(":nessie-versioned-storage-rocksdb"))
-  intTestImplementation(project(":nessie-versioned-storage-mongodb"))
-  intTestImplementation(project(":nessie-versioned-storage-dynamodb"))
-  intTestRuntimeOnly(libs.testcontainers.testcontainers)
-  intTestRuntimeOnly(libs.testcontainers.cassandra)
-  intTestRuntimeOnly(libs.testcontainers.mongodb)
+  intTestImplementation(project(":nessie-versioned-storage-cassandra-tests"))
+  intTestImplementation(project(":nessie-versioned-storage-cassandra2-tests"))
+  intTestImplementation(project(":nessie-versioned-storage-rocksdb-tests"))
+  intTestImplementation(project(":nessie-versioned-storage-mongodb-tests"))
+  intTestImplementation(project(":nessie-versioned-storage-mongodb2-tests"))
+  intTestImplementation(project(":nessie-versioned-storage-dynamodb-tests"))
+  intTestImplementation(project(":nessie-versioned-storage-dynamodb2-tests"))
+  intTestRuntimeOnly(platform(libs.testcontainers.bom))
+  intTestRuntimeOnly("org.testcontainers:testcontainers")
+  intTestRuntimeOnly("org.testcontainers:testcontainers-cassandra")
+  intTestRuntimeOnly("org.testcontainers:testcontainers-mongodb")
   intTestRuntimeOnly(libs.docker.java.api)
   testRuntimeOnly(libs.agroal.pool)
   testRuntimeOnly(libs.h2)
 
-  // javax/jakarta
   testCompileOnly(libs.jakarta.annotation.api)
 
   testFixturesCompileOnly(libs.microprofile.openapi)
@@ -110,11 +93,4 @@ dependencies {
 // Issue w/ testcontainers/podman in GH workflows :(
 if (Os.isFamily(Os.FAMILY_MAC) && System.getenv("CI") != null) {
   tasks.withType<Test>().configureEach { this.enabled = false }
-}
-
-annotationStripper {
-  registerDefault().configure {
-    annotationsToDrop("^jakarta[.].+".toRegex())
-    unmodifiedClassesForJavaVersion.set(11)
-  }
 }

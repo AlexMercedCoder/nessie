@@ -15,19 +15,15 @@
  */
 package org.projectnessie.quarkus.tests.profiles;
 
-import static org.testcontainers.containers.PostgreSQLContainer.POSTGRESQL_PORT;
-
-import com.google.common.collect.ImmutableMap;
 import io.quarkus.test.common.DevServicesContext;
 import io.quarkus.test.common.QuarkusTestResourceLifecycleManager;
 import java.util.Map;
 import java.util.Optional;
-import org.testcontainers.containers.JdbcDatabaseContainer;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.projectnessie.versioned.storage.jdbc2tests.PostgreSQLBackendTestFactory;
 
 public class PostgresTestResourceLifecycleManager
     implements QuarkusTestResourceLifecycleManager, DevServicesContext.ContextAware {
-  private JdbcDatabaseContainer<?> container;
+  private PostgreSQLBackendTestFactory postgres;
 
   private Optional<String> containerNetworkId;
 
@@ -38,54 +34,26 @@ public class PostgresTestResourceLifecycleManager
 
   @Override
   public Map<String, String> start() {
-    String version = System.getProperty("it.nessie.container.postgres.tag");
-    if (version == null) {
-      throw new RuntimeException(
-          "postgres container version is not specified. Please configure it using the system property it.nessie.container.postgres.tag");
-    }
+    postgres = new PostgreSQLBackendTestFactory();
 
-    container =
-        new PostgreSQLContainer<>("postgres:" + version)
-            .withLogConsumer(outputFrame -> {})
-            .withStartupAttempts(5);
-    containerNetworkId.ifPresent(container::withNetworkMode);
     try {
-      // Only start the Docker container (local Dynamo-compatible). The DynamoDatabaseClient will
-      // be configured via Quarkus -> Quarkus-Dynamo / DynamoVersionStoreFactory.
-      container.start();
+      postgres.start(containerNetworkId);
     } catch (Exception e) {
       throw new RuntimeException(e);
     }
 
-    String jdbcUrl = container.getJdbcUrl();
-
-    if (containerNetworkId.isPresent()) {
-      String hostPort = container.getHost() + ':' + container.getMappedPort(POSTGRESQL_PORT);
-      String networkHostPort =
-          container.getCurrentContainerInfo().getConfig().getHostName() + ':' + POSTGRESQL_PORT;
-      jdbcUrl = jdbcUrl.replace(hostPort, networkHostPort);
-    }
-
-    return ImmutableMap.of(
-        "quarkus.datasource.username",
-        container.getUsername(),
-        "quarkus.datasource.password",
-        container.getPassword(),
-        "quarkus.datasource.jdbc.url",
-        jdbcUrl,
-        "quarkus.datasource.jdbc.extended-leak-report",
-        "true");
+    return postgres.getQuarkusConfig();
   }
 
   @Override
   public void stop() {
-    if (container != null) {
+    if (postgres != null) {
       try {
-        container.stop();
+        postgres.stop();
       } catch (Exception e) {
         throw new RuntimeException(e);
       } finally {
-        container = null;
+        postgres = null;
       }
     }
   }

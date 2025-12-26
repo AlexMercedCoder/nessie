@@ -14,21 +14,16 @@
  * limitations under the License.
  */
 
-plugins {
-  id("nessie-conventions-server")
-  id("nessie-jacoco")
-}
+plugins { id("nessie-conventions-java11") }
 
-extra["maven.name"] = "Nessie - Storage - Batching Persist"
+publishingHelper { mavenName = "Nessie - Storage - Batching Persist" }
 
 description = "Storage implementation using in-memory maps, not persisting."
 
 dependencies {
   implementation(project(":nessie-versioned-storage-common"))
 
-  // javax/jakarta
   compileOnly(libs.jakarta.validation.api)
-  compileOnly(libs.javax.validation.api)
   compileOnly(libs.jakarta.annotation.api)
   compileOnly(libs.findbugs.jsr305)
 
@@ -37,9 +32,8 @@ dependencies {
 
   compileOnly(project(":nessie-versioned-storage-testextension"))
 
-  compileOnly(libs.immutables.builder)
-  compileOnly(libs.immutables.value.annotations)
-  annotationProcessor(libs.immutables.value.processor)
+  compileOnly(project(":nessie-immutables-std"))
+  annotationProcessor(project(":nessie-immutables-std", configuration = "processor"))
 
   testImplementation(project(":nessie-versioned-storage-common-tests"))
   testImplementation(project(":nessie-versioned-storage-inmemory"))

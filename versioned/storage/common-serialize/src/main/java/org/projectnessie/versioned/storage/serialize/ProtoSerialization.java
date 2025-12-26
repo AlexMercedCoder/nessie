@@ -15,6 +15,7 @@
  */
 package org.projectnessie.versioned.storage.serialize;
 
+import static java.util.Collections.emptyList;
 import static org.projectnessie.versioned.storage.common.indexes.StoreKey.keyFromString;
 import static org.projectnessie.versioned.storage.common.objtypes.CommitObj.commitBuilder;
 import static org.projectnessie.versioned.storage.common.objtypes.ContentValueObj.contentValue;
@@ -24,14 +25,19 @@ import static org.projectnessie.versioned.storage.common.objtypes.IndexStripe.in
 import static org.projectnessie.versioned.storage.common.objtypes.RefObj.ref;
 import static org.projectnessie.versioned.storage.common.objtypes.StringObj.stringData;
 import static org.projectnessie.versioned.storage.common.objtypes.TagObj.tag;
-import static org.projectnessie.versioned.storage.common.persist.Reference.reference;
+import static org.projectnessie.versioned.storage.common.objtypes.UniqueIdObj.uniqueId;
+import static org.projectnessie.versioned.storage.common.persist.ObjTypes.objTypeByName;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 import org.projectnessie.nessie.relocated.protobuf.ByteString;
 import org.projectnessie.nessie.relocated.protobuf.InvalidProtocolBufferException;
+import org.projectnessie.nessie.relocated.protobuf.Parser;
 import org.projectnessie.versioned.storage.common.exceptions.ObjTooLargeException;
 import org.projectnessie.versioned.storage.common.objtypes.CommitHeaders;
 import org.projectnessie.versioned.storage.common.objtypes.CommitObj;
@@ -42,15 +48,22 @@ import org.projectnessie.versioned.storage.common.objtypes.IndexObj;
 import org.projectnessie.versioned.storage.common.objtypes.IndexSegmentsObj;
 import org.projectnessie.versioned.storage.common.objtypes.IndexStripe;
 import org.projectnessie.versioned.storage.common.objtypes.RefObj;
+import org.projectnessie.versioned.storage.common.objtypes.StandardObjType;
 import org.projectnessie.versioned.storage.common.objtypes.StringObj;
 import org.projectnessie.versioned.storage.common.objtypes.TagObj;
+import org.projectnessie.versioned.storage.common.objtypes.UniqueIdObj;
+import org.projectnessie.versioned.storage.common.objtypes.UpdateableObj;
+import org.projectnessie.versioned.storage.common.persist.ImmutableReference;
 import org.projectnessie.versioned.storage.common.persist.Obj;
 import org.projectnessie.versioned.storage.common.persist.ObjId;
+import org.projectnessie.versioned.storage.common.persist.ObjType;
 import org.projectnessie.versioned.storage.common.persist.Reference;
+import org.projectnessie.versioned.storage.common.proto.StorageTypes;
 import org.projectnessie.versioned.storage.common.proto.StorageTypes.CommitProto;
 import org.projectnessie.versioned.storage.common.proto.StorageTypes.CommitTypeProto;
 import org.projectnessie.versioned.storage.common.proto.StorageTypes.CompressionProto;
 import org.projectnessie.versioned.storage.common.proto.StorageTypes.ContentValueProto;
+import org.projectnessie.versioned.storage.common.proto.StorageTypes.CustomProto;
 import org.projectnessie.versioned.storage.common.proto.StorageTypes.HeaderEntry;
 import org.projectnessie.versioned.storage.common.proto.StorageTypes.IndexProto;
 import org.projectnessie.versioned.storage.common.proto.StorageTypes.IndexSegmentsProto;
@@ -60,8 +73,10 @@ import org.projectnessie.versioned.storage.common.proto.StorageTypes.ReferencePr
 import org.projectnessie.versioned.storage.common.proto.StorageTypes.StringProto;
 import org.projectnessie.versioned.storage.common.proto.StorageTypes.Stripe;
 import org.projectnessie.versioned.storage.common.proto.StorageTypes.TagProto;
+import org.projectnessie.versioned.storage.common.proto.StorageTypes.UniqueIdProto;
 
 public final class ProtoSerialization {
+
   private ProtoSerialization() {}
 
   public static byte[] serializeReference(Reference reference) {
@@ -81,6 +96,12 @@ public final class ProtoSerialization {
     if (extendedInfoObj != null) {
       refBuilder.setExtendedInfoObj(serializeObjId(extendedInfoObj));
     }
+    for (Reference.PreviousPointer previousPointer : reference.previousPointers()) {
+      refBuilder.addPreviousPointers(
+          StorageTypes.ReferencePreviousProto.newBuilder()
+              .setPointer(serializeObjId(previousPointer.pointer()))
+              .setTimestamp(previousPointer.timestamp()));
+    }
     return refBuilder.build().toByteArray();
   }
 
@@ -90,12 +111,62 @@ public final class ProtoSerialization {
     }
     try {
       ReferenceProto proto = ReferenceProto.parseFrom(reference);
-      return reference(
-          proto.getName(),
-          deserializeObjId(proto.getPointer()),
-          proto.getDeleted(),
-          proto.getCreatedAtMicros(),
-          deserializeObjId(proto.getExtendedInfoObj()));
+      ImmutableReference.Builder ref =
+          ImmutableReference.builder()
+              .name(proto.getName())
+              .pointer(deserializeObjId(proto.getPointer()))
+              .deleted(proto.getDeleted())
+              .createdAtMicros(proto.getCreatedAtMicros())
+              .extendedInfoObj(deserializeObjId(proto.getExtendedInfoObj()));
+      for (StorageTypes.ReferencePreviousProto previousProto : proto.getPreviousPointersList()) {
+        ref.addPreviousPointers(
+            Reference.PreviousPointer.previousPointer(
+                deserializeObjId(previousProto.getPointer()), previousProto.getTimestamp()));
+      }
+      return ref.build();
+    } catch (InvalidProtocolBufferException e) {
+      throw new RuntimeException(e);
+    }
+  }
+
+  public static byte[] serializePreviousPointers(List<Reference.PreviousPointer> previousPointers) {
+    if (previousPointers == null || previousPointers.isEmpty()) {
+      return null;
+    }
+    try {
+      ByteArrayOutputStream output = new ByteArrayOutputStream();
+      for (Reference.PreviousPointer prev : previousPointers) {
+        StorageTypes.ReferencePreviousProto.newBuilder()
+            .setPointer(serializeObjId(prev.pointer()))
+            .setTimestamp(prev.timestamp())
+            .build()
+            .writeDelimitedTo(output);
+      }
+      return output.toByteArray();
+    } catch (IOException e) {
+      throw new RuntimeException(e);
+    }
+  }
+
+  public static List<Reference.PreviousPointer> deserializePreviousPointers(
+      byte[] previousPointers) {
+    if (previousPointers == null || previousPointers.length == 0) {
+      return emptyList();
+    }
+
+    try {
+      ByteArrayInputStream input = new ByteArrayInputStream(previousPointers);
+      Parser<StorageTypes.ReferencePreviousProto> parser =
+          StorageTypes.ReferencePreviousProto.parser();
+      List<Reference.PreviousPointer> r = new ArrayList<>();
+      while (input.available() > 0) {
+        StorageTypes.ReferencePreviousProto proto = parser.parseDelimitedFrom(input);
+        Reference.PreviousPointer previousPointer =
+            Reference.PreviousPointer.previousPointer(
+                deserializeObjId(proto.getPointer()), proto.getTimestamp());
+        r.add(previousPointer);
+      }
+      return r;
     } catch (InvalidProtocolBufferException e) {
       throw new RuntimeException(e);
     }
@@ -137,91 +208,112 @@ public final class ProtoSerialization {
     return result;
   }
 
-  public static byte[] serializeObj(Obj obj, int incrementalIndexSizeLimit, int indexSizeLimit)
+  public static byte[] serializeObj(
+      Obj obj, int incrementalIndexSizeLimit, int indexSizeLimit, boolean includeVersionToken)
       throws ObjTooLargeException {
     if (obj == null) {
       return null;
     }
-    ObjProto.Builder b = ObjProto.newBuilder();
-    switch (obj.type()) {
-      case COMMIT:
-        return b.setCommit(serializeCommit((CommitObj) obj, incrementalIndexSizeLimit))
-            .build()
-            .toByteArray();
-      case VALUE:
-        return b.setContentValue(serializeContentValue((ContentValueObj) obj))
-            .build()
-            .toByteArray();
-      case REF:
-        return b.setRef(serializeRef((RefObj) obj)).build().toByteArray();
-      case INDEX_SEGMENTS:
-        return b.setIndexSegments(serializeIndexSegments((IndexSegmentsObj) obj))
-            .build()
-            .toByteArray();
-      case INDEX:
-        return b.setIndex(serializeIndex((IndexObj) obj, indexSizeLimit)).build().toByteArray();
-      case STRING:
-        return b.setStringData(serializeStringData((StringObj) obj)).build().toByteArray();
-      case TAG:
-        return b.setTag(serializeTag((TagObj) obj)).build().toByteArray();
-      default:
-        throw new UnsupportedOperationException("Unknown object type " + obj.type());
+    ObjProto.Builder b = ObjProto.newBuilder().setReferenced(obj.referenced());
+    if (obj.type() instanceof StandardObjType) {
+      switch (((StandardObjType) obj.type())) {
+        case COMMIT:
+          return b.setCommit(serializeCommit((CommitObj) obj, incrementalIndexSizeLimit))
+              .build()
+              .toByteArray();
+        case VALUE:
+          return b.setContentValue(serializeContentValue((ContentValueObj) obj))
+              .build()
+              .toByteArray();
+        case REF:
+          return b.setRef(serializeRef((RefObj) obj)).build().toByteArray();
+        case INDEX_SEGMENTS:
+          return b.setIndexSegments(serializeIndexSegments((IndexSegmentsObj) obj))
+              .build()
+              .toByteArray();
+        case INDEX:
+          return b.setIndex(serializeIndex((IndexObj) obj, indexSizeLimit)).build().toByteArray();
+        case STRING:
+          return b.setStringData(serializeStringData((StringObj) obj)).build().toByteArray();
+        case TAG:
+          return b.setTag(serializeTag((TagObj) obj)).build().toByteArray();
+        case UNIQUE:
+          return b.setUniqueId(serializeUniqueId((UniqueIdObj) obj)).build().toByteArray();
+        default:
+          throw new UnsupportedOperationException("Unknown standard object type " + obj.type());
+      }
+    } else {
+      return b.setCustom(serializeCustom(obj, includeVersionToken)).build().toByteArray();
     }
   }
 
-  public static Obj deserializeObj(ObjId id, ByteBuffer serialized) {
+  public static Obj deserializeObj(
+      ObjId id, long referenced, ByteBuffer serialized, String versionToken) {
     if (serialized == null) {
       return null;
     }
     try {
       ObjProto obj = ObjProto.parseFrom(serialized);
-      return deserializeObjProto(id, obj);
+      return deserializeObjProto(id, referenced, obj, versionToken);
     } catch (InvalidProtocolBufferException e) {
       throw new RuntimeException(e);
     }
   }
 
-  public static Obj deserializeObj(ObjId id, byte[] serialized) {
+  public static Obj deserializeObj(
+      ObjId id, long referenced, byte[] serialized, String versionToken) {
     if (serialized == null) {
       return null;
     }
     try {
       ObjProto obj = ObjProto.parseFrom(serialized);
-      return deserializeObjProto(id, obj);
+      return deserializeObjProto(id, referenced, obj, versionToken);
     } catch (InvalidProtocolBufferException e) {
       throw new RuntimeException(e);
     }
   }
 
-  public static Obj deserializeObjProto(ObjId id, ObjProto obj) {
+  public static Obj deserializeObjProto(
+      ObjId id, long referenced, ObjProto obj, String versionToken) {
+    if (referenced == 0L) {
+      referenced = obj.getReferenced();
+    }
     if (obj.hasCommit()) {
-      return deserializeCommit(id, obj.getCommit());
+      return deserializeCommit(id, referenced, obj.getCommit());
     }
     if (obj.hasContentValue()) {
-      return deserializeContentValue(id, obj.getContentValue());
+      return deserializeContentValue(id, referenced, obj.getContentValue());
     }
     if (obj.hasRef()) {
-      return deserializeRef(id, obj.getRef());
+      return deserializeRef(id, referenced, obj.getRef());
     }
     if (obj.hasIndexSegments()) {
-      return deserializeIndexSegments(id, obj.getIndexSegments());
+      return deserializeIndexSegments(id, referenced, obj.getIndexSegments());
     }
     if (obj.hasIndex()) {
-      return deserializeIndex(id, obj.getIndex());
+      return deserializeIndex(id, referenced, obj.getIndex());
     }
     if (obj.hasStringData()) {
-      return deserializeStringData(id, obj.getStringData());
+      return deserializeStringData(id, referenced, obj.getStringData());
     }
     if (obj.hasTag()) {
-      return deserializeTag(id, obj.getTag());
+      return deserializeTag(id, referenced, obj.getTag());
+    }
+    if (obj.hasUniqueId()) {
+      return deserializeUniqueId(id, referenced, obj.getUniqueId());
+    }
+    if (obj.hasCustom()) {
+      CustomProto custom = obj.getCustom();
+      return deserializeCustom(id, referenced, custom, versionToken);
     }
     throw new UnsupportedOperationException("Cannot deserialize " + obj);
   }
 
-  private static CommitObj deserializeCommit(ObjId id, CommitProto commit) {
+  private static CommitObj deserializeCommit(ObjId id, long referenced, CommitProto commit) {
     CommitObj.Builder b =
         commitBuilder()
             .id(id)
+            .referenced(referenced)
             .created(commit.getCreated())
             .seq(commit.getSeq())
             .message(commit.getMessage())
@@ -257,7 +349,7 @@ public final class ProtoSerialization {
             .setCreated(obj.created())
             .setSeq(obj.seq())
             .setMessage(obj.message())
-            .setIncrementalIndex(verifyStoreIndexSize(obj.incrementalIndex(), indexSizeLimit))
+            .setIncrementalIndex(verifySize(obj.incrementalIndex(), indexSizeLimit))
             .setIncompleteIndex(obj.incompleteIndex())
             .setCommitType(CommitTypeProto.valueOf(obj.commitType().name()));
     serializeObjIds(obj.tail(), b::addTail);
@@ -279,15 +371,6 @@ public final class ProtoSerialization {
     return b;
   }
 
-  private static ByteString verifyStoreIndexSize(ByteString storeIndex, int indexSizeLimit)
-      throws ObjTooLargeException {
-    int serializedSize = storeIndex.size();
-    if (serializedSize > indexSizeLimit) {
-      throw new ObjTooLargeException(serializedSize, indexSizeLimit);
-    }
-    return storeIndex;
-  }
-
   private static ByteString verifySize(ByteString index, int indexSizeLimit)
       throws ObjTooLargeException {
     int size = index.size();
@@ -297,9 +380,14 @@ public final class ProtoSerialization {
     return index;
   }
 
-  private static ContentValueObj deserializeContentValue(ObjId id, ContentValueProto contentValue) {
+  private static ContentValueObj deserializeContentValue(
+      ObjId id, long referenced, ContentValueProto contentValue) {
     return contentValue(
-        id, contentValue.getContentId(), contentValue.getPayload(), contentValue.getData());
+        id,
+        referenced,
+        contentValue.getContentId(),
+        contentValue.getPayload(),
+        contentValue.getData());
   }
 
   private static ContentValueProto.Builder serializeContentValue(ContentValueObj obj) {
@@ -309,9 +397,10 @@ public final class ProtoSerialization {
         .setData(obj.data());
   }
 
-  private static RefObj deserializeRef(ObjId id, RefProto ref) {
+  private static RefObj deserializeRef(ObjId id, long referenced, RefProto ref) {
     return ref(
         id,
+        referenced,
         ref.getName(),
         deserializeObjId(ref.getInitialPointer()),
         ref.getCreatedAtMicros(),
@@ -332,7 +421,7 @@ public final class ProtoSerialization {
   }
 
   private static IndexSegmentsObj deserializeIndexSegments(
-      ObjId id, IndexSegmentsProto indexSegments) {
+      ObjId id, long referenced, IndexSegmentsProto indexSegments) {
     List<IndexStripe> stripes = new ArrayList<>(indexSegments.getStripesCount());
     for (Stripe s : indexSegments.getStripesList()) {
       stripes.add(
@@ -341,7 +430,7 @@ public final class ProtoSerialization {
               keyFromString(s.getLastKey()),
               deserializeObjId(s.getSegment())));
     }
-    return indexSegments(id, stripes);
+    return indexSegments(id, referenced, stripes);
   }
 
   private static IndexSegmentsProto.Builder serializeIndexSegments(IndexSegmentsObj obj) {
@@ -356,8 +445,8 @@ public final class ProtoSerialization {
     return b;
   }
 
-  private static IndexObj deserializeIndex(ObjId id, IndexProto index) {
-    return index(id, index.getIndex());
+  private static IndexObj deserializeIndex(ObjId id, long referenced, IndexProto index) {
+    return index(id, referenced, index.getIndex());
   }
 
   private static IndexProto.Builder serializeIndex(IndexObj obj, int indexSizeLimit)
@@ -365,9 +454,11 @@ public final class ProtoSerialization {
     return IndexProto.newBuilder().setIndex(verifySize(obj.index(), indexSizeLimit));
   }
 
-  private static StringObj deserializeStringData(ObjId id, StringProto stringData) {
+  private static StringObj deserializeStringData(
+      ObjId id, long referenced, StringProto stringData) {
     return stringData(
         id,
+        referenced,
         stringData.getContentType(),
         Compression.valueOf(stringData.getCompression().name()),
         stringData.hasFilename() ? stringData.getFilename() : null,
@@ -388,7 +479,7 @@ public final class ProtoSerialization {
     return b;
   }
 
-  private static TagObj deserializeTag(ObjId id, TagProto tag) {
+  private static TagObj deserializeTag(ObjId id, long referenced, TagProto tag) {
     CommitHeaders tagHeaders = null;
     if (tag.getHeadersCount() > 0) {
       CommitHeaders.Builder h = CommitHeaders.newCommitHeaders();
@@ -401,7 +492,7 @@ public final class ProtoSerialization {
     }
     String message = tag.hasMessage() ? tag.getMessage() : null;
     ByteString signature = tag.hasSignature() ? tag.getSignature() : null;
-    return tag(id, message, tagHeaders, signature);
+    return tag(id, referenced, message, tagHeaders, signature);
   }
 
   private static TagProto.Builder serializeTag(TagObj obj) {
@@ -419,5 +510,44 @@ public final class ProtoSerialization {
       }
     }
     return tag;
+  }
+
+  private static UniqueIdObj deserializeUniqueId(
+      ObjId id, long referenced, UniqueIdProto uniqueId) {
+    return uniqueId(id, referenced, uniqueId.getSpace(), uniqueId.getValue());
+  }
+
+  private static UniqueIdProto.Builder serializeUniqueId(UniqueIdObj obj) {
+    return UniqueIdProto.newBuilder().setSpace(obj.space()).setValue(obj.value());
+  }
+
+  private static Obj deserializeCustom(
+      ObjId id, long referenced, CustomProto custom, String versionToken) {
+    ObjType type = objTypeByName(custom.getObjType());
+    if (versionToken == null && custom.hasVersionToken()) {
+      // versionToken is set when reading objects from the database, but cache-deserialization has
+      // the versionToken in the object
+      versionToken = custom.getVersionToken();
+    }
+    return SmileSerialization.deserializeObj(
+        id,
+        versionToken,
+        custom.getData().toByteArray(),
+        type,
+        referenced,
+        custom.getCompression().name());
+  }
+
+  private static CustomProto.Builder serializeCustom(Obj obj, boolean includeVersionToken) {
+    CustomProto.Builder builder = CustomProto.newBuilder().setObjType(obj.type().shortName());
+    if (includeVersionToken) {
+      UpdateableObj.extractVersionToken(obj).ifPresent(builder::setVersionToken);
+    }
+    byte[] bytes =
+        SmileSerialization.serializeObj(
+            obj,
+            compression -> builder.setCompression(CompressionProto.valueOf(compression.name())));
+    builder.setData(ByteString.copyFrom(bytes));
+    return builder;
   }
 }

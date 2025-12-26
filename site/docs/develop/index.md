@@ -15,7 +15,7 @@ creators.
 The Iceberg format relies on a set of metadata files stored with (or near) the actual
 data tables. This allows Iceberg to fulfill the same role as the Hive Metastore for transactions without the need for
 expensive metadata scans or centralized planning (see [Iceberg
-performance](https://iceberg.apache.org/performance/)). This includes
+performance](https://iceberg.apache.org/docs/latest/performance/)). This includes
 things such as partitioning (including hidden partitions), schema migrations, appends and deletes.  It does however
 require a pointer to the active metadata set to function. This pointer allows the Iceberg client to acquire and read the
 current schema, files and partitions in the dataset. Iceberg currently relies on the Hive metastore or hdfs to perform
@@ -30,7 +30,7 @@ The Nessie service is a lightweight Java-based REST API server. It uses a standa
 to ensure atomic transactions. This relies on every operation carrying an expected
 hash state for the store and allows for a very light weight and
 scalable implementation. The implementation uses configurable authentication (e.g. IAM on AWS, JWT elsewhere) and a
-configurable backend (currently supporting RocksDB for single-node, and Apache Cassandra, ScyllaDB, Google BigTable,
+configurable backend (currently supporting RocksDB for single-node, and Apache Cassandra, Google BigTable,
 Amazon DynamoDB or MongoDB) and uses the optimistic locking features of cloud based key value stores to ensure
 scalability across servers. This architecture allows for Nessie to run in a docker container or in a number of other
 configurations.

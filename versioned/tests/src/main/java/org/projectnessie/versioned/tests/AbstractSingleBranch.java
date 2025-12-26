@@ -16,6 +16,7 @@
 package org.projectnessie.versioned.tests;
 
 import static java.util.Collections.emptyList;
+import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.projectnessie.versioned.testworker.OnRefOnly.newOnRef;
@@ -34,13 +35,13 @@ import org.projectnessie.model.CommitMeta;
 import org.projectnessie.model.Content;
 import org.projectnessie.model.ContentKey;
 import org.projectnessie.model.ImmutableCommitMeta;
+import org.projectnessie.model.Operation;
+import org.projectnessie.model.Operation.Put;
 import org.projectnessie.versioned.BranchName;
 import org.projectnessie.versioned.Commit;
 import org.projectnessie.versioned.CommitResult;
 import org.projectnessie.versioned.ContentResult;
 import org.projectnessie.versioned.Hash;
-import org.projectnessie.versioned.Operation;
-import org.projectnessie.versioned.Put;
 import org.projectnessie.versioned.ReferenceConflictException;
 import org.projectnessie.versioned.ReferenceNotFoundException;
 import org.projectnessie.versioned.VersionStore;
@@ -117,7 +118,7 @@ public abstract class AbstractSingleBranch extends AbstractNestedVersionStore {
         List<Operation> ops =
             singleBranchManyUsersOps(branch, commitNum, user, hashKnownByUser, key);
 
-        CommitResult<Commit> commitHash;
+        CommitResult commitHash;
         try {
           commitHash = store().commit(branch, Optional.of(hashKnownByUser), msg.build(), ops);
         } catch (ReferenceConflictException inconsistentValueException) {
@@ -154,11 +155,14 @@ public abstract class AbstractSingleBranch extends AbstractNestedVersionStore {
     ContentResult existing =
         store()
             .getValue(
-                store.hashOnReference(branch, Optional.of(hashKnownByUser), emptyList()), key);
+                store.hashOnReference(branch, Optional.of(hashKnownByUser), emptyList()),
+                key,
+                false);
     Content value =
         existing != null
             ? onRef(
-                String.format("data_file_%03d_%03d", user, commitNum), existing.content().getId())
+                String.format("data_file_%03d_%03d", user, commitNum),
+                requireNonNull(existing.content()).getId())
             : newOnRef(String.format("data_file_%03d_%03d", user, commitNum));
     ops = ImmutableList.of(Put.of(key, value));
     return ops;

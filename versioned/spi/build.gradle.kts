@@ -14,39 +14,29 @@
  * limitations under the License.
  */
 
-plugins {
-  id("nessie-conventions-server8")
-  id("nessie-jacoco")
-}
+plugins { id("nessie-conventions-java11") }
 
-extra["maven.name"] = "Nessie - Versioned Store SPI"
+publishingHelper { mavenName = "Nessie - Versioned Store SPI" }
 
 dependencies {
   implementation(project(":nessie-model"))
   api(project(path = ":nessie-protobuf-relocated", configuration = "shadow"))
   implementation("com.fasterxml.jackson.core:jackson-databind")
-  compileOnly(libs.immutables.builder)
-  compileOnly(libs.immutables.value.annotations)
-  annotationProcessor(libs.immutables.value.processor)
+  compileOnly(project(":nessie-immutables-std"))
+  annotationProcessor(project(":nessie-immutables-std", configuration = "processor"))
   compileOnly(libs.microprofile.openapi)
+
+  compileOnly(platform(libs.opentelemetry.instrumentation.bom.alpha))
+  compileOnly("io.opentelemetry.instrumentation:opentelemetry-instrumentation-annotations")
+  compileOnly(libs.micrometer.core)
 
   implementation(platform(libs.jackson.bom))
   compileOnly("com.fasterxml.jackson.core:jackson-annotations")
 
   implementation(libs.guava)
 
-  implementation(platform(libs.opentelemetry.instrumentation.bom.alpha))
-  implementation("io.opentelemetry:opentelemetry-api")
-  implementation("io.opentelemetry.instrumentation:opentelemetry-micrometer-1.5")
-  implementation(libs.micrometer.core)
-  testImplementation("io.opentelemetry:opentelemetry-exporter-common")
-  testImplementation("io.opentelemetry:opentelemetry-sdk")
-
-  // javax/jakarta
   compileOnly(libs.jakarta.validation.api)
-  compileOnly(libs.javax.validation.api)
   compileOnly(libs.jakarta.annotation.api)
-  compileOnly(libs.findbugs.jsr305)
 
   testImplementation(platform(libs.junit.bom))
   testImplementation(libs.bundles.junit.testing)
@@ -56,12 +46,9 @@ dependencies {
   testCompileOnly("com.fasterxml.jackson.core:jackson-annotations")
 
   testCompileOnly(libs.microprofile.openapi)
-  testCompileOnly(libs.immutables.value.annotations)
-  testAnnotationProcessor(libs.immutables.value.processor)
+  testCompileOnly(project(":nessie-immutables-std"))
+  testAnnotationProcessor(project(":nessie-immutables-std", configuration = "processor"))
   testCompileOnly(libs.jakarta.ws.rs.api)
-  testCompileOnly(libs.javax.ws.rs)
   testCompileOnly(libs.jakarta.validation.api)
-  testCompileOnly(libs.javax.validation.api)
   testCompileOnly(libs.jakarta.annotation.api)
-  testCompileOnly(libs.findbugs.jsr305)
 }

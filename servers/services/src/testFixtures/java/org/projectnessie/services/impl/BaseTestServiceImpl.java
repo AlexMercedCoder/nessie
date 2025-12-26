@@ -16,12 +16,14 @@
 package org.projectnessie.services.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.util.Preconditions.checkState;
 import static org.projectnessie.model.CommitMeta.fromMessage;
 import static org.projectnessie.model.FetchOption.MINIMAL;
 import static org.projectnessie.model.Reference.ReferenceType.BRANCH;
 import static org.projectnessie.model.Reference.ReferenceType.TAG;
+import static org.projectnessie.services.authz.ApiContext.apiContext;
 import static org.projectnessie.services.impl.RefUtil.toReference;
+import static org.projectnessie.versioned.RequestMeta.API_READ;
+import static org.projectnessie.versioned.RequestMeta.API_WRITE;
 import static org.projectnessie.versioned.storage.common.logic.Logics.repositoryLogic;
 
 import com.google.common.collect.ImmutableMap;
@@ -50,6 +52,7 @@ import org.projectnessie.model.CommitMeta;
 import org.projectnessie.model.CommitResponse;
 import org.projectnessie.model.Content;
 import org.projectnessie.model.ContentKey;
+import org.projectnessie.model.ContentResponse;
 import org.projectnessie.model.Detached;
 import org.projectnessie.model.DiffResponse.DiffEntry;
 import org.projectnessie.model.EntriesResponse.Entry;
@@ -71,18 +74,12 @@ import org.projectnessie.services.authz.BatchAccessChecker;
 import org.projectnessie.services.config.ServerConfig;
 import org.projectnessie.services.spi.PagedResponseHandler;
 import org.projectnessie.versioned.VersionStore;
-import org.projectnessie.versioned.persist.adapter.DatabaseAdapter;
-import org.projectnessie.versioned.persist.store.PersistVersionStore;
-import org.projectnessie.versioned.persist.tests.extension.NessieDbAdapter;
 import org.projectnessie.versioned.storage.common.persist.Persist;
 import org.projectnessie.versioned.storage.testextension.NessiePersist;
 import org.projectnessie.versioned.storage.versionstore.VersionStoreImpl;
 
 @ExtendWith(SoftAssertionsExtension.class)
 public abstract class BaseTestServiceImpl {
-
-  @NessieDbAdapter(initializeRepo = false)
-  DatabaseAdapter databaseAdapter;
 
   @NessiePersist(initializeRepo = false)
   Persist persist;
@@ -101,7 +98,7 @@ public abstract class BaseTestServiceImpl {
       };
 
   protected static final Authorizer NOOP_AUTHORIZER =
-      context -> AbstractBatchAccessChecker.NOOP_ACCESS_CHECKER;
+      (context, apiContext) -> AbstractBatchAccessChecker.NOOP_ACCESS_CHECKER;
 
   @InjectSoftAssertions protected SoftAssertions soft;
 
@@ -109,23 +106,28 @@ public abstract class BaseTestServiceImpl {
   private Principal principal;
 
   protected final ConfigApiImpl configApi() {
-    return new ConfigApiImpl(config(), versionStore(), 2);
+    return new ConfigApiImpl(
+        config(), versionStore(), authorizer(), this::principal, apiContext("Nessie", 2));
   }
 
   protected final TreeApiImpl treeApi() {
-    return new TreeApiImpl(config(), versionStore(), authorizer(), this::principal);
+    return new TreeApiImpl(
+        config(), versionStore(), authorizer(), this::principal, apiContext("Nessie", 2));
   }
 
   protected final ContentApiImpl contentApi() {
-    return new ContentApiImpl(config(), versionStore(), authorizer(), this::principal);
+    return new ContentApiImpl(
+        config(), versionStore(), authorizer(), this::principal, apiContext("Nessie", 2));
   }
 
   protected final DiffApiImpl diffApi() {
-    return new DiffApiImpl(config(), versionStore(), authorizer(), this::principal);
+    return new DiffApiImpl(
+        config(), versionStore(), authorizer(), this::principal, apiContext("Nessie", 2));
   }
 
   protected final NamespaceApiImpl namespaceApi() {
-    return new NamespaceApiImpl(config(), versionStore(), authorizer(), this::principal);
+    return new NamespaceApiImpl(
+        config(), versionStore(), authorizer(), this::principal, apiContext("Nessie", 2));
   }
 
   protected Principal principal() {
@@ -146,34 +148,16 @@ public abstract class BaseTestServiceImpl {
 
   protected void setBatchAccessChecker(
       Function<AccessContext, BatchAccessChecker> batchAccessChecker) {
-    this.authorizer = batchAccessChecker::apply;
+    this.authorizer = (t, apiContext) -> batchAccessChecker.apply(t);
   }
 
   protected VersionStore versionStore() {
-    if (persist != null) {
-      checkState(
-          databaseAdapter == null,
-          "Either Persist or DatabaseAdapter should be present - never both");
-      return new VersionStoreImpl(persist);
-    }
-    if (databaseAdapter != null) {
-      return new PersistVersionStore(databaseAdapter);
-    }
-    throw new IllegalStateException("Neither Persist nor DatabaseAdapter instance present");
-  }
-
-  protected boolean isNewStorageModel() {
-    return versionStore().getClass().getName().endsWith("VersionStoreImpl");
+    return new VersionStoreImpl(persist);
   }
 
   @BeforeEach
   protected void setup() {
-    if (persist != null) {
-      repositoryLogic(persist).initialize(config().getDefaultBranch());
-    }
-    if (databaseAdapter != null) {
-      databaseAdapter.initializeRepo(config().getDefaultBranch());
-    }
+    repositoryLogic(persist).initialize(config().getDefaultBranch());
   }
 
   @AfterEach
@@ -182,9 +166,6 @@ public abstract class BaseTestServiceImpl {
     principal = null;
     if (persist != null) {
       persist.erase();
-    }
-    if (databaseAdapter != null) {
-      databaseAdapter.eraseRepo();
     }
   }
 
@@ -478,21 +459,44 @@ public abstract class BaseTestServiceImpl {
       throws NessieConflictException, NessieNotFoundException {
     Operations ops =
         ImmutableOperations.builder().addOperations(operations).commitMeta(meta).build();
-    return treeApi().commitMultipleOperations(branch, expectedHash, ops);
+    return treeApi().commitMultipleOperations(branch, expectedHash, ops, API_WRITE);
   }
 
   protected Map<ContentKey, Content> contents(Reference reference, ContentKey... keys)
       throws NessieNotFoundException {
-    return contents(reference.getName(), reference.getHash(), keys);
+    return contents(reference, false, keys);
+  }
+
+  protected Map<ContentKey, Content> contents(
+      Reference reference, boolean forWrite, ContentKey... keys) throws NessieNotFoundException {
+    return contents(reference.getName(), reference.getHash(), forWrite, keys);
   }
 
   protected Map<ContentKey, Content> contents(String refName, String hashOnRef, ContentKey... keys)
       throws NessieNotFoundException {
+    return contents(refName, hashOnRef, false, keys);
+  }
+
+  protected Map<ContentKey, Content> contents(
+      String refName, String hashOnRef, boolean forWrite, ContentKey... keys)
+      throws NessieNotFoundException {
     return contentApi()
-        .getMultipleContents(refName, hashOnRef, Arrays.asList(keys), false)
+        .getMultipleContents(
+            refName, hashOnRef, Arrays.asList(keys), false, forWrite ? API_WRITE : API_READ)
         .getContents()
         .stream()
         .collect(Collectors.toMap(ContentWithKey::getKey, ContentWithKey::getContent));
+  }
+
+  protected ContentResponse content(Reference reference, boolean forWrite, ContentKey key)
+      throws NessieNotFoundException {
+    return content(reference.getName(), reference.getHash(), forWrite, key);
+  }
+
+  protected ContentResponse content(
+      String refName, String hashOnRef, boolean forWrite, ContentKey key)
+      throws NessieNotFoundException {
+    return contentApi().getContent(key, refName, hashOnRef, false, forWrite ? API_WRITE : API_READ);
   }
 
   protected String createCommits(
@@ -506,7 +510,9 @@ public abstract class BaseTestServiceImpl {
         Put op;
         try {
           Content existing =
-              contentApi().getContent(key, branch.getName(), currentHash, false).getContent();
+              contentApi()
+                  .getContent(key, branch.getName(), currentHash, false, API_READ)
+                  .getContent();
           op = Put.of(key, IcebergTable.of("some-file-" + i, 42, 42, 42, 42, existing.getId()));
         } catch (NessieContentNotFoundException notFound) {
           op = Put.of(key, IcebergTable.of("some-file-" + i, 42, 42, 42, 42));

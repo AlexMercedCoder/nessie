@@ -15,21 +15,21 @@
  */
 
 plugins {
-  id("nessie-conventions-server")
-  id("nessie-jacoco")
+  id("nessie-conventions-java11")
   alias(libs.plugins.jmh)
 }
 
-extra["maven.name"] = "Nessie - Storage - Common"
+publishingHelper { mavenName = "Nessie - Storage - Common" }
 
 description = "Storage interfaces and logic implementations."
 
 dependencies {
-  // javax/jakarta
   compileOnly(libs.jakarta.validation.api)
-  compileOnly(libs.javax.validation.api)
   compileOnly(libs.jakarta.annotation.api)
-  compileOnly(libs.findbugs.jsr305)
+
+  compileOnly(platform(libs.opentelemetry.instrumentation.bom.alpha))
+  compileOnly("io.opentelemetry.instrumentation:opentelemetry-instrumentation-annotations")
+  compileOnly(libs.micrometer.core)
 
   compileOnly(libs.errorprone.annotations)
   implementation(libs.agrona)
@@ -37,24 +37,26 @@ dependencies {
   implementation(project(path = ":nessie-protobuf-relocated", configuration = "shadow"))
   implementation(libs.slf4j.api)
 
-  compileOnly(libs.immutables.builder)
-  compileOnly(libs.immutables.value.annotations)
-  annotationProcessor(libs.immutables.value.processor)
+  compileOnly(project(":nessie-immutables-std"))
+  annotationProcessor(project(":nessie-immutables-std", configuration = "processor"))
 
   implementation(platform(libs.jackson.bom))
   implementation("com.fasterxml.jackson.core:jackson-databind")
   implementation("com.fasterxml.jackson.core:jackson-annotations")
 
+  implementation(libs.snappy.java)
+
   testImplementation(platform(libs.junit.bom))
   testImplementation(libs.bundles.junit.testing)
 
-  testCompileOnly(libs.immutables.builder)
-  testCompileOnly(libs.immutables.value.annotations)
-  testAnnotationProcessor(libs.immutables.value.processor)
+  implementation(platform(libs.opentelemetry.bom))
+  implementation("io.opentelemetry:opentelemetry-api")
+  testImplementation("io.opentelemetry:opentelemetry-sdk-testing")
 
   testImplementation(project(":nessie-versioned-storage-testextension"))
   testImplementation(project(":nessie-versioned-storage-inmemory"))
   testImplementation(project(":nessie-versioned-storage-common-tests"))
+  testImplementation(libs.threeten.extra)
   testRuntimeOnly(libs.logback.classic)
 
   jmhImplementation(libs.jmh.core)
@@ -62,8 +64,4 @@ dependencies {
   jmhAnnotationProcessor(libs.jmh.generator.annprocess)
 }
 
-tasks.named("processJmhJandexIndex").configure { enabled = false }
-
-tasks.named("processTestJandexIndex").configure { enabled = false }
-
-jmh { jmhVersion.set(libs.versions.jmh.get()) }
+jmh { jmhVersion = libs.versions.jmh.get() }

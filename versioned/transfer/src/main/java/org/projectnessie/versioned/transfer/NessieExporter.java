@@ -15,116 +15,149 @@
  */
 package org.projectnessie.versioned.transfer;
 
-import static com.google.common.base.Preconditions.checkState;
 import static org.projectnessie.versioned.transfer.ExportImportConstants.DEFAULT_BUFFER_SIZE;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.errorprone.annotations.CanIgnoreReturnValue;
+import jakarta.annotation.Nullable;
 import java.io.IOException;
+import java.net.URL;
 import java.time.Clock;
-import javax.annotation.Nullable;
+import java.util.List;
 import org.immutables.value.Value;
 import org.projectnessie.versioned.StoreWorker;
 import org.projectnessie.versioned.VersionStore;
-import org.projectnessie.versioned.persist.adapter.DatabaseAdapter;
+import org.projectnessie.versioned.storage.common.logic.CommitLogic;
+import org.projectnessie.versioned.storage.common.logic.IndexesLogic;
+import org.projectnessie.versioned.storage.common.logic.Logics;
+import org.projectnessie.versioned.storage.common.logic.ReferenceLogic;
+import org.projectnessie.versioned.storage.common.logic.RepositoryLogic;
 import org.projectnessie.versioned.storage.common.persist.Persist;
 import org.projectnessie.versioned.store.DefaultStoreWorker;
 import org.projectnessie.versioned.transfer.files.ExportFileSupplier;
 import org.projectnessie.versioned.transfer.serialize.TransferTypes.ExportMeta;
+import org.projectnessie.versioned.transfer.serialize.TransferTypes.ExportVersion;
 
 @Value.Immutable
 public abstract class NessieExporter {
 
   public static final String NAMED_REFS_PREFIX = "named-refs";
   public static final String COMMITS_PREFIX = "commits";
+  public static final String CUSTOM_PREFIX = "custom";
 
   public static Builder builder() {
     return ImmutableNessieExporter.builder();
   }
 
-  @SuppressWarnings("UnusedReturnValue")
   public interface Builder {
-    /** Specify the {@code DatabaseAdapter} to use. */
-    Builder databaseAdapter(DatabaseAdapter databaseAdapter);
-
     /** Specify the {@code Persist} to use. */
+    @CanIgnoreReturnValue
     Builder persist(Persist persist);
 
+    @CanIgnoreReturnValue
+    Builder commitLogic(CommitLogic commitLogic);
+
+    @CanIgnoreReturnValue
+    Builder referenceLogic(ReferenceLogic referenceLogic);
+
+    @CanIgnoreReturnValue
+    Builder repositoryLogic(RepositoryLogic repositoryLogic);
+
+    @CanIgnoreReturnValue
+    Builder indexesLogic(IndexesLogic indexesLogic);
+
+    @CanIgnoreReturnValue
     Builder versionStore(VersionStore store);
 
     /** Optional, specify a custom {@link ObjectMapper}. */
+    @CanIgnoreReturnValue
     Builder objectMapper(ObjectMapper objectMapper);
 
     /** Optional, specify a custom {@link StoreWorker}. */
+    @CanIgnoreReturnValue
     Builder storeWorker(StoreWorker storeWorker);
 
     /**
      * Optional, specify a different buffer size than the default value of {@value
      * ExportImportConstants#DEFAULT_BUFFER_SIZE}.
      */
+    @CanIgnoreReturnValue
     Builder outputBufferSize(int outputBufferSize);
 
     /**
      * Maximum size of a file containing commits or named references. Default is to write everything
      * into a single file.
      */
+    @CanIgnoreReturnValue
     Builder maxFileSize(long maxFileSize);
 
     /**
      * The expected number of commits in the Nessie repository, default is {@value
      * ExportImportConstants#DEFAULT_EXPECTED_COMMIT_COUNT}.
      */
+    @CanIgnoreReturnValue
     Builder expectedCommitCount(int expectedCommitCount);
 
+    @CanIgnoreReturnValue
     Builder progressListener(ProgressListener progressListener);
 
+    @CanIgnoreReturnValue
     Builder exportFileSupplier(ExportFileSupplier exportFileSupplier);
 
+    @CanIgnoreReturnValue
     Builder fullScan(boolean fullScan);
 
+    @CanIgnoreReturnValue
     Builder contentsFromBranch(String branchName);
 
+    @CanIgnoreReturnValue
     Builder contentsBatchSize(int batchSize);
 
     /**
      * Optional, specify the number of commit log entries to be written at once, defaults to {@value
      * ExportImportConstants#DEFAULT_COMMIT_BATCH_SIZE}.
      */
+    @CanIgnoreReturnValue
     Builder commitBatchSize(int commitBatchSize);
+
+    @CanIgnoreReturnValue
+    Builder exportVersion(int exportVersion);
+
+    @CanIgnoreReturnValue
+    Builder addGenericObjectResolvers(URL element);
 
     NessieExporter build();
   }
 
-  @Nullable
-  @jakarta.annotation.Nullable
-  abstract DatabaseAdapter databaseAdapter();
-
-  @Nullable
-  @jakarta.annotation.Nullable
   abstract Persist persist();
+
+  @Value.Default
+  CommitLogic commitLogic() {
+    return Logics.commitLogic(persist());
+  }
+
+  @Value.Default
+  ReferenceLogic referenceLogic() {
+    return Logics.referenceLogic(persist());
+  }
+
+  @Value.Default
+  RepositoryLogic repositoryLogic() {
+    return Logics.repositoryLogic(persist());
+  }
+
+  @Value.Default
+  IndexesLogic indexesLogic() {
+    return Logics.indexesLogic(persist());
+  }
 
   @Nullable
   abstract VersionStore versionStore();
 
   @Value.Lazy
   Clock clock() {
-    DatabaseAdapter databaseAdapter = databaseAdapter();
-    if (databaseAdapter != null) {
-      return databaseAdapter.getConfig().getClock();
-    }
-
     Persist persist = persist();
-    if (persist != null) {
-      return persist.config().clock();
-    }
-
-    throw new IllegalStateException("Neither DatabaseAdapter nor Persist are set.");
-  }
-
-  @Value.Check
-  void check() {
-    checkState(
-        persist() == null ^ databaseAdapter() == null,
-        "Must supply either persist() or databaseAdapter(), never both");
+    return persist.config().clock();
   }
 
   /**
@@ -178,6 +211,13 @@ public abstract class NessieExporter {
     return ExportImportConstants.DEFAULT_COMMIT_BATCH_SIZE;
   }
 
+  @Value.Default
+  int exportVersion() {
+    return ExportImportConstants.DEFAULT_EXPORT_VERSION;
+  }
+
+  abstract List<URL> genericObjectResolvers();
+
   abstract ExportFileSupplier exportFileSupplier();
 
   @Value.Default
@@ -190,14 +230,12 @@ public abstract class NessieExporter {
 
     exportFiles.preValidate();
 
+    ExportVersion ver = ExportVersion.forNumber(exportVersion());
+
     if (contentsFromBranch() != null) {
-      return new ExportContents(exportFiles, this).exportRepo();
+      return new ExportContents(exportFiles, this, ver).exportRepo();
     }
 
-    if (databaseAdapter() != null) {
-      return new ExportDatabaseAdapter(exportFiles, this).exportRepo();
-    }
-
-    return new ExportPersist(exportFiles, this).exportRepo();
+    return new ExportPersist(exportFiles, this, ver).exportRepo();
   }
 }

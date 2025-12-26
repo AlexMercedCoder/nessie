@@ -15,8 +15,9 @@
  */
 package org.projectnessie.versioned;
 
-import javax.annotation.Nullable;
-import javax.validation.constraints.NotNull;
+import com.google.common.base.Preconditions;
+import jakarta.annotation.Nullable;
+import jakarta.validation.constraints.NotNull;
 import org.immutables.value.Value;
 import org.projectnessie.model.Content;
 import org.projectnessie.model.IdentifiedContentKey;
@@ -24,22 +25,37 @@ import org.projectnessie.model.IdentifiedContentKey;
 @Value.Immutable
 public interface KeyEntry {
 
+  @Value.Parameter(order = 1)
   IdentifiedContentKey getKey();
 
   @Nullable
-  @jakarta.annotation.Nullable
+  @Value.Parameter(order = 2)
   Content getContent();
 
-  static ImmutableKeyEntry.Builder builder() {
-    return ImmutableKeyEntry.builder();
+  @Value.Check
+  default void verify() {
+    Content content = getContent();
+    if (content == null) {
+      return;
+    }
+    IdentifiedContentKey key = getKey();
+    Preconditions.checkArgument(
+        key.type().equals(content.getType()),
+        "Content type from key '%s' does not match actual type of content: %s",
+        key.type(),
+        content);
+    Preconditions.checkArgument(
+        key.lastElement().contentId().equals(content.getId()),
+        "Content id from key '%s' does not match actual id of content: %s",
+        key,
+        content);
   }
 
   static KeyEntry of(IdentifiedContentKey key) {
-    return builder().key(key).build();
+    return ImmutableKeyEntry.of(key, null);
   }
 
-  static KeyEntry of(
-      IdentifiedContentKey key, @NotNull @jakarta.validation.constraints.NotNull Content content) {
-    return builder().key(key).content(content).build();
+  static KeyEntry of(IdentifiedContentKey key, @NotNull Content content) {
+    return ImmutableKeyEntry.of(key, content);
   }
 }

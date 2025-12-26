@@ -15,9 +15,9 @@
  */
 package org.projectnessie.gc.identify;
 
+import jakarta.annotation.Nonnull;
 import java.time.Instant;
 import java.util.Objects;
-import javax.annotation.Nonnull;
 
 final class NumCommitsCutoffPolicy implements CutoffPolicy {
 
@@ -28,8 +28,8 @@ final class NumCommitsCutoffPolicy implements CutoffPolicy {
   }
 
   @Override
-  public boolean isCutoff(@Nonnull @jakarta.annotation.Nonnull Instant commitTime, int numCommits) {
-    return numCommits >= commits;
+  public boolean isCutoff(@Nonnull Instant commitTime, int numCommits) {
+    return numCommits > commits;
   }
 
   @Override

@@ -14,12 +14,9 @@
  * limitations under the License.
  */
 
-plugins {
-  id("nessie-conventions-server")
-  id("nessie-jacoco")
-}
+plugins { id("nessie-conventions-java11") }
 
-extra["maven.name"] = "Nessie - Storage - Testextension"
+publishingHelper { mavenName = "Nessie - Storage - Testextension" }
 
 description = "JUnit 5 test extension providing configurable 'Persist' instances."
 
@@ -27,18 +24,16 @@ dependencies {
   implementation(project(":nessie-versioned-storage-common"))
   implementation(project(":nessie-versioned-storage-cache"))
 
-  // javax/jakarta
   compileOnly(libs.jakarta.validation.api)
-  compileOnly(libs.javax.validation.api)
   compileOnly(libs.jakarta.annotation.api)
-  compileOnly(libs.findbugs.jsr305)
+
+  implementation(libs.micrometer.core)
 
   compileOnly(libs.errorprone.annotations)
   implementation(libs.guava)
 
-  compileOnly(libs.immutables.builder)
-  compileOnly(libs.immutables.value.annotations)
-  annotationProcessor(libs.immutables.value.processor)
+  compileOnly(project(":nessie-immutables-std"))
+  annotationProcessor(project(":nessie-immutables-std", configuration = "processor"))
 
   implementation(platform(libs.junit.bom))
   implementation(libs.bundles.junit.testing)

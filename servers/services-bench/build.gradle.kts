@@ -17,12 +17,12 @@
 import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
 
 plugins {
+  id("com.gradleup.shadow")
   id("nessie-conventions-unpublished-tool")
-  id("com.github.johnrengelman.shadow")
   alias(libs.plugins.jmh)
 }
 
-extra["maven.name"] = "Nessie - Services - Microbenchmarks"
+publishingHelper { mavenName = "Nessie - Services - Microbenchmarks" }
 
 dependencies {
   implementation(project(":nessie-model"))
@@ -45,15 +45,20 @@ dependencies {
   jmhRuntimeOnly(project(":nessie-versioned-storage-inmemory"))
   jmhRuntimeOnly(project(":nessie-versioned-storage-bigtable"))
   jmhRuntimeOnly(project(":nessie-versioned-storage-cassandra"))
+  jmhRuntimeOnly(project(":nessie-versioned-storage-cassandra2"))
   jmhRuntimeOnly(project(":nessie-versioned-storage-rocksdb"))
   jmhRuntimeOnly(project(":nessie-versioned-storage-mongodb"))
+  jmhRuntimeOnly(project(":nessie-versioned-storage-mongodb2"))
   jmhRuntimeOnly(project(":nessie-versioned-storage-dynamodb"))
+  jmhRuntimeOnly(project(":nessie-versioned-storage-dynamodb2"))
   jmhRuntimeOnly(project(":nessie-versioned-storage-jdbc"))
-  jmhRuntimeOnly(libs.testcontainers.testcontainers)
-  jmhRuntimeOnly(libs.testcontainers.cassandra)
-  jmhRuntimeOnly(libs.testcontainers.mongodb)
-  jmhRuntimeOnly(libs.testcontainers.postgresql)
-  jmhRuntimeOnly(libs.testcontainers.cockroachdb)
+  jmhRuntimeOnly(project(":nessie-versioned-storage-jdbc2"))
+  jmhRuntimeOnly(platform(libs.testcontainers.bom))
+  jmhRuntimeOnly("org.testcontainers:testcontainers")
+  jmhRuntimeOnly("org.testcontainers:testcontainers-cassandra")
+  jmhRuntimeOnly("org.testcontainers:testcontainers-mongodb")
+  jmhRuntimeOnly("org.testcontainers:testcontainers-postgresql")
+  jmhRuntimeOnly("org.testcontainers:testcontainers-cockroachdb")
   jmhRuntimeOnly(libs.docker.java.api)
   jmhRuntimeOnly(libs.agroal.pool)
   jmhRuntimeOnly(libs.h2)
@@ -61,6 +66,6 @@ dependencies {
   jmhRuntimeOnly(libs.logback.classic)
 }
 
-jmh { jmhVersion.set(libs.versions.jmh.get()) }
+jmh { jmhVersion = libs.versions.jmh.get() }
 
 tasks.named<ShadowJar>("jmhJar").configure { mergeServiceFiles() }

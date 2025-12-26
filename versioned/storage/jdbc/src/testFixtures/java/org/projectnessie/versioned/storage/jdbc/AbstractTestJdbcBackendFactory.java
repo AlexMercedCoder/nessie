@@ -38,13 +38,13 @@ import org.projectnessie.versioned.storage.common.persist.BackendFactory;
 import org.projectnessie.versioned.storage.common.persist.Persist;
 import org.projectnessie.versioned.storage.common.persist.PersistFactory;
 import org.projectnessie.versioned.storage.common.persist.PersistLoader;
+import org.projectnessie.versioned.storage.jdbctests.AbstractJdbcBackendTestFactory;
+import org.projectnessie.versioned.storage.jdbctests.DataSourceProducer;
 
 @SuppressWarnings("SqlDialectInspection")
 @ExtendWith(SoftAssertionsExtension.class)
 public abstract class AbstractTestJdbcBackendFactory {
   @InjectSoftAssertions protected SoftAssertions soft;
-
-  static StoreConfig DEFAULT_CONFIG = new StoreConfig() {};
 
   protected abstract AbstractJdbcBackendTestFactory testFactory();
 
@@ -59,6 +59,7 @@ public abstract class AbstractTestJdbcBackendFactory {
               .jdbcUrl(testFactory.jdbcUrl())
               .jdbcUser(testFactory.jdbcUser())
               .jdbcPass(testFactory.jdbcPass())
+              .transactionIsolation(testFactory.transactionIsolation())
               .build()
               .createNewDataSource();
       try {
@@ -73,7 +74,7 @@ public abstract class AbstractTestJdbcBackendFactory {
           backend.setupSchema();
           PersistFactory persistFactory = backend.createFactory();
           soft.assertThat(persistFactory).isNotNull().isInstanceOf(JdbcPersistFactory.class);
-          Persist persist = persistFactory.newPersist(DEFAULT_CONFIG);
+          Persist persist = persistFactory.newPersist(StoreConfig.Adjustable.empty());
           soft.assertThat(persist).isNotNull().isInstanceOf(JdbcPersist.class);
 
           RepositoryLogic repositoryLogic = repositoryLogic(persist);
@@ -88,7 +89,7 @@ public abstract class AbstractTestJdbcBackendFactory {
           backend.setupSchema();
           PersistFactory persistFactory = backend.createFactory();
           soft.assertThat(persistFactory).isNotNull().isInstanceOf(JdbcPersistFactory.class);
-          Persist persist = persistFactory.newPersist(DEFAULT_CONFIG);
+          Persist persist = persistFactory.newPersist(StoreConfig.Adjustable.empty());
           soft.assertThat(persist).isNotNull().isInstanceOf(JdbcPersist.class);
 
           RepositoryLogic repositoryLogic = repositoryLogic(persist);
@@ -116,10 +117,11 @@ public abstract class AbstractTestJdbcBackendFactory {
               .jdbcUrl(testFactory.jdbcUrl())
               .jdbcUser(testFactory.jdbcUser())
               .jdbcPass(testFactory.jdbcPass())
+              .transactionIsolation(testFactory.transactionIsolation())
               .build()
               .createNewDataSource();
-      try (Connection keepAliveForH2 = dataSource.getConnection()) {
-
+      try (@SuppressWarnings("unused")
+          Connection keepAliveForH2 = dataSource.getConnection()) {
         RepositoryDescription repoDesc;
 
         try (Backend backend = testFactory.createNewBackend()) {
@@ -127,7 +129,7 @@ public abstract class AbstractTestJdbcBackendFactory {
           backend.setupSchema();
           PersistFactory persistFactory = backend.createFactory();
           soft.assertThat(persistFactory).isNotNull().isInstanceOf(JdbcPersistFactory.class);
-          Persist persist = persistFactory.newPersist(DEFAULT_CONFIG);
+          Persist persist = persistFactory.newPersist(StoreConfig.Adjustable.empty());
           soft.assertThat(persist).isNotNull().isInstanceOf(JdbcPersist.class);
 
           RepositoryLogic repositoryLogic = repositoryLogic(persist);
@@ -141,7 +143,7 @@ public abstract class AbstractTestJdbcBackendFactory {
           backend.setupSchema();
           PersistFactory persistFactory = backend.createFactory();
           soft.assertThat(persistFactory).isNotNull().isInstanceOf(JdbcPersistFactory.class);
-          Persist persist = persistFactory.newPersist(DEFAULT_CONFIG);
+          Persist persist = persistFactory.newPersist(StoreConfig.Adjustable.empty());
           soft.assertThat(persist).isNotNull().isInstanceOf(JdbcPersist.class);
 
           RepositoryLogic repositoryLogic = repositoryLogic(persist);
@@ -167,6 +169,7 @@ public abstract class AbstractTestJdbcBackendFactory {
               .jdbcUrl(testFactory.jdbcUrl())
               .jdbcUser(testFactory.jdbcUser())
               .jdbcPass(testFactory.jdbcPass())
+              .transactionIsolation(testFactory.transactionIsolation())
               .build()
               .createNewDataSource();
       try {
@@ -183,7 +186,7 @@ public abstract class AbstractTestJdbcBackendFactory {
             Statement st = conn.createStatement()) {
           dropTables(conn, st);
 
-          st.executeUpdate("CREATE TABLE " + TABLE_REFS + " (foobarbaz VARCHAR PRIMARY KEY)");
+          st.executeUpdate("CREATE TABLE " + TABLE_REFS + " (foobarbaz VARCHAR(255) PRIMARY KEY)");
         }
 
         try (Backend backend =
@@ -211,9 +214,9 @@ public abstract class AbstractTestJdbcBackendFactory {
                   + TABLE_REFS
                   + " ("
                   + COL_REPO_ID
-                  + " VARCHAR, "
+                  + " VARCHAR(255), "
                   + COL_REFS_NAME
-                  + " VARCHAR, meep VARCHAR, boo VARCHAR, PRIMARY KEY ("
+                  + " VARCHAR(255), meep VARCHAR(255), boo VARCHAR(255), PRIMARY KEY ("
                   + COL_REPO_ID
                   + ", "
                   + COL_REFS_NAME
@@ -225,10 +228,13 @@ public abstract class AbstractTestJdbcBackendFactory {
           soft.assertThat(backend).isNotNull().isInstanceOf(JdbcBackend.class);
           soft.assertThatIllegalStateException()
               .isThrownBy(backend::setupSchema)
-              .withMessageStartingWith("Expected columns [")
-              .withMessageContaining("] do not match the existing columns [")
-              .withMessageContaining(
-                  "] for table '" + TABLE_REFS + "'. DDL template:\nCREATE TABLE " + TABLE_REFS);
+              .withMessageStartingWith(
+                  "The database table "
+                      + TABLE_REFS
+                      + " is missing mandatory columns created_at,deleted,ext_info,pointer,prev_ptr.\n"
+                      + "Found columns : boo,meep,ref_name,repo\n"
+                      + "Expected columns : ")
+              .withMessageContaining("DDL template:\nCREATE TABLE " + TABLE_REFS);
         }
       } finally {
         ((AutoCloseable) dataSource).close();

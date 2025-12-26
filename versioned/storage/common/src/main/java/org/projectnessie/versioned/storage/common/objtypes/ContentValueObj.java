@@ -16,7 +16,8 @@
 package org.projectnessie.versioned.storage.common.objtypes;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static org.projectnessie.versioned.storage.common.objtypes.Hashes.contentValueHash;
+import static org.projectnessie.versioned.storage.common.objtypes.StandardObjType.VALUE;
+import static org.projectnessie.versioned.storage.common.persist.ObjIdHasher.objIdHasher;
 
 import org.immutables.value.Value;
 import org.projectnessie.nessie.relocated.protobuf.ByteString;
@@ -29,12 +30,17 @@ public interface ContentValueObj extends Obj {
 
   @Override
   default ObjType type() {
-    return ObjType.VALUE;
+    return VALUE;
   }
 
   @Override
   @Value.Parameter(order = 1)
   ObjId id();
+
+  @Override
+  @Value.Parameter(order = 1)
+  @Value.Auxiliary
+  long referenced();
 
   @Value.Parameter(order = 2)
   String contentId();
@@ -45,12 +51,22 @@ public interface ContentValueObj extends Obj {
   @Value.Parameter(order = 4)
   ByteString data();
 
-  static ContentValueObj contentValue(ObjId id, String contentId, int payload, ByteString data) {
+  static ContentValueObj contentValue(
+      ObjId id, long referenced, String contentId, int payload, ByteString data) {
     checkArgument(payload >= 0 && payload <= 127);
-    return ImmutableContentValueObj.of(id, contentId, payload, data);
+    return ImmutableContentValueObj.of(id, referenced, contentId, payload, data);
   }
 
   static ContentValueObj contentValue(String contentId, int payload, ByteString data) {
-    return contentValue(contentValueHash(contentId, payload, data), contentId, payload, data);
+    return contentValue(
+        objIdHasher(VALUE)
+            .hash(contentId)
+            .hash(payload)
+            .hash(data.asReadOnlyByteBuffer())
+            .generate(),
+        0L,
+        contentId,
+        payload,
+        data);
   }
 }

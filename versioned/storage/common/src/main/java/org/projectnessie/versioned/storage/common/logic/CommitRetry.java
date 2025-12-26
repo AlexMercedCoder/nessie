@@ -20,16 +20,24 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static org.projectnessie.versioned.storage.common.logic.CommitRetry.TryLoopState.newTryLoopState;
 
 import com.google.common.annotations.VisibleForTesting;
+import io.opentelemetry.api.common.AttributeKey;
+import io.opentelemetry.api.common.Attributes;
+import io.opentelemetry.api.trace.Span;
+import jakarta.annotation.Nonnull;
 import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
-import javax.annotation.Nonnull;
 import org.projectnessie.versioned.storage.common.config.StoreConfig;
 import org.projectnessie.versioned.storage.common.exceptions.CommitConflictException;
 import org.projectnessie.versioned.storage.common.exceptions.CommitWrappedException;
 import org.projectnessie.versioned.storage.common.exceptions.RetryTimeoutException;
+import org.projectnessie.versioned.storage.common.exceptions.UnknownOperationResultException;
 import org.projectnessie.versioned.storage.common.persist.Persist;
 
 public class CommitRetry {
+
+  private static final String OTEL_SLEEP_EVENT_NAME = "nessie.commit-retry.sleep";
+  private static final AttributeKey<Long> OTEL_SLEEP_EVENT_TIME_KEY =
+      AttributeKey.longKey("nessie.commit-retry.sleep.duration-millis");
 
   private CommitRetry() {}
 
@@ -53,6 +61,10 @@ public class CommitRetry {
           throw new RetryTimeoutException(i, tls.currentNanos() - t0);
         }
         retryState = e.retryState();
+      } catch (UnknownOperationResultException e) {
+        if (!tls.retry(t1)) {
+          throw new RetryTimeoutException(i, tls.currentNanos() - t0);
+        }
       }
     }
   }
@@ -64,7 +76,7 @@ public class CommitRetry {
       this(Optional.empty());
     }
 
-    public RetryException(@Nonnull @jakarta.annotation.Nonnull Optional<?> retryState) {
+    public RetryException(@Nonnull Optional<?> retryState) {
       this.retryState = retryState;
     }
 
@@ -83,9 +95,7 @@ public class CommitRetry {
      * @param retryState The initial call to this function will receive an empty value, subsequent
      *     calls receive the parameter passed to the previous {@link RetryException}.
      */
-    T attempt(
-        @Nonnull @jakarta.annotation.Nonnull Persist persist,
-        @Nonnull @jakarta.annotation.Nonnull Optional<?> retryState)
+    T attempt(@Nonnull Persist persist, @Nonnull Optional<?> retryState)
         throws CommitWrappedException, CommitConflictException, RetryException;
   }
 
@@ -167,6 +177,9 @@ public class CommitRetry {
 
       // consider the already elapsed time of the last attempt
       sleepMillis = Math.max(1L, sleepMillis - NANOSECONDS.toMillis(attemptElapsed));
+
+      Span.current()
+          .addEvent(OTEL_SLEEP_EVENT_NAME, Attributes.of(OTEL_SLEEP_EVENT_TIME_KEY, sleepMillis));
 
       monotonicClock.sleepMillis(sleepMillis);
 

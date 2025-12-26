@@ -17,11 +17,14 @@ package org.projectnessie.services.rest;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static org.projectnessie.services.impl.RefUtil.toReference;
+import static org.projectnessie.services.rest.RestApiContext.NESSIE_V1;
 import static org.projectnessie.services.spi.TreeService.MAX_COMMIT_LOG_ENTRIES;
+import static org.projectnessie.versioned.RequestMeta.API_WRITE;
 
 import com.fasterxml.jackson.annotation.JsonView;
-import javax.enterprise.context.RequestScoped;
-import javax.inject.Inject;
+import jakarta.enterprise.context.RequestScoped;
+import jakarta.inject.Inject;
+import jakarta.ws.rs.Path;
 import org.projectnessie.api.v1.http.HttpTreeApi;
 import org.projectnessie.api.v1.params.BaseMergeTransplant;
 import org.projectnessie.api.v1.params.CommitLogParams;
@@ -45,12 +48,17 @@ import org.projectnessie.model.Operations;
 import org.projectnessie.model.Reference;
 import org.projectnessie.model.ReferencesResponse;
 import org.projectnessie.model.ser.Views;
+import org.projectnessie.services.authz.AccessContext;
+import org.projectnessie.services.authz.Authorizer;
+import org.projectnessie.services.config.ServerConfig;
+import org.projectnessie.services.impl.TreeApiImpl;
 import org.projectnessie.services.spi.PagedCountingResponseHandler;
 import org.projectnessie.services.spi.TreeService;
+import org.projectnessie.versioned.VersionStore;
 
 /** REST endpoint for the tree-API. */
 @RequestScoped
-@jakarta.enterprise.context.RequestScoped
+@Path("api/v1/trees")
 public class RestTreeResource implements HttpTreeApi {
   // Cannot extend the TreeApiImplWithAuthz class, because then CDI gets confused
   // about which interface to use - either HttpTreeApi or the plain TreeApi. This can lead
@@ -61,13 +69,13 @@ public class RestTreeResource implements HttpTreeApi {
 
   // Mandated by CDI 2.0
   public RestTreeResource() {
-    this(null);
+    this(null, null, null, null);
   }
 
   @Inject
-  @jakarta.inject.Inject
-  public RestTreeResource(TreeService treeService) {
-    this.treeService = treeService;
+  public RestTreeResource(
+      ServerConfig config, VersionStore store, Authorizer authorizer, AccessContext accessContext) {
+    this.treeService = new TreeApiImpl(config, store, authorizer, accessContext, NESSIE_V1);
   }
 
   private TreeService resource() {
@@ -83,7 +91,7 @@ public class RestTreeResource implements HttpTreeApi {
             params.fetchOption(),
             params.filter(),
             params.pageToken(),
-            new PagedCountingResponseHandler<ReferencesResponse, Reference>(maxRecords) {
+            new PagedCountingResponseHandler<>(maxRecords) {
               final ImmutableReferencesResponse.Builder builder = ReferencesResponse.builder();
 
               @Override
@@ -139,7 +147,7 @@ public class RestTreeResource implements HttpTreeApi {
             params.filter(),
             params.pageToken(),
             false,
-            new PagedCountingResponseHandler<EntriesResponse, EntriesResponse.Entry>(maxRecords) {
+            new PagedCountingResponseHandler<>(maxRecords) {
               @Override
               public EntriesResponse build() {
                 return builder.build();
@@ -176,8 +184,7 @@ public class RestTreeResource implements HttpTreeApi {
             params.endHash(),
             params.filter(),
             params.pageToken(),
-            new PagedCountingResponseHandler<LogResponse, LogEntry>(
-                maxRecords, MAX_COMMIT_LOG_ENTRIES) {
+            new PagedCountingResponseHandler<>(maxRecords, MAX_COMMIT_LOG_ENTRIES) {
               final ImmutableLogResponse.Builder builder = ImmutableLogResponse.builder();
 
               @Override
@@ -273,7 +280,7 @@ public class RestTreeResource implements HttpTreeApi {
       String branchName, String expectedHash, Operations operations)
       throws NessieNotFoundException, NessieConflictException {
     return resource()
-        .commitMultipleOperations(branchName, expectedHash, operations)
+        .commitMultipleOperations(branchName, expectedHash, operations, API_WRITE)
         .getTargetBranch();
   }
 }

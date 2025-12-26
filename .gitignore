@@ -59,14 +59,19 @@ out/
 # gradle
 .gradle/
 build/
-!gradle-wrapper.jar
+.kotlin
 
-# Python
+# Ignore Gradle wrapper jar file
+gradle/wrapper/gradle-wrapper.jar
+gradle/wrapper/gradle-wrapper-*.sha256
+
+# Python & Pyenv
 venv/
 __pycache__/
-
-# Site
-site/site
+.python-version
 
 #jEnv, see https://github.com/jenv/jenv
 .java-version
+
+# Spark / Hive
+metastore_db/

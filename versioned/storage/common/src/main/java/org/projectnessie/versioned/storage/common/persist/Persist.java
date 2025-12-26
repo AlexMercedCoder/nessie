@@ -15,9 +15,11 @@
  */
 package org.projectnessie.versioned.storage.common.persist;
 
+import jakarta.annotation.Nonnull;
+import jakarta.annotation.Nullable;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
-import javax.annotation.Nonnull;
-import javax.annotation.Nullable;
 import org.projectnessie.versioned.storage.common.config.StoreConfig;
 import org.projectnessie.versioned.storage.common.exceptions.ObjNotFoundException;
 import org.projectnessie.versioned.storage.common.exceptions.ObjTooLargeException;
@@ -25,6 +27,7 @@ import org.projectnessie.versioned.storage.common.exceptions.RefAlreadyExistsExc
 import org.projectnessie.versioned.storage.common.exceptions.RefConditionFailedException;
 import org.projectnessie.versioned.storage.common.exceptions.RefNotFoundException;
 import org.projectnessie.versioned.storage.common.logic.ReferenceLogic;
+import org.projectnessie.versioned.storage.common.objtypes.UpdateableObj;
 
 /**
  * Low-level storage layer interface providing <em>low-level</em> functionality to manage references
@@ -47,11 +50,9 @@ public interface Persist {
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   String name();
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   StoreConfig config();
 
   // References
@@ -65,9 +66,7 @@ public interface Persist {
    * @throws RefAlreadyExistsException if a reference with the same name already exists
    */
   @Nonnull
-  @jakarta.annotation.Nonnull
-  Reference addReference(@Nonnull @jakarta.annotation.Nonnull Reference reference)
-      throws RefAlreadyExistsException;
+  Reference addReference(@Nonnull Reference reference) throws RefAlreadyExistsException;
 
   /**
    * Low-level, atomically marks the given reference as deleted, if it exists.
@@ -83,8 +82,7 @@ public interface Persist {
    *     different
    */
   @Nonnull
-  @jakarta.annotation.Nonnull
-  Reference markReferenceAsDeleted(@Nonnull @jakarta.annotation.Nonnull Reference reference)
+  Reference markReferenceAsDeleted(@Nonnull Reference reference)
       throws RefNotFoundException, RefConditionFailedException;
 
   /**
@@ -98,7 +96,7 @@ public interface Persist {
    * @throws RefConditionFailedException if the existing reference is not marked as deleted or its
    *     pointer is different
    */
-  void purgeReference(@Nonnull @jakarta.annotation.Nonnull Reference reference)
+  void purgeReference(@Nonnull Reference reference)
       throws RefNotFoundException, RefConditionFailedException;
 
   /**
@@ -116,10 +114,7 @@ public interface Persist {
    *     pointer is different
    */
   @Nonnull
-  @jakarta.annotation.Nonnull
-  Reference updateReferencePointer(
-      @Nonnull @jakarta.annotation.Nonnull Reference reference,
-      @Nonnull @jakarta.annotation.Nonnull ObjId newPointer)
+  Reference updateReferencePointer(@Nonnull Reference reference, @Nonnull ObjId newPointer)
       throws RefNotFoundException, RefConditionFailedException;
 
   /**
@@ -128,11 +123,27 @@ public interface Persist {
    * <p><em>Do not use this function from service implementations, use {@link ReferenceLogic}
    * instead!</em>
    *
+   * <p>This function leverages the references-cache, if enabled, and must only be used for read
+   * operations. Updating operations must use {@link #fetchReferenceForUpdate(String)}.
+   *
+   * <p>Database specific implementations of {@link Persist} must implement this function, without
+   * caching.
+   *
    * @return the reference or {@code null}, if it does not exist
    */
   @Nullable
-  @jakarta.annotation.Nullable
-  Reference fetchReference(@Nonnull @jakarta.annotation.Nonnull String name);
+  Reference fetchReference(@Nonnull String name);
+
+  /**
+   * This is similar to {@link #fetchReference(String)}, but does always fetch the reference from
+   * the backend, <em>refreshing</em> the references-cache.
+   *
+   * <p>Database specific implementations of {@link Persist} must not implement this function.
+   */
+  @Nullable
+  default Reference fetchReferenceForUpdate(@Nonnull String name) {
+    return fetchReference(name);
+  }
 
   /**
    * Like {@link #fetchReference(String)}, but finds multiple references by name at once, leveraging
@@ -140,12 +151,28 @@ public interface Persist {
    *
    * <p>Non-existing references are returned as {@code null} elements in the returned array.
    *
+   * <p>This function leverages the references-cache, if enabled, and must only be used for read
+   * operations. Updating operations must use {@link #fetchReferencesForUpdate(String[])}.
+   *
+   * <p>Database specific implementations of {@link Persist} must implement this function, without
+   * caching.
+   *
    * <p><em>Do not use this function from service implementations, use {@link ReferenceLogic}
    * instead!</em>
    */
   @Nonnull
-  @jakarta.annotation.Nonnull
-  Reference[] fetchReferences(@Nonnull @jakarta.annotation.Nonnull String[] names);
+  Reference[] fetchReferences(@Nonnull String[] names);
+
+  /**
+   * This is similar to #fetchReferences(String[]), but does always fetch the reference from the
+   * backend, <em>refreshing</em> the references-cache.
+   *
+   * <p>Database specific implementations of {@link Persist} must not implement this function.
+   */
+  @Nonnull
+  default Reference[] fetchReferencesForUpdate(@Nonnull String[] names) {
+    return fetchReferences(names);
+  }
 
   // Objects
 
@@ -163,8 +190,13 @@ public interface Persist {
    * @see #fetchObjs(ObjId[])
    */
   @Nonnull
-  @jakarta.annotation.Nonnull
-  Obj fetchObj(@Nonnull @jakarta.annotation.Nonnull ObjId id) throws ObjNotFoundException;
+  default Obj fetchObj(@Nonnull ObjId id) throws ObjNotFoundException {
+    return fetchTypedObj(id, null, Obj.class);
+  }
+
+  default Obj getImmediate(@Nonnull ObjId id) {
+    return null;
+  }
 
   /**
    * Retrieves the object with ID {@code id}, having the same {@link ObjType type}.
@@ -177,10 +209,10 @@ public interface Persist {
    * @see #fetchObjs(ObjId[])
    */
   @Nonnull
-  @jakarta.annotation.Nonnull
-  <T extends Obj> T fetchTypedObj(
-      @Nonnull @jakarta.annotation.Nonnull ObjId id, ObjType type, Class<T> typeClass)
-      throws ObjNotFoundException;
+  default <T extends Obj> T fetchTypedObj(
+      @Nonnull ObjId id, ObjType type, @Nonnull Class<T> typeClass) throws ObjNotFoundException {
+    return fetchTypedObjs(new ObjId[] {id}, type, typeClass)[0];
+  }
 
   /**
    * Retrieves the type of the object with ID {@code id}.
@@ -192,8 +224,9 @@ public interface Persist {
    * @see #fetchObjs(ObjId[])
    */
   @Nonnull
-  @jakarta.annotation.Nonnull
-  ObjType fetchObjType(@Nonnull @jakarta.annotation.Nonnull ObjId id) throws ObjNotFoundException;
+  default ObjType fetchObjType(@Nonnull ObjId id) throws ObjNotFoundException {
+    return fetchObj(id).type();
+  }
 
   /**
    * Like {@link #fetchObj(ObjId)}, but finds multiple objects by name at once, leveraging bulk
@@ -213,10 +246,68 @@ public interface Persist {
    * @see #fetchObjType(ObjId)
    * @see #fetchTypedObj(ObjId, ObjType, Class)
    * @see #fetchObj(ObjId)
+   * @see #fetchObjsIfExist(ObjId[])
+   * @see #fetchTypedObjs(ObjId[], ObjType, Class)
+   * @see #fetchTypedObjsIfExist(ObjId[], ObjType, Class)
    */
   @Nonnull
-  @jakarta.annotation.Nonnull
-  Obj[] fetchObjs(@Nonnull @jakarta.annotation.Nonnull ObjId[] ids) throws ObjNotFoundException;
+  default Obj[] fetchObjs(@Nonnull ObjId[] ids) throws ObjNotFoundException {
+    return fetchTypedObjs(ids, null, Obj.class);
+  }
+
+  /**
+   * Type-safe variant of {@link #fetchObjs(ObjId[])}.
+   *
+   * @param ids IDs of the objects to fetch.
+   * @param type The expected type of objects to fetch. Can be {@code null}, meaning that any object
+   *     type is fine, must use {@code typeClass=Obj.class}.
+   * @param typeClass The Java type that corresponds to {@code type}. Must not be {@code null}, use
+   *     {@code Obj.class} for "any" object type in combination with {@code type=null}.
+   * @throws ObjNotFoundException If any of the given {@link ObjId}s does not exist or has not the
+   *     requested {@code type}
+   */
+  @Nonnull
+  default <T extends Obj> T[] fetchTypedObjs(
+      @Nonnull ObjId[] ids, ObjType type, @Nonnull Class<T> typeClass) throws ObjNotFoundException {
+    T[] r = fetchTypedObjsIfExist(ids, type, typeClass);
+
+    List<ObjId> notFound = null;
+    for (int i = 0; i < ids.length; i++) {
+      ObjId id = ids[i];
+      if (r[i] == null && id != null) {
+        if (notFound == null) {
+          notFound = new ArrayList<>();
+        }
+        notFound.add(id);
+      }
+    }
+    if (notFound != null) {
+      throw new ObjNotFoundException(notFound);
+    }
+
+    return r;
+  }
+
+  /**
+   * Same as {@link #fetchObjs(ObjId[])}, does not throw an {@link ObjNotFoundException} but returns
+   * {@code null} instead.
+   */
+  default Obj[] fetchObjsIfExist(@Nonnull ObjId[] ids) {
+    return fetchTypedObjsIfExist(ids, null, Obj.class);
+  }
+
+  /**
+   * Same as {@link #fetchTypedObjs(ObjId[], ObjType, Class)}, but returns {@code null} for objects
+   * that do not exist instead of throwing an {@link ObjNotFoundException}.
+   *
+   * @param ids IDs of the objects to fetch.
+   * @param type The expected type of objects to fetch. Can be {@code null}, meaning that any object
+   *     type is fine, must use {@code typeClass=Obj.class}.
+   * @param typeClass The Java type that corresponds to {@code type}. Must not be {@code null}, use
+   *     {@code Obj.class} for "any" object type in combination with {@code type=null}.
+   */
+  <T extends Obj> T[] fetchTypedObjsIfExist(
+      @Nonnull ObjId[] ids, ObjType type, @Nonnull Class<T> typeClass);
 
   /**
    * Stores the given object as a new record.
@@ -225,14 +316,13 @@ public interface Persist {
    * logic interfaces to ensure a stable and deterministic ID generation.
    *
    * @param obj the object to store
-   * @return the non-null object ID if the object was stored as a new record or {@code null} if an
-   *     object with the same ID already exists.
+   * @return {@code true}, if the object was stored as a new record or {@code false} if an object
+   *     with the same ID already exists.
    * @throws ObjTooLargeException thrown when a hard database row/item size limit has been hit, or a
    *     "soft" size restriction in {@link #config()}
    * @see #storeObjs(Obj[])
    */
-  default boolean storeObj(@Nonnull @jakarta.annotation.Nonnull Obj obj)
-      throws ObjTooLargeException {
+  default boolean storeObj(@Nonnull Obj obj) throws ObjTooLargeException {
     return storeObj(obj, false);
   }
 
@@ -253,7 +343,7 @@ public interface Persist {
    *     #config()}
    * @see #storeObjs(Obj[])
    */
-  boolean storeObj(@Nonnull @jakarta.annotation.Nonnull Obj obj, boolean ignoreSoftSizeRestrictions)
+  boolean storeObj(@Nonnull Obj obj, boolean ignoreSoftSizeRestrictions)
       throws ObjTooLargeException;
 
   /**
@@ -265,6 +355,8 @@ public interface Persist {
    * <p>In case an object failed to be stored, it is undefined whether other objects have been
    * stored or not.
    *
+   * @param objs array with {@link Obj}s to store. {@code null} array elements are legal, the
+   *     corresponding elements in the returned array will be {@code false}.
    * @return an array with {@code boolean}s indicating whether the corresponding objects were
    *     created ({@code true}) or already present ({@code false}), see {@link #storeObj(Obj)}
    * @throws ObjTooLargeException thrown when a hard database row/item size limit has been hit, or a
@@ -272,18 +364,44 @@ public interface Persist {
    * @see #storeObj(Obj)
    */
   @Nonnull
-  @jakarta.annotation.Nonnull
-  boolean[] storeObjs(@Nonnull @jakarta.annotation.Nonnull Obj[] objs) throws ObjTooLargeException;
+  boolean[] storeObjs(@Nonnull Obj[] objs) throws ObjTooLargeException;
 
-  void deleteObj(@Nonnull @jakarta.annotation.Nonnull ObjId id);
+  void deleteObj(@Nonnull ObjId id);
 
   /**
-   * Deletes multiple objects,
+   * Deletes multiple objects.
    *
    * <p>In case an object failed to be deleted, it is undefined whether other objects have been
    * deleted or not.
+   *
+   * @param ids array with {@link ObjId}s to delete. {@code null} array elements are legal.
    */
-  void deleteObjs(@Nonnull @jakarta.annotation.Nonnull ObjId[] ids);
+  void deleteObjs(@Nonnull ObjId[] ids);
+
+  /**
+   * Deletes the given object, if its {@link Obj#referenced()} value is equal to the persisted
+   * object's value. Since a caching {@link Persist} does not guarantee that the {@link
+   * Obj#referenced()} value is up-to-date, callers must ensure that they read the uncached object
+   * state, for example via a {@link #scanAllObjects(Set)}.
+   */
+  boolean deleteWithReferenced(@Nonnull Obj obj);
+
+  /**
+   * Deletes the object, if the current state in the database is equal to the given state, comparing
+   * the {@link UpdateableObj#versionToken()}.
+   *
+   * @return {@code true}, if the conditional delete succeeded.
+   */
+  boolean deleteConditional(@Nonnull UpdateableObj obj);
+
+  /**
+   * Updates the object, if the current state in the database is equal to the {@code expected}
+   * state, comparing the {@link UpdateableObj#versionToken()}.
+   *
+   * @return {@code true}, if the conditional update succeeded.
+   */
+  boolean updateConditional(@Nonnull UpdateableObj expected, @Nonnull UpdateableObj newValue)
+      throws ObjTooLargeException;
 
   /**
    * Updates an existing object or inserts it as a new object, used only for maintenance operations,
@@ -292,7 +410,7 @@ public interface Persist {
    * @see #upsertObjs (Obj[])
    * @throws ObjTooLargeException thrown when a hard database row/item size limit has been hit
    */
-  void upsertObj(@Nonnull @jakarta.annotation.Nonnull Obj obj) throws ObjTooLargeException;
+  void upsertObj(@Nonnull Obj obj) throws ObjTooLargeException;
 
   /**
    * Updates existing objects or inserts those as a new objects, used only for maintenance
@@ -302,9 +420,10 @@ public interface Persist {
    * <p>In case an object failed to be updated, it is undefined whether other objects have been
    * updated or not.
    *
+   * @param objs array with {@link Obj}s to upsert. {@code null} array elements are legal.
    * @see #upsertObj( Obj)
    */
-  void upsertObjs(@Nonnull @jakarta.annotation.Nonnull Obj[] objs) throws ObjTooLargeException;
+  void upsertObjs(@Nonnull Obj[] objs) throws ObjTooLargeException;
 
   /**
    * Returns an iterator over all objects that match the given predicate.
@@ -316,12 +435,12 @@ public interface Persist {
    * <p>It is possible that databases have to scan all rows/items in the tables/collections, which
    * can lead to a <em>very</em> long runtime of this method.
    *
+   * @param returnedObjTypes if empty, all object types are returned, otherwise only the given
+   *     object types will be returned
    * @return iterator over all objects, must be closed
    */
   @Nonnull
-  @jakarta.annotation.Nonnull
-  CloseableIterator<Obj> scanAllObjects(
-      @Nonnull @jakarta.annotation.Nonnull Set<ObjType> returnedObjTypes);
+  CloseableIterator<Obj> scanAllObjects(@Nonnull Set<ObjType> returnedObjTypes);
 
   /**
    * Erases the whole repository.
@@ -330,4 +449,8 @@ public interface Persist {
    * can lead to a <em>very</em> long runtime of this method.
    */
   void erase();
+
+  default boolean isCaching() {
+    return false;
+  }
 }

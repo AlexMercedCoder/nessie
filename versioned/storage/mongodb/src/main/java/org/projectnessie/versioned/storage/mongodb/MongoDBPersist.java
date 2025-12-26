@@ -16,7 +16,6 @@
 package org.projectnessie.versioned.storage.mongodb;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkState;
 import static com.mongodb.ErrorCategory.DUPLICATE_KEY;
 import static com.mongodb.client.model.Filters.and;
 import static com.mongodb.client.model.Filters.eq;
@@ -27,123 +26,82 @@ import static com.mongodb.client.model.Updates.set;
 import static java.util.Collections.emptyList;
 import static java.util.Collections.singleton;
 import static java.util.stream.Collectors.toList;
-import static org.projectnessie.nessie.relocated.protobuf.UnsafeByteOperations.unsafeWrap;
-import static org.projectnessie.versioned.storage.common.indexes.StoreKey.keyFromString;
-import static org.projectnessie.versioned.storage.common.objtypes.CommitHeaders.newCommitHeaders;
-import static org.projectnessie.versioned.storage.common.objtypes.CommitObj.commitBuilder;
-import static org.projectnessie.versioned.storage.common.objtypes.ContentValueObj.contentValue;
-import static org.projectnessie.versioned.storage.common.objtypes.IndexObj.index;
-import static org.projectnessie.versioned.storage.common.objtypes.IndexSegmentsObj.indexSegments;
-import static org.projectnessie.versioned.storage.common.objtypes.IndexStripe.indexStripe;
-import static org.projectnessie.versioned.storage.common.objtypes.RefObj.ref;
-import static org.projectnessie.versioned.storage.common.objtypes.TagObj.tag;
+import static org.projectnessie.versioned.storage.common.persist.ObjTypes.objTypeByName;
 import static org.projectnessie.versioned.storage.common.persist.Reference.reference;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_COMMIT;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_COMMIT_CREATED;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_COMMIT_HEADERS;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_COMMIT_INCOMPLETE_INDEX;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_COMMIT_INCREMENTAL_INDEX;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_COMMIT_MESSAGE;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_COMMIT_REFERENCE_INDEX;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_COMMIT_REFERENCE_INDEX_STRIPES;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_COMMIT_SECONDARY_PARENTS;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_COMMIT_SEQ;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_COMMIT_TAIL;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_COMMIT_TYPE;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_INDEX;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_INDEX_INDEX;
 import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_OBJ_ID;
+import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_OBJ_REFERENCED;
 import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_OBJ_TYPE;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_REF;
+import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_OBJ_VERS;
 import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_REFERENCES_CREATED_AT;
 import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_REFERENCES_DELETED;
 import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_REFERENCES_EXTENDED_INFO;
 import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_REFERENCES_NAME;
 import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_REFERENCES_POINTER;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_REF_CREATED_AT;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_REF_EXTENDED_INFO;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_REF_INITIAL_POINTER;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_REF_NAME;
+import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_REFERENCES_PREVIOUS;
 import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_REPO;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_SEGMENTS;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_SEGMENTS_STRIPES;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_STRING;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_STRING_COMPRESSION;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_STRING_CONTENT_TYPE;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_STRING_FILENAME;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_STRING_PREDECESSORS;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_STRING_TEXT;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_STRIPES_FIRST_KEY;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_STRIPES_LAST_KEY;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_STRIPES_SEGMENT;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_TAG;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_TAG_HEADERS;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_TAG_MESSAGE;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_TAG_SIGNATURE;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_VALUE;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_VALUE_CONTENT_ID;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_VALUE_DATA;
-import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.COL_VALUE_PAYLOAD;
 import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.ID_PROPERTY_NAME;
 import static org.projectnessie.versioned.storage.mongodb.MongoDBConstants.ID_REPO_PATH;
+import static org.projectnessie.versioned.storage.mongodb.MongoDBSerde.binaryToObjId;
+import static org.projectnessie.versioned.storage.mongodb.MongoDBSerde.objIdToBinary;
+import static org.projectnessie.versioned.storage.serialize.ProtoSerialization.deserializePreviousPointers;
+import static org.projectnessie.versioned.storage.serialize.ProtoSerialization.serializePreviousPointers;
 
 import com.google.common.collect.AbstractIterator;
 import com.mongodb.MongoBulkWriteException;
+import com.mongodb.MongoException;
+import com.mongodb.MongoExecutionTimeoutException;
+import com.mongodb.MongoInterruptedException;
+import com.mongodb.MongoServerUnavailableException;
+import com.mongodb.MongoSocketReadTimeoutException;
+import com.mongodb.MongoTimeoutException;
 import com.mongodb.MongoWriteException;
+import com.mongodb.WriteError;
 import com.mongodb.bulk.BulkWriteError;
 import com.mongodb.bulk.BulkWriteInsert;
 import com.mongodb.bulk.BulkWriteResult;
+import com.mongodb.bulk.BulkWriteUpsert;
 import com.mongodb.client.FindIterable;
 import com.mongodb.client.MongoCursor;
+import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.InsertOneModel;
 import com.mongodb.client.model.ReplaceOneModel;
 import com.mongodb.client.model.ReplaceOptions;
+import com.mongodb.client.model.UpdateOneModel;
+import com.mongodb.client.model.Updates;
 import com.mongodb.client.model.WriteModel;
 import com.mongodb.client.result.DeleteResult;
 import com.mongodb.client.result.UpdateResult;
+import jakarta.annotation.Nonnull;
+import java.lang.reflect.Array;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.EnumMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.function.Consumer;
 import java.util.stream.Stream;
-import javax.annotation.Nonnull;
 import org.agrona.collections.Hashing;
 import org.agrona.collections.Object2IntHashMap;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.bson.types.Binary;
-import org.projectnessie.nessie.relocated.protobuf.ByteString;
 import org.projectnessie.versioned.storage.common.config.StoreConfig;
 import org.projectnessie.versioned.storage.common.exceptions.ObjNotFoundException;
 import org.projectnessie.versioned.storage.common.exceptions.ObjTooLargeException;
 import org.projectnessie.versioned.storage.common.exceptions.RefAlreadyExistsException;
 import org.projectnessie.versioned.storage.common.exceptions.RefConditionFailedException;
 import org.projectnessie.versioned.storage.common.exceptions.RefNotFoundException;
-import org.projectnessie.versioned.storage.common.objtypes.CommitHeaders;
-import org.projectnessie.versioned.storage.common.objtypes.CommitObj;
-import org.projectnessie.versioned.storage.common.objtypes.CommitType;
-import org.projectnessie.versioned.storage.common.objtypes.Compression;
-import org.projectnessie.versioned.storage.common.objtypes.ContentValueObj;
-import org.projectnessie.versioned.storage.common.objtypes.IndexObj;
-import org.projectnessie.versioned.storage.common.objtypes.IndexSegmentsObj;
-import org.projectnessie.versioned.storage.common.objtypes.IndexStripe;
-import org.projectnessie.versioned.storage.common.objtypes.RefObj;
-import org.projectnessie.versioned.storage.common.objtypes.StringObj;
-import org.projectnessie.versioned.storage.common.objtypes.TagObj;
+import org.projectnessie.versioned.storage.common.exceptions.UnknownOperationResultException;
+import org.projectnessie.versioned.storage.common.objtypes.UpdateableObj;
 import org.projectnessie.versioned.storage.common.persist.CloseableIterator;
 import org.projectnessie.versioned.storage.common.persist.Obj;
 import org.projectnessie.versioned.storage.common.persist.ObjId;
 import org.projectnessie.versioned.storage.common.persist.ObjType;
 import org.projectnessie.versioned.storage.common.persist.Persist;
 import org.projectnessie.versioned.storage.common.persist.Reference;
+import org.projectnessie.versioned.storage.mongodb.serializers.ObjSerializer;
+import org.projectnessie.versioned.storage.mongodb.serializers.ObjSerializers;
 
 public class MongoDBPersist implements Persist {
-  private static final Map<ObjType, StoreObjDesc<?>> STORE_OBJ_TYPE = new EnumMap<>(ObjType.class);
-  private static final ObjType[] ALL_OBJ_TYPES = ObjType.values();
 
   private final StoreConfig config;
   private final MongoDBBackend backend;
@@ -154,14 +112,12 @@ public class MongoDBPersist implements Persist {
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
   public String name() {
     return MongoDBBackendFactory.NAME;
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
   public StoreConfig config() {
     return config;
@@ -185,54 +141,9 @@ public class MongoDBPersist implements Persist {
     return idDoc;
   }
 
-  private static Binary bytesToBinary(ByteString bytes) {
-    return new Binary(bytes.toByteArray());
-  }
-
-  private static ByteString binaryToBytes(Binary binary) {
-    return binary != null ? unsafeWrap(binary.getData()) : null;
-  }
-
-  private static Binary objIdToBinary(ObjId id) {
-    return new Binary(id.asByteArray());
-  }
-
-  private static ObjId binaryToObjId(Binary id) {
-    return id != null ? ObjId.objIdFromByteArray(id.getData()) : null;
-  }
-
-  private static void objIdsToDoc(Document doc, String n, List<ObjId> ids) {
-    if (ids == null || ids.isEmpty()) {
-      return;
-    }
-    doc.put(n, objIdsToBinary(ids));
-  }
-
-  private static List<Binary> objIdsToBinary(List<ObjId> ids) {
-    if (ids == null) {
-      return emptyList();
-    }
-    return ids.stream().map(MongoDBPersist::objIdToBinary).collect(toList());
-  }
-
-  private static List<ObjId> binaryToObjIds(List<Binary> ids) {
-    if (ids == null) {
-      return emptyList();
-    }
-    return ids.stream().map(MongoDBPersist::binaryToObjId).collect(toList());
-  }
-
-  private static void binaryToObjIds(List<Binary> ids, Consumer<ObjId> receiver) {
-    if (ids != null) {
-      ids.stream().map(MongoDBPersist::binaryToObjId).forEach(receiver);
-    }
-  }
-
   @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
-  public Reference addReference(@Nonnull @jakarta.annotation.Nonnull Reference reference)
-      throws RefAlreadyExistsException {
+  public Reference addReference(@Nonnull Reference reference) throws RefAlreadyExistsException {
     checkArgument(!reference.deleted(), "Deleted references must not be added");
 
     Document doc = new Document();
@@ -247,25 +158,39 @@ public class MongoDBPersist implements Persist {
     if (extendedInfoObj != null) {
       doc.put(COL_REFERENCES_EXTENDED_INFO, objIdToBinary(extendedInfoObj));
     }
+    byte[] previous = serializePreviousPointers(reference.previousPointers());
+    if (previous != null) {
+      doc.put(COL_REFERENCES_PREVIOUS, new Binary(previous));
+    }
     try {
       backend.refs().insertOne(doc);
     } catch (MongoWriteException e) {
       if (e.getError().getCategory() == DUPLICATE_KEY) {
         throw new RefAlreadyExistsException(fetchReference(reference.name()));
       }
-      throw e;
+      throw unhandledException(e);
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
     }
     return reference;
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
-  public Reference markReferenceAsDeleted(@Nonnull @jakarta.annotation.Nonnull Reference reference)
+  public Reference markReferenceAsDeleted(@Nonnull Reference reference)
       throws RefNotFoundException, RefConditionFailedException {
     reference = reference.withDeleted(false);
-    UpdateResult result =
-        backend.refs().updateOne(referenceCondition(reference), set(COL_REFERENCES_DELETED, true));
+
+    UpdateResult result;
+    try {
+      result =
+          backend
+              .refs()
+              .updateOne(referenceCondition(reference), set(COL_REFERENCES_DELETED, true));
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
+    }
+
     if (result.getModifiedCount() != 1) {
       Reference ex = fetchReference(reference.name());
       if (ex == null) {
@@ -299,20 +224,26 @@ public class MongoDBPersist implements Persist {
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
-  public Reference updateReferencePointer(
-      @Nonnull @jakarta.annotation.Nonnull Reference reference,
-      @Nonnull @jakarta.annotation.Nonnull ObjId newPointer)
+  public Reference updateReferencePointer(@Nonnull Reference reference, @Nonnull ObjId newPointer)
       throws RefNotFoundException, RefConditionFailedException {
-    Reference updated = reference.forNewPointer(newPointer);
     reference = reference.withDeleted(false);
-    UpdateResult result =
-        backend
-            .refs()
-            .updateOne(
-                referenceCondition(reference),
-                set(COL_REFERENCES_POINTER, objIdToBinary(newPointer)));
+
+    Reference updated = reference.forNewPointer(newPointer, config);
+    List<Bson> updates = new ArrayList<>();
+    updates.add(set(COL_REFERENCES_POINTER, objIdToBinary(newPointer)));
+    byte[] previous = serializePreviousPointers(updated.previousPointers());
+    if (previous != null) {
+      updates.add(set(COL_REFERENCES_PREVIOUS, new Binary(previous)));
+    }
+
+    UpdateResult result;
+    try {
+      result = backend.refs().updateOne(referenceCondition(reference), updates);
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
+    }
+
     if (result.getModifiedCount() != 1) {
       if (result.getMatchedCount() == 1) {
         // not updated
@@ -330,10 +261,17 @@ public class MongoDBPersist implements Persist {
   }
 
   @Override
-  public void purgeReference(@Nonnull @jakarta.annotation.Nonnull Reference reference)
+  public void purgeReference(@Nonnull Reference reference)
       throws RefNotFoundException, RefConditionFailedException {
     reference = reference.withDeleted(true);
-    DeleteResult result = backend.refs().deleteOne(referenceCondition(reference));
+
+    DeleteResult result;
+    try {
+      result = backend.refs().deleteOne(referenceCondition(reference));
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
+    }
+
     if (result.getDeletedCount() != 1) {
       Reference ex = fetchReference(reference.name());
       if (ex == null) {
@@ -344,20 +282,29 @@ public class MongoDBPersist implements Persist {
   }
 
   @Override
-  public Reference fetchReference(@Nonnull @jakarta.annotation.Nonnull String name) {
-    FindIterable<Document> result = backend.refs().find(eq(ID_PROPERTY_NAME, idRefDoc(name)));
+  public Reference fetchReference(@Nonnull String name) {
+    FindIterable<Document> result;
+    try {
+      result = backend.refs().find(eq(ID_PROPERTY_NAME, idRefDoc(name)));
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
+    }
 
     Document doc = result.first();
     if (doc == null) {
       return null;
     }
 
+    Binary prev = doc.get(COL_REFERENCES_PREVIOUS, Binary.class);
+    List<Reference.PreviousPointer> previous =
+        prev != null ? deserializePreviousPointers(prev.getData()) : emptyList();
     return reference(
         name,
         binaryToObjId(doc.get(COL_REFERENCES_POINTER, Binary.class)),
         doc.getBoolean(COL_REFERENCES_DELETED),
         refCreatedAt(doc),
-        binaryToObjId(doc.get(COL_REFERENCES_EXTENDED_INFO, Binary.class)));
+        binaryToObjId(doc.get(COL_REFERENCES_EXTENDED_INFO, Binary.class)),
+        previous);
   }
 
   private static Long refCreatedAt(Document doc) {
@@ -365,23 +312,32 @@ public class MongoDBPersist implements Persist {
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
-  public Reference[] fetchReferences(@Nonnull @jakarta.annotation.Nonnull String[] names) {
+  public Reference[] fetchReferences(@Nonnull String[] names) {
     List<Document> nameIdDocs =
         Arrays.stream(names).filter(Objects::nonNull).map(this::idRefDoc).collect(toList());
-    FindIterable<Document> result = backend.refs().find(in(ID_PROPERTY_NAME, nameIdDocs));
+    FindIterable<Document> result;
+    try {
+      result = backend.refs().find(in(ID_PROPERTY_NAME, nameIdDocs));
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
+    }
+
     Reference[] r = new Reference[names.length];
 
     for (Document doc : result) {
       String name = doc.get(ID_PROPERTY_NAME, Document.class).getString(COL_REFERENCES_NAME);
+      Binary prev = doc.get(COL_REFERENCES_PREVIOUS, Binary.class);
+      List<Reference.PreviousPointer> previous =
+          prev != null ? deserializePreviousPointers(prev.getData()) : emptyList();
       Reference reference =
           reference(
               name,
               binaryToObjId(doc.get(COL_REFERENCES_POINTER, Binary.class)),
               doc.getBoolean(COL_REFERENCES_DELETED),
               refCreatedAt(doc),
-              binaryToObjId(doc.get(COL_REFERENCES_EXTENDED_INFO, Binary.class)));
+              binaryToObjId(doc.get(COL_REFERENCES_EXTENDED_INFO, Binary.class)),
+              previous);
       for (int i = 0; i < names.length; i++) {
         if (name.equals(names[i])) {
           r[i] = reference;
@@ -394,65 +350,55 @@ public class MongoDBPersist implements Persist {
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public Obj fetchObj(@Nonnull @jakarta.annotation.Nonnull ObjId id) throws ObjNotFoundException {
-    FindIterable<Document> result = backend.objs().find(eq(ID_PROPERTY_NAME, idObjDoc(id)));
-
-    Document doc = result.first();
-    if (doc == null) {
-      throw new ObjNotFoundException(id);
-    }
-
-    return docToObj(id, doc);
-  }
-
-  @Override
-  @Nonnull
-  @jakarta.annotation.Nonnull
   public <T extends Obj> T fetchTypedObj(
-      @Nonnull @jakarta.annotation.Nonnull ObjId id, ObjType type, Class<T> typeClass)
-      throws ObjNotFoundException {
-    FindIterable<Document> result =
-        backend
-            .objs()
-            .find(and(eq(ID_PROPERTY_NAME, idObjDoc(id)), eq(COL_OBJ_TYPE, type.shortName())));
+      @Nonnull ObjId id, ObjType type, @Nonnull Class<T> typeClass) throws ObjNotFoundException {
+    FindIterable<Document> result;
+    try {
+      result =
+          type != null
+              ? backend
+                  .objs()
+                  .find(and(eq(ID_PROPERTY_NAME, idObjDoc(id)), eq(COL_OBJ_TYPE, type.shortName())))
+              : backend.objs().find(eq(ID_PROPERTY_NAME, idObjDoc(id)));
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
+    }
+
+    Document doc = result.first();
+
+    T obj = docToObj(id, doc, type, typeClass);
+    if (obj == null) {
+      throw new ObjNotFoundException(id);
+    }
+    return obj;
+  }
+
+  @Override
+  @Nonnull
+  public ObjType fetchObjType(@Nonnull ObjId id) throws ObjNotFoundException {
+    FindIterable<Document> result;
+    try {
+      result = backend.objs().find(eq(ID_PROPERTY_NAME, idObjDoc(id)));
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
+    }
 
     Document doc = result.first();
     if (doc == null) {
       throw new ObjNotFoundException(id);
     }
 
-    Obj obj = docToObj(id, doc);
-
-    @SuppressWarnings("unchecked")
-    T r = (T) obj;
-    return r;
+    return objTypeByName(doc.getString(COL_OBJ_TYPE));
   }
 
   @Override
-  @Nonnull
-  @jakarta.annotation.Nonnull
-  public ObjType fetchObjType(@Nonnull @jakarta.annotation.Nonnull ObjId id)
-      throws ObjNotFoundException {
-    FindIterable<Document> result = backend.objs().find(eq(ID_PROPERTY_NAME, idObjDoc(id)));
-
-    Document doc = result.first();
-    if (doc == null) {
-      throw new ObjNotFoundException(id);
-    }
-
-    return objTypeFromItem(doc);
-  }
-
-  @Nonnull
-  @jakarta.annotation.Nonnull
-  @Override
-  public Obj[] fetchObjs(@Nonnull @jakarta.annotation.Nonnull ObjId[] ids)
-      throws ObjNotFoundException {
+  public <T extends Obj> T[] fetchTypedObjsIfExist(
+      @Nonnull ObjId[] ids, ObjType type, @Nonnull Class<T> typeClass) {
     List<Document> list = new ArrayList<>(ids.length);
     Object2IntHashMap<ObjId> idToIndex =
         new Object2IntHashMap<>(ids.length * 2, Hashing.DEFAULT_LOAD_FACTOR, -1);
-    Obj[] r = new Obj[ids.length];
+    @SuppressWarnings("unchecked")
+    T[] r = (T[]) Array.newInstance(typeClass, ids.length);
     for (int i = 0; i < ids.length; i++) {
       ObjId id = ids[i];
       if (id != null) {
@@ -462,75 +408,135 @@ public class MongoDBPersist implements Persist {
     }
 
     if (!list.isEmpty()) {
-      fetchObjsPage(r, list, idToIndex);
-    }
-
-    List<ObjId> notFound = null;
-    for (int i = 0; i < ids.length; i++) {
-      ObjId id = ids[i];
-      if (r[i] == null && id != null) {
-        if (notFound == null) {
-          notFound = new ArrayList<>();
-        }
-        notFound.add(id);
-      }
-    }
-    if (notFound != null) {
-      throw new ObjNotFoundException(notFound);
+      fetchObjsPage(r, list, idToIndex, type, typeClass);
     }
 
     return r;
   }
 
-  private void fetchObjsPage(Obj[] r, List<Document> list, Object2IntHashMap<ObjId> idToIndex) {
-    FindIterable<Document> result = backend.objs().find(in(ID_PROPERTY_NAME, list));
+  private <T extends Obj> void fetchObjsPage(
+      Obj[] r,
+      List<Document> list,
+      Object2IntHashMap<ObjId> idToIndex,
+      ObjType type,
+      Class<T> typeClass) {
+    FindIterable<Document> result;
+    try {
+      result = backend.objs().find(in(ID_PROPERTY_NAME, list));
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
+    }
     for (Document doc : result) {
-      Obj obj = docToObj(doc);
-      int idx = idToIndex.getValue(obj.id());
-      if (idx != -1) {
-        r[idx] = obj;
+      T obj = docToObj(doc, type, typeClass);
+      if (obj != null) {
+        int idx = idToIndex.getValue(obj.id());
+        if (idx != -1) {
+          r[idx] = obj;
+        }
       }
     }
   }
 
   @Override
-  public boolean storeObj(
-      @Nonnull @jakarta.annotation.Nonnull Obj obj, boolean ignoreSoftSizeRestrictions)
+  public boolean storeObj(@Nonnull Obj obj, boolean ignoreSoftSizeRestrictions)
       throws ObjTooLargeException {
-    Document doc = objToDoc(obj, ignoreSoftSizeRestrictions);
+    long referenced = config.currentTimeMicros();
+    Document doc = objToDoc(obj, referenced, ignoreSoftSizeRestrictions);
     try {
       backend.objs().insertOne(doc);
     } catch (MongoWriteException e) {
       if (e.getError().getCategory() == DUPLICATE_KEY) {
+        backend
+            .objs()
+            .updateOne(
+                eq(ID_PROPERTY_NAME, idObjDoc(obj.id())),
+                Updates.set(COL_OBJ_REFERENCED, referenced));
         return false;
       }
-      throw e;
+      throw handleMongoWriteException(e);
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
     }
 
     return true;
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
-  public boolean[] storeObjs(@Nonnull @jakarta.annotation.Nonnull Obj[] objs)
-      throws ObjTooLargeException {
-    List<WriteModel<Document>> docs = new ArrayList<>(objs.length);
-    for (Obj obj : objs) {
-      if (obj != null) {
-        docs.add(new InsertOneModel<>(objToDoc(obj, false)));
+  public boolean[] storeObjs(@Nonnull Obj[] objs) throws ObjTooLargeException {
+    boolean[] r = new boolean[objs.length];
+
+    storeObjsWrite(objs, r);
+
+    List<ObjId> updateReferenced = new ArrayList<>();
+    for (int i = 0; i < r.length; i++) {
+      if (!r[i]) {
+        Obj obj = objs[i];
+        if (obj != null) {
+          updateReferenced.add(obj.id());
+        }
       }
     }
 
-    boolean[] r = new boolean[objs.length];
+    if (!updateReferenced.isEmpty()) {
+      storeObjsUpdateReferenced(objs, updateReferenced);
+    }
 
+    return r;
+  }
+
+  private void storeObjsUpdateReferenced(Obj[] objs, List<ObjId> updateReferenced) {
+    long referenced = config.currentTimeMicros();
+    List<UpdateOneModel<Document>> docs =
+        updateReferenced.stream()
+            .map(
+                id ->
+                    new UpdateOneModel<Document>(
+                        eq(ID_PROPERTY_NAME, idObjDoc(id)),
+                        Updates.set(COL_OBJ_REFERENCED, referenced)))
+            .collect(toList());
+    List<WriteModel<Document>> updates = new ArrayList<>(docs);
+    while (!updates.isEmpty()) {
+      try {
+        backend.objs().bulkWrite(updates);
+        break;
+      } catch (MongoBulkWriteException e) {
+        // Handle "insert of already existing objects".
+        //
+        // MongoDB returns a BulkWriteResult of what _would_ have succeeded. Use that information
+        // to retry the bulk write to make progress.
+        List<BulkWriteError> errs = e.getWriteErrors();
+        for (BulkWriteError err : errs) {
+          throw handleMongoWriteError(e, err);
+        }
+        BulkWriteResult res = e.getWriteResult();
+        updates.clear();
+        res.getUpserts().stream()
+            .map(MongoDBPersist::objIdFromBulkWriteUpsert)
+            .mapToInt(id -> objIdIndex(objs, id))
+            .mapToObj(docs::get)
+            .forEach(updates::add);
+      } catch (RuntimeException e) {
+        throw unhandledException(e);
+      }
+    }
+  }
+
+  private void storeObjsWrite(Obj[] objs, boolean[] r) throws ObjTooLargeException {
+    List<WriteModel<Document>> docs = new ArrayList<>(objs.length);
+    long referenced = config.currentTimeMicros();
+    for (Obj obj : objs) {
+      if (obj != null) {
+        docs.add(new InsertOneModel<>(objToDoc(obj, referenced, false)));
+      }
+    }
     List<WriteModel<Document>> inserts = new ArrayList<>(docs);
     while (!inserts.isEmpty()) {
       try {
         BulkWriteResult res = backend.objs().bulkWrite(inserts);
         for (BulkWriteInsert insert : res.getInserts()) {
           ObjId id = objIdFromBulkWriteInsert(insert);
-          r[objIdIndex(objs, id)] = id != null;
+          r[objIdIndex(objs, id)] = true;
         }
         break;
       } catch (MongoBulkWriteException e) {
@@ -541,7 +547,7 @@ public class MongoDBPersist implements Persist {
         List<BulkWriteError> errs = e.getWriteErrors();
         for (BulkWriteError err : errs) {
           if (err.getCategory() != DUPLICATE_KEY) {
-            throw e;
+            throw handleMongoWriteError(e, err);
           }
         }
         BulkWriteResult res = e.getWriteResult();
@@ -551,33 +557,14 @@ public class MongoDBPersist implements Persist {
             .mapToInt(id -> objIdIndex(objs, id))
             .mapToObj(docs::get)
             .forEach(inserts::add);
+      } catch (RuntimeException e) {
+        throw unhandledException(e);
       }
     }
-    return r;
   }
 
   private static ObjId objIdFromDoc(Document doc) {
     return binaryToObjId(doc.get(ID_PROPERTY_NAME, Document.class).get(COL_OBJ_ID, Binary.class));
-  }
-
-  private ObjType objTypeFromItem(Document doc) {
-    return objTypeFromItem(doc.getString(COL_OBJ_TYPE));
-  }
-
-  private ObjType objTypeFromItem(String shortType) {
-    for (ObjType type : ALL_OBJ_TYPES) {
-      if (type.shortName().equals(shortType)) {
-        return type;
-      }
-    }
-    throw new IllegalStateException("Cannot deserialize object short type " + shortType);
-  }
-
-  private StoreObjDesc<?> objTypeFromDoc(Document doc) {
-    ObjType type = objTypeFromItem(doc);
-    StoreObjDesc<?> storeObj = STORE_OBJ_TYPE.get(type);
-    checkState(storeObj != null, "Cannot deserialize object type %s", type);
-    return storeObj;
   }
 
   private static int objIdIndex(Obj[] objs, ObjId id) {
@@ -593,31 +580,48 @@ public class MongoDBPersist implements Persist {
     return ObjId.objIdFromByteArray(insert.getId().asDocument().getBinary(COL_OBJ_ID).getData());
   }
 
-  @Override
-  public void deleteObj(@Nonnull @jakarta.annotation.Nonnull ObjId id) {
-    backend.objs().deleteOne(eq(ID_PROPERTY_NAME, idObjDoc(id)));
+  private static ObjId objIdFromBulkWriteUpsert(BulkWriteUpsert upsert) {
+    return ObjId.objIdFromByteArray(upsert.getId().asDocument().getBinary(COL_OBJ_ID).getData());
   }
 
   @Override
-  public void deleteObjs(@Nonnull @jakarta.annotation.Nonnull ObjId[] ids) {
+  public void deleteObj(@Nonnull ObjId id) {
+    try {
+      backend.objs().deleteOne(eq(ID_PROPERTY_NAME, idObjDoc(id)));
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
+    }
+  }
+
+  @Override
+  public void deleteObjs(@Nonnull ObjId[] ids) {
     List<Document> list =
         Stream.of(ids).filter(Objects::nonNull).map(this::idObjDoc).collect(toList());
     if (list.isEmpty()) {
       return;
     }
-    backend.objs().deleteMany(in(ID_PROPERTY_NAME, list));
+    try {
+      backend.objs().deleteMany(in(ID_PROPERTY_NAME, list));
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
+    }
   }
 
   @Override
-  public void upsertObj(@Nonnull @jakarta.annotation.Nonnull Obj obj) throws ObjTooLargeException {
+  public void upsertObj(@Nonnull Obj obj) throws ObjTooLargeException {
     ObjId id = obj.id();
     checkArgument(id != null, "Obj to store must have a non-null ID");
 
     ReplaceOptions options = upsertOptions();
 
-    Document doc = objToDoc(obj, false);
-    UpdateResult result =
-        backend.objs().replaceOne(eq(ID_PROPERTY_NAME, idObjDoc(id)), doc, options);
+    long referenced = config.currentTimeMicros();
+    Document doc = objToDoc(obj, referenced, false);
+    UpdateResult result;
+    try {
+      result = backend.objs().replaceOne(eq(ID_PROPERTY_NAME, idObjDoc(id)), doc, options);
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
+    }
     if (!result.wasAcknowledged()) {
       throw new RuntimeException("Upsert not acknowledged");
     }
@@ -632,34 +636,112 @@ public class MongoDBPersist implements Persist {
   }
 
   @Override
-  public void upsertObjs(@Nonnull @jakarta.annotation.Nonnull Obj[] objs)
-      throws ObjTooLargeException {
+  public void upsertObjs(@Nonnull Obj[] objs) throws ObjTooLargeException {
     ReplaceOptions options = upsertOptions();
 
+    long referenced = config.currentTimeMicros();
     List<WriteModel<Document>> docs = new ArrayList<>(objs.length);
     for (Obj obj : objs) {
       if (obj != null) {
         ObjId id = obj.id();
         docs.add(
             new ReplaceOneModel<>(
-                eq(ID_PROPERTY_NAME, idObjDoc(id)), objToDoc(obj, false), options));
+                eq(ID_PROPERTY_NAME, idObjDoc(id)), objToDoc(obj, referenced, false), options));
       }
     }
 
     List<WriteModel<Document>> updates = new ArrayList<>(docs);
     if (!updates.isEmpty()) {
-      BulkWriteResult res = backend.objs().bulkWrite(updates);
+      BulkWriteResult res;
+      try {
+        res = backend.objs().bulkWrite(updates);
+      } catch (RuntimeException e) {
+        throw unhandledException(e);
+      }
       if (!res.wasAcknowledged()) {
         throw new RuntimeException("Upsert not acknowledged");
       }
     }
   }
 
-  @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
-  public CloseableIterator<Obj> scanAllObjects(
-      @Nonnull @jakarta.annotation.Nonnull Set<ObjType> returnedObjTypes) {
+  public boolean deleteWithReferenced(@Nonnull Obj obj) {
+    ObjId id = obj.id();
+
+    try {
+      var referencedBson =
+          obj.referenced() != -1L
+              ? eq(COL_OBJ_REFERENCED, obj.referenced())
+              : Filters.or(
+                  eq(COL_OBJ_REFERENCED, 0L), Filters.not(Filters.exists(COL_OBJ_REFERENCED)));
+      return backend
+              .objs()
+              .findOneAndDelete(and(eq(ID_PROPERTY_NAME, idObjDoc(id)), referencedBson))
+          != null;
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
+    }
+  }
+
+  @Override
+  public boolean deleteConditional(@Nonnull UpdateableObj obj) {
+    ObjId id = obj.id();
+    ObjType type = obj.type();
+
+    try {
+      return backend
+              .objs()
+              .findOneAndDelete(
+                  and(
+                      eq(ID_PROPERTY_NAME, idObjDoc(id)),
+                      eq(COL_OBJ_TYPE, type.shortName()),
+                      eq(COL_OBJ_VERS, obj.versionToken())))
+          != null;
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
+    }
+  }
+
+  @Override
+  public boolean updateConditional(@Nonnull UpdateableObj expected, @Nonnull UpdateableObj newValue)
+      throws ObjTooLargeException {
+    ObjId id = expected.id();
+    ObjType type = expected.type();
+    String expectedVersion = expected.versionToken();
+
+    checkArgument(id != null && id.equals(newValue.id()));
+    checkArgument(expected.type().equals(newValue.type()));
+    checkArgument(!expected.versionToken().equals(newValue.versionToken()));
+
+    long referenced = config.currentTimeMicros();
+    Document doc = objToDoc(newValue, referenced, false);
+
+    List<Bson> updates =
+        doc.entrySet().stream()
+            .filter(e -> !ID_PROPERTY_NAME.equals(e.getKey()))
+            .map(e -> set(e.getKey(), e.getValue()))
+            .collect(toList());
+
+    Bson update = Updates.combine(updates);
+
+    try {
+      return backend
+              .objs()
+              .findOneAndUpdate(
+                  and(
+                      eq(ID_PROPERTY_NAME, idObjDoc(id)),
+                      eq(COL_OBJ_TYPE, type.shortName()),
+                      eq(COL_OBJ_VERS, expectedVersion)),
+                  update)
+          != null;
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
+    }
+  }
+
+  @Nonnull
+  @Override
+  public CloseableIterator<Obj> scanAllObjects(@Nonnull Set<ObjType> returnedObjTypes) {
     return new ScanAllObjectsIterator(returnedObjTypes);
   }
 
@@ -668,332 +750,54 @@ public class MongoDBPersist implements Persist {
     backend.eraseRepositories(singleton(config.repositoryId()));
   }
 
-  private Obj docToObj(Document doc) {
+  private <T extends Obj> T docToObj(Document doc, ObjType type, Class<T> typeClass) {
     ObjId id = objIdFromDoc(doc);
-    return docToObj(id, doc);
+    return docToObj(id, doc, type, typeClass);
   }
 
-  private Obj docToObj(@Nonnull @jakarta.annotation.Nonnull ObjId id, Document doc) {
-    StoreObjDesc<?> storeObj = objTypeFromDoc(doc);
-    Document inner = doc.get(storeObj.typeName, Document.class);
-    return storeObj.docToObj(id, inner);
+  private <T extends Obj> T docToObj(
+      @Nonnull ObjId id, Document doc, ObjType t, @SuppressWarnings("unused") Class<T> typeClass) {
+    if (doc == null) {
+      return null;
+    }
+    ObjType type = objTypeByName(doc.getString(COL_OBJ_TYPE));
+    if (t != null && !t.equals(type)) {
+      return null;
+    }
+    @SuppressWarnings("unchecked")
+    ObjSerializer<T> serializer = (ObjSerializer<T>) ObjSerializers.forType(type);
+    Document inner = doc.get(serializer.fieldName(), Document.class);
+    String versionToken = doc.getString(COL_OBJ_VERS);
+    Long referenced = doc.getLong(COL_OBJ_REFERENCED);
+    return serializer.docToObj(
+        id, type, referenced != null ? referenced : -1L, inner, versionToken);
   }
 
-  @SuppressWarnings("unchecked")
-  private Document objToDoc(
-      @Nonnull @jakarta.annotation.Nonnull Obj obj, boolean ignoreSoftSizeRestrictions)
+  private Document objToDoc(@Nonnull Obj obj, long referenced, boolean ignoreSoftSizeRestrictions)
       throws ObjTooLargeException {
     ObjId id = obj.id();
     checkArgument(id != null, "Obj to store must have a non-null ID");
 
     ObjType type = obj.type();
-    @SuppressWarnings("rawtypes")
-    StoreObjDesc storeObj = STORE_OBJ_TYPE.get(type);
-    checkArgument(storeObj != null, "Cannot serialize object type %s ", type);
+    ObjSerializer<Obj> serializer = ObjSerializers.forType(type);
 
     Document doc = new Document();
     Document inner = new Document();
     doc.put(ID_PROPERTY_NAME, idObjDoc(id));
     doc.put(COL_OBJ_TYPE, type.shortName());
+    var objReferenced = obj.referenced();
+    if (objReferenced != -1L) {
+      // -1 is a sentinel for AbstractBasePersistTests.deleteWithReferenced()
+      doc.put(COL_OBJ_REFERENCED, referenced);
+    }
+    UpdateableObj.extractVersionToken(obj).ifPresent(token -> doc.put(COL_OBJ_VERS, token));
     int incrementalIndexSizeLimit =
         ignoreSoftSizeRestrictions ? Integer.MAX_VALUE : effectiveIncrementalIndexSizeLimit();
     int indexSizeLimit =
         ignoreSoftSizeRestrictions ? Integer.MAX_VALUE : effectiveIndexSegmentSizeLimit();
-    storeObj.objToDoc(obj, inner, incrementalIndexSizeLimit, indexSizeLimit);
-    doc.put(storeObj.typeName, inner);
+    serializer.objToDoc(obj, inner, incrementalIndexSizeLimit, indexSizeLimit);
+    doc.put(serializer.fieldName(), inner);
     return doc;
-  }
-
-  abstract static class StoreObjDesc<O extends Obj> {
-    final String typeName;
-
-    StoreObjDesc(String typeName) {
-      this.typeName = typeName;
-    }
-
-    abstract void objToDoc(
-        O obj, Document doc, int incrementalIndexLimit, int maxSerializedIndexSize)
-        throws ObjTooLargeException;
-
-    abstract O docToObj(ObjId id, Document doc);
-  }
-
-  static {
-    STORE_OBJ_TYPE.put(
-        ObjType.COMMIT,
-        new StoreObjDesc<CommitObj>(COL_COMMIT) {
-          @Override
-          void objToDoc(
-              CommitObj obj, Document doc, int incrementalIndexLimit, int maxSerializedIndexSize)
-              throws ObjTooLargeException {
-            doc.put(COL_COMMIT_SEQ, obj.seq());
-            doc.put(COL_COMMIT_CREATED, obj.created());
-            ObjId referenceIndex = obj.referenceIndex();
-            if (referenceIndex != null) {
-              doc.put(COL_COMMIT_REFERENCE_INDEX, objIdToBinary(referenceIndex));
-            }
-            doc.put(COL_COMMIT_MESSAGE, obj.message());
-            objIdsToDoc(doc, COL_COMMIT_TAIL, obj.tail());
-            objIdsToDoc(doc, COL_COMMIT_SECONDARY_PARENTS, obj.secondaryParents());
-
-            ByteString index = obj.incrementalIndex();
-            if (index.size() > incrementalIndexLimit) {
-              throw new ObjTooLargeException(index.size(), incrementalIndexLimit);
-            }
-            doc.put(COL_COMMIT_INCREMENTAL_INDEX, bytesToBinary(index));
-
-            List<IndexStripe> indexStripes = obj.referenceIndexStripes();
-            if (!indexStripes.isEmpty()) {
-              doc.put(COL_COMMIT_REFERENCE_INDEX_STRIPES, stripesToDocs(indexStripes));
-            }
-
-            Document headerDoc = new Document();
-            CommitHeaders headers = obj.headers();
-            for (String s : headers.keySet()) {
-              headerDoc.put(s, headers.getAll(s));
-            }
-            if (!headerDoc.isEmpty()) {
-              doc.put(COL_COMMIT_HEADERS, headerDoc);
-            }
-
-            doc.put(COL_COMMIT_INCOMPLETE_INDEX, obj.incompleteIndex());
-            doc.put(COL_COMMIT_TYPE, obj.commitType().shortName());
-          }
-
-          @Override
-          CommitObj docToObj(ObjId id, Document doc) {
-            CommitObj.Builder b =
-                commitBuilder()
-                    .id(id)
-                    .seq(doc.getLong(COL_COMMIT_SEQ))
-                    .created(doc.getLong(COL_COMMIT_CREATED))
-                    .message(doc.getString(COL_COMMIT_MESSAGE))
-                    .incrementalIndex(
-                        binaryToBytes(doc.get(COL_COMMIT_INCREMENTAL_INDEX, Binary.class)))
-                    .incompleteIndex(doc.getBoolean(COL_COMMIT_INCOMPLETE_INDEX))
-                    .commitType(CommitType.fromShortName(doc.getString(COL_COMMIT_TYPE)));
-            Binary v = doc.get(COL_COMMIT_REFERENCE_INDEX, Binary.class);
-            if (v != null) {
-              b.referenceIndex(binaryToObjId(v));
-            }
-
-            fromStripesDocList(
-                doc, COL_COMMIT_REFERENCE_INDEX_STRIPES, b::addReferenceIndexStripes);
-
-            binaryToObjIds(doc.getList(COL_COMMIT_TAIL, Binary.class), b::addTail);
-            binaryToObjIds(
-                doc.getList(COL_COMMIT_SECONDARY_PARENTS, Binary.class), b::addSecondaryParents);
-
-            CommitHeaders.Builder headers = newCommitHeaders();
-            Document headerDoc = doc.get(COL_COMMIT_HEADERS, Document.class);
-            if (headerDoc != null) {
-              headerDoc.forEach(
-                  (k, o) -> {
-                    @SuppressWarnings({"unchecked", "rawtypes"})
-                    List<String> l = (List) o;
-                    l.forEach(hv -> headers.add(k, hv));
-                  });
-            }
-            b.headers(headers.build());
-
-            return b.build();
-          }
-        });
-    STORE_OBJ_TYPE.put(
-        ObjType.REF,
-        new StoreObjDesc<RefObj>(COL_REF) {
-
-          @Override
-          void objToDoc(
-              RefObj obj, Document doc, int incrementalIndexLimit, int maxSerializedIndexSize) {
-            doc.put(COL_REF_NAME, obj.name());
-            doc.put(COL_REF_CREATED_AT, obj.createdAtMicros());
-            doc.put(COL_REF_INITIAL_POINTER, objIdToBinary(obj.initialPointer()));
-            ObjId extendedInfoObj = obj.extendedInfoObj();
-            if (extendedInfoObj != null) {
-              doc.put(COL_REF_EXTENDED_INFO, objIdToBinary(extendedInfoObj));
-            }
-          }
-
-          @Override
-          RefObj docToObj(ObjId id, Document doc) {
-            return ref(
-                id,
-                doc.getString(COL_REF_NAME),
-                binaryToObjId(doc.get(COL_REF_INITIAL_POINTER, Binary.class)),
-                doc.getLong(COL_REF_CREATED_AT),
-                binaryToObjId(doc.get(COL_REF_EXTENDED_INFO, Binary.class)));
-          }
-        });
-    STORE_OBJ_TYPE.put(
-        ObjType.VALUE,
-        new StoreObjDesc<ContentValueObj>(COL_VALUE) {
-          @Override
-          void objToDoc(
-              ContentValueObj obj,
-              Document doc,
-              int incrementalIndexLimit,
-              int maxSerializedIndexSize) {
-            doc.put(COL_VALUE_CONTENT_ID, obj.contentId());
-            doc.put(COL_VALUE_PAYLOAD, obj.payload());
-            doc.put(COL_VALUE_DATA, bytesToBinary(obj.data()));
-          }
-
-          @Override
-          ContentValueObj docToObj(ObjId id, Document doc) {
-            return contentValue(
-                id,
-                doc.getString(COL_VALUE_CONTENT_ID),
-                doc.getInteger(COL_VALUE_PAYLOAD),
-                binaryToBytes(doc.get(COL_VALUE_DATA, Binary.class)));
-          }
-        });
-    STORE_OBJ_TYPE.put(
-        ObjType.INDEX_SEGMENTS,
-        new StoreObjDesc<IndexSegmentsObj>(COL_SEGMENTS) {
-          @Override
-          void objToDoc(
-              IndexSegmentsObj obj,
-              Document doc,
-              int incrementalIndexLimit,
-              int maxSerializedIndexSize) {
-            doc.put(COL_SEGMENTS_STRIPES, stripesToDocs(obj.stripes()));
-          }
-
-          @Override
-          IndexSegmentsObj docToObj(ObjId id, Document doc) {
-            List<IndexStripe> stripes = new ArrayList<>();
-            fromStripesDocList(doc, COL_SEGMENTS_STRIPES, stripes::add);
-            return indexSegments(id, stripes);
-          }
-        });
-    STORE_OBJ_TYPE.put(
-        ObjType.INDEX,
-        new StoreObjDesc<IndexObj>(COL_INDEX) {
-          @Override
-          void objToDoc(
-              IndexObj obj, Document doc, int incrementalIndexLimit, int maxSerializedIndexSize)
-              throws ObjTooLargeException {
-            ByteString index = obj.index();
-            if (index.size() > maxSerializedIndexSize) {
-              throw new ObjTooLargeException(index.size(), maxSerializedIndexSize);
-            }
-            doc.put(COL_INDEX_INDEX, bytesToBinary(index));
-          }
-
-          @Override
-          IndexObj docToObj(ObjId id, Document doc) {
-            return index(id, binaryToBytes(doc.get(COL_INDEX_INDEX, Binary.class)));
-          }
-        });
-    STORE_OBJ_TYPE.put(
-        ObjType.TAG,
-        new StoreObjDesc<TagObj>(COL_TAG) {
-          @Override
-          void objToDoc(
-              TagObj obj, Document doc, int incrementalIndexLimit, int maxSerializedIndexSize) {
-            String message = obj.message();
-            if (message != null) {
-              doc.put(COL_TAG_MESSAGE, message);
-            }
-
-            Document headerDoc = new Document();
-            CommitHeaders headers = obj.headers();
-            if (headers != null) {
-              for (String s : headers.keySet()) {
-                headerDoc.put(s, headers.getAll(s));
-              }
-              if (!headerDoc.isEmpty()) {
-                doc.put(COL_TAG_HEADERS, headerDoc);
-              }
-            }
-
-            ByteString signature = obj.signature();
-            if (signature != null) {
-              doc.put(COL_TAG_SIGNATURE, bytesToBinary(signature));
-            }
-          }
-
-          @Override
-          TagObj docToObj(ObjId id, Document doc) {
-            CommitHeaders tagHeaders = null;
-            Document headerDoc = doc.get(COL_COMMIT_HEADERS, Document.class);
-            if (headerDoc != null) {
-              CommitHeaders.Builder headers = newCommitHeaders();
-              headerDoc.forEach(
-                  (k, o) -> {
-                    @SuppressWarnings({"unchecked", "rawtypes"})
-                    List<String> l = (List) o;
-                    l.forEach(hv -> headers.add(k, hv));
-                  });
-              tagHeaders = headers.build();
-            }
-
-            return tag(
-                id,
-                doc.getString(COL_TAG_MESSAGE),
-                tagHeaders,
-                binaryToBytes(doc.get(COL_TAG_SIGNATURE, Binary.class)));
-          }
-        });
-    STORE_OBJ_TYPE.put(
-        ObjType.STRING,
-        new StoreObjDesc<StringObj>(COL_STRING) {
-          @Override
-          void objToDoc(
-              StringObj obj, Document doc, int incrementalIndexLimit, int maxSerializedIndexSize) {
-            String s = obj.contentType();
-            if (s != null && !s.isEmpty()) {
-              doc.put(COL_STRING_CONTENT_TYPE, s);
-            }
-            doc.put(COL_STRING_COMPRESSION, obj.compression().name());
-            s = obj.filename();
-            if (s != null && !s.isEmpty()) {
-              doc.put(COL_STRING_FILENAME, s);
-            }
-            objIdsToDoc(doc, COL_STRING_PREDECESSORS, obj.predecessors());
-            doc.put(COL_STRING_TEXT, bytesToBinary(obj.text()));
-          }
-
-          @Override
-          StringObj docToObj(ObjId id, Document doc) {
-            return StringObj.stringData(
-                id,
-                doc.getString(COL_STRING_CONTENT_TYPE),
-                Compression.valueOf(doc.getString(COL_STRING_COMPRESSION)),
-                doc.getString(COL_STRING_FILENAME),
-                binaryToObjIds(doc.getList(COL_STRING_PREDECESSORS, Binary.class)),
-                binaryToBytes(doc.get(COL_STRING_TEXT, Binary.class)));
-          }
-        });
-  }
-
-  private static void fromStripesDocList(
-      Document doc, String attrName, Consumer<IndexStripe> consumer) {
-    List<Document> refIndexStripes = doc.getList(attrName, Document.class);
-    if (refIndexStripes != null) {
-      for (Document seg : refIndexStripes) {
-        consumer.accept(
-            indexStripe(
-                keyFromString(seg.getString(COL_STRIPES_FIRST_KEY)),
-                keyFromString(seg.getString(COL_STRIPES_LAST_KEY)),
-                binaryToObjId(seg.get(COL_STRIPES_SEGMENT, Binary.class))));
-      }
-    }
-  }
-
-  @Nonnull
-  @jakarta.annotation.Nonnull
-  private static List<Document> stripesToDocs(List<IndexStripe> stripes) {
-    List<Document> stripesDocs = new ArrayList<>();
-    for (IndexStripe stripe : stripes) {
-      Document sv = new Document();
-      sv.put(COL_STRIPES_FIRST_KEY, stripe.firstKey().rawString());
-      sv.put(COL_STRIPES_LAST_KEY, stripe.lastKey().rawString());
-      sv.put(COL_STRIPES_SEGMENT, objIdToBinary(stripe.segment()));
-      stripesDocs.add(sv);
-    }
-    return stripesDocs;
   }
 
   private class ScanAllObjectsIterator extends AbstractIterator<Obj>
@@ -1002,14 +806,17 @@ public class MongoDBPersist implements Persist {
     private final MongoCursor<Document> result;
 
     public ScanAllObjectsIterator(Set<ObjType> returnedObjTypes) {
-      List<String> objTypeShortNames =
-          returnedObjTypes.stream().map(ObjType::shortName).collect(toList());
-      result =
-          backend
-              .objs()
-              .find(
-                  and(eq(ID_REPO_PATH, config.repositoryId()), in(COL_OBJ_TYPE, objTypeShortNames)))
-              .iterator();
+      Bson condition = eq(ID_REPO_PATH, config.repositoryId());
+      if (!returnedObjTypes.isEmpty()) {
+        List<String> objTypeShortNames =
+            returnedObjTypes.stream().map(ObjType::shortName).collect(toList());
+        condition = and(condition, in(COL_OBJ_TYPE, objTypeShortNames));
+      }
+      try {
+        result = backend.objs().find(condition).iterator();
+      } catch (RuntimeException e) {
+        throw unhandledException(e);
+      }
     }
 
     @Override
@@ -1018,13 +825,57 @@ public class MongoDBPersist implements Persist {
         return endOfData();
       }
 
-      Document doc = result.next();
-      return docToObj(doc);
+      try {
+        Document doc = result.next();
+        return docToObj(doc, null, Obj.class);
+      } catch (RuntimeException e) {
+        throw unhandledException(e);
+      }
     }
 
     @Override
     public void close() {
       result.close();
+    }
+  }
+
+  static RuntimeException unhandledException(RuntimeException e) {
+    if (e instanceof MongoInterruptedException
+        || e instanceof MongoTimeoutException
+        || e instanceof MongoServerUnavailableException
+        || e instanceof MongoSocketReadTimeoutException
+        || e instanceof MongoExecutionTimeoutException) {
+      return new UnknownOperationResultException(e);
+    }
+    if (e instanceof MongoWriteException) {
+      return handleMongoWriteException((MongoWriteException) e);
+    }
+    if (e instanceof MongoBulkWriteException) {
+      MongoBulkWriteException specific = (MongoBulkWriteException) e;
+      for (BulkWriteError error : specific.getWriteErrors()) {
+        switch (error.getCategory()) {
+          case EXECUTION_TIMEOUT:
+          case UNCATEGORIZED:
+            return new UnknownOperationResultException(e);
+          default:
+            break;
+        }
+      }
+    }
+    return e;
+  }
+
+  static RuntimeException handleMongoWriteException(MongoWriteException e) {
+    return handleMongoWriteError(e, e.getError());
+  }
+
+  static RuntimeException handleMongoWriteError(MongoException e, WriteError error) {
+    switch (error.getCategory()) {
+      case EXECUTION_TIMEOUT:
+      case UNCATEGORIZED:
+        return new UnknownOperationResultException(e);
+      default:
+        return e;
     }
   }
 }

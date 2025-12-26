@@ -16,11 +16,13 @@
 package org.projectnessie.tools.compatibility.internal;
 
 import static org.junit.platform.engine.discovery.DiscoverySelectors.selectClass;
+import static org.projectnessie.tools.compatibility.api.Version.NEW_STORAGE_MODEL_WITH_COMPAT_TESTING;
 
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.assertj.core.api.SoftAssertions;
 import org.assertj.core.api.junit.jupiter.InjectSoftAssertions;
@@ -32,11 +34,14 @@ import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.platform.testkit.engine.EngineExecutionResults;
 import org.junit.platform.testkit.engine.EngineTestKit;
+import org.junit.platform.testkit.engine.Event;
+import org.junit.platform.testkit.engine.Events;
 import org.projectnessie.client.api.NessieApiV1;
 import org.projectnessie.junit.engine.MultiEnvTestEngine;
 import org.projectnessie.junit.engine.MultiEnvTestFilter;
 import org.projectnessie.model.Branch;
 import org.projectnessie.model.NessieConfiguration;
+import org.projectnessie.model.Reference;
 import org.projectnessie.tools.compatibility.api.NessieAPI;
 import org.projectnessie.tools.compatibility.api.NessieBaseUri;
 import org.projectnessie.tools.compatibility.api.NessieVersion;
@@ -46,6 +51,20 @@ import org.projectnessie.tools.compatibility.api.VersionCondition;
 @ExtendWith(SoftAssertionsExtension.class)
 class TestNessieCompatibilityExtensions {
   @InjectSoftAssertions protected SoftAssertions soft;
+
+  private void assertNoFailedTestEvents(EngineExecutionResults result) {
+    soft.assertThat(result.testEvents().count())
+        .withFailMessage("Failed to run any tests")
+        .isGreaterThan(0);
+
+    Events failedEvents = result.testEvents().failed();
+    soft.assertThat(failedEvents.count())
+        .withFailMessage(
+            () ->
+                "The following test events have failed:\n:"
+                    + failedEvents.stream().map(Event::toString).collect(Collectors.joining()))
+        .isEqualTo(0);
+  }
 
   @Test
   void noVersions() {
@@ -76,7 +95,9 @@ class TestNessieCompatibilityExtensions {
             c -> {
               EngineExecutionResults result =
                   EngineTestKit.engine(MultiEnvTestEngine.ENGINE_ID)
-                      .configurationParameter("nessie.versions", "0.42.0,0.43.0")
+                      .configurationParameter(
+                          "nessie.versions",
+                          NEW_STORAGE_MODEL_WITH_COMPAT_TESTING.toString() + ",0.59.0")
                       .selectors(selectClass(c))
                       .filters(new MultiEnvTestFilter())
                       .execute();
@@ -97,29 +118,37 @@ class TestNessieCompatibilityExtensions {
 
   @Test
   void olderClients() {
-    EngineTestKit.engine(MultiEnvTestEngine.ENGINE_ID)
-        .configurationParameter("nessie.versions", "0.42.0,current")
-        .selectors(selectClass(OldClientsSample.class))
-        .execute();
+    EngineExecutionResults results =
+        EngineTestKit.engine(MultiEnvTestEngine.ENGINE_ID)
+            .configurationParameter(
+                "nessie.versions", NEW_STORAGE_MODEL_WITH_COMPAT_TESTING.toString() + ",current")
+            .selectors(selectClass(OldClientsSample.class))
+            .execute();
+    assertNoFailedTestEvents(results);
+
     soft.assertThat(OldClientsSample.allVersions)
-        .containsExactly(Version.parseVersion("0.42.0"), Version.CURRENT);
+        .containsExactly(NEW_STORAGE_MODEL_WITH_COMPAT_TESTING, Version.CURRENT);
     soft.assertThat(OldClientsSample.minVersionHigh).containsExactly(Version.CURRENT);
     soft.assertThat(OldClientsSample.maxVersionHigh)
-        .containsExactly(Version.parseVersion("0.42.0"));
+        .containsExactly(NEW_STORAGE_MODEL_WITH_COMPAT_TESTING);
     soft.assertThat(OldClientsSample.never).isEmpty();
   }
 
   @Test
   void olderServers() {
-    EngineTestKit.engine(MultiEnvTestEngine.ENGINE_ID)
-        .configurationParameter("nessie.versions", "0.42.0,current")
-        .selectors(selectClass(OldServersSample.class))
-        .execute();
+    EngineExecutionResults results =
+        EngineTestKit.engine(MultiEnvTestEngine.ENGINE_ID)
+            .configurationParameter(
+                "nessie.versions", NEW_STORAGE_MODEL_WITH_COMPAT_TESTING.toString() + ",current")
+            .selectors(selectClass(OldServersSample.class))
+            .execute();
+    assertNoFailedTestEvents(results);
+
     soft.assertThat(OldServersSample.allVersions)
-        .containsExactly(Version.parseVersion("0.42.0"), Version.CURRENT);
+        .containsExactly(NEW_STORAGE_MODEL_WITH_COMPAT_TESTING, Version.CURRENT);
     soft.assertThat(OldServersSample.minVersionHigh).containsExactly(Version.CURRENT);
     soft.assertThat(OldServersSample.maxVersionHigh)
-        .containsExactly(Version.parseVersion("0.42.0"));
+        .containsExactly(NEW_STORAGE_MODEL_WITH_COMPAT_TESTING);
     soft.assertThat(OldServersSample.never).isEmpty();
 
     // Base URI should not include the API version suffix
@@ -127,15 +156,35 @@ class TestNessieCompatibilityExtensions {
   }
 
   @Test
+  void injectedNessieApiUrlChanged() {
+    final Version versionBeforeApiUrlChange = Version.parseVersion("0.74.0");
+    EngineExecutionResults results =
+        EngineTestKit.engine(MultiEnvTestEngine.ENGINE_ID)
+            .configurationParameter(
+                "nessie.versions",
+                versionBeforeApiUrlChange + "," + Version.NESSIE_URL_API_SUFFIX + ",current")
+            .selectors(selectClass(ApiEndpointServerSample.class))
+            .execute();
+    assertNoFailedTestEvents(results);
+
+    soft.assertThat(ApiEndpointServerSample.allVersions)
+        .containsExactly(versionBeforeApiUrlChange, Version.NESSIE_URL_API_SUFFIX, Version.CURRENT);
+  }
+
+  @Test
   void nestedTests() {
-    EngineTestKit.engine(MultiEnvTestEngine.ENGINE_ID)
-        .configurationParameter("nessie.versions", "0.42.0,current")
-        .selectors(selectClass(OuterSample.class))
-        .selectors(selectClass(OuterSample.Inner.class))
-        .filters(new MultiEnvTestFilter())
-        .execute();
+    EngineExecutionResults results =
+        EngineTestKit.engine(MultiEnvTestEngine.ENGINE_ID)
+            .configurationParameter(
+                "nessie.versions", NEW_STORAGE_MODEL_WITH_COMPAT_TESTING.toString() + ",current")
+            .selectors(selectClass(OuterSample.class))
+            .selectors(selectClass(OuterSample.Inner.class))
+            .filters(new MultiEnvTestFilter())
+            .execute();
+    assertNoFailedTestEvents(results);
+
     soft.assertThat(OuterSample.outerVersions)
-        .containsExactly(Version.parseVersion("0.42.0"), Version.CURRENT);
+        .containsExactly(NEW_STORAGE_MODEL_WITH_COMPAT_TESTING, Version.CURRENT);
     soft.assertThat(OuterSample.innerVersions).containsExactlyElementsOf(OuterSample.outerVersions);
   }
 
@@ -144,17 +193,23 @@ class TestNessieCompatibilityExtensions {
       value = OS.MAC,
       disabledReason = "Uses NessieUpgradesExtension, which is not compatible with macOS")
   void upgrade() {
-    EngineTestKit.engine(MultiEnvTestEngine.ENGINE_ID)
-        .configurationParameter("nessie.versions", "0.42.0,current")
-        .selectors(selectClass(UpgradeSample.class))
-        .execute();
+    EngineExecutionResults results =
+        EngineTestKit.engine(MultiEnvTestEngine.ENGINE_ID)
+            .configurationParameter(
+                "nessie.versions", NEW_STORAGE_MODEL_WITH_COMPAT_TESTING.toString() + ",current")
+            .selectors(selectClass(UpgradeSample.class))
+            .execute();
+    assertNoFailedTestEvents(results);
+
     soft.assertThat(UpgradeSample.allVersions)
-        .containsExactly(Version.parseVersion("0.42.0"), Version.CURRENT);
+        .containsExactly(NEW_STORAGE_MODEL_WITH_COMPAT_TESTING, Version.CURRENT);
     soft.assertThat(UpgradeSample.minVersionHigh).containsExactly(Version.CURRENT);
-    soft.assertThat(UpgradeSample.maxVersionHigh).containsExactly(Version.parseVersion("0.42.0"));
+    soft.assertThat(UpgradeSample.maxVersionHigh)
+        .containsExactly(NEW_STORAGE_MODEL_WITH_COMPAT_TESTING);
     soft.assertThat(UpgradeSample.never).isEmpty();
   }
 
+  @SuppressWarnings({"JUnitMalformedDeclaration", "NewClassNamingConvention"})
   @ExtendWith({OlderNessieClientsExtension.class, SoftAssertionsExtension.class})
   static class OldClientsSample {
     @InjectSoftAssertions protected SoftAssertions soft;
@@ -200,6 +255,7 @@ class TestNessieCompatibilityExtensions {
     }
   }
 
+  @SuppressWarnings({"JUnitMalformedDeclaration", "NewClassNamingConvention"})
   @ExtendWith({OlderNessieServersExtension.class, SoftAssertionsExtension.class})
   static class OldServersSample {
     @InjectSoftAssertions protected SoftAssertions soft;
@@ -250,6 +306,34 @@ class TestNessieCompatibilityExtensions {
     }
   }
 
+  @SuppressWarnings({"JUnitMalformedDeclaration", "NewClassNamingConvention"})
+  @ExtendWith({OlderNessieServersExtension.class, SoftAssertionsExtension.class})
+  static class ApiEndpointServerSample {
+    @InjectSoftAssertions protected SoftAssertions soft;
+
+    @NessieAPI NessieApiV1 api;
+    @NessieAPI static NessieApiV1 apiStatic;
+    @NessieBaseUri URI uri;
+    @NessieBaseUri static URI uriStatic;
+    @NessieVersion Version version;
+    @NessieVersion static Version versionStatic;
+
+    static final List<Version> allVersions = new ArrayList<>();
+
+    @Test
+    void testSome() {
+      soft.assertThat(api).isNotNull().isSameAs(apiStatic);
+      soft.assertThat(uri).isNotNull().isEqualTo(uriStatic);
+      soft.assertThat(version).isNotNull().isEqualTo(versionStatic);
+      allVersions.add(version);
+
+      // use api
+      List<Reference> references = api.getAllReferences().get().getReferences();
+      soft.assertThat(references).isNotEmpty();
+    }
+  }
+
+  @SuppressWarnings({"JUnitMalformedDeclaration", "NewClassNamingConvention"})
   @ExtendWith(OlderNessieServersExtension.class)
   static class OuterSample {
     static final List<Version> outerVersions = new ArrayList<>();
@@ -273,6 +357,7 @@ class TestNessieCompatibilityExtensions {
     }
   }
 
+  @SuppressWarnings({"JUnitMalformedDeclaration", "NewClassNamingConvention"})
   @ExtendWith({NessieUpgradesExtension.class, SoftAssertionsExtension.class})
   static class UpgradeSample {
     @InjectSoftAssertions protected SoftAssertions soft;
@@ -318,6 +403,7 @@ class TestNessieCompatibilityExtensions {
     }
   }
 
+  @SuppressWarnings({"JUnitMalformedDeclaration", "NewClassNamingConvention"})
   @ExtendWith(OlderNessieClientsExtension.class)
   @ExtendWith(OlderNessieServersExtension.class)
   static class TooManyExtensions1 {
@@ -325,6 +411,7 @@ class TestNessieCompatibilityExtensions {
     void testSome() {}
   }
 
+  @SuppressWarnings({"JUnitMalformedDeclaration", "NewClassNamingConvention"})
   @ExtendWith(OlderNessieClientsExtension.class)
   @ExtendWith(NessieUpgradesExtension.class)
   static class TooManyExtensions2 {
@@ -332,6 +419,7 @@ class TestNessieCompatibilityExtensions {
     void testSome() {}
   }
 
+  @SuppressWarnings({"JUnitMalformedDeclaration", "NewClassNamingConvention"})
   @ExtendWith(NessieUpgradesExtension.class)
   @ExtendWith(OlderNessieServersExtension.class)
   static class TooManyExtensions3 {
@@ -339,6 +427,7 @@ class TestNessieCompatibilityExtensions {
     void testSome() {}
   }
 
+  @SuppressWarnings({"JUnitMalformedDeclaration", "NewClassNamingConvention"})
   @ExtendWith(OlderNessieClientsExtension.class)
   @ExtendWith(OlderNessieServersExtension.class)
   @ExtendWith(NessieUpgradesExtension.class)

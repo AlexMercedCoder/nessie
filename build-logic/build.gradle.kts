@@ -16,14 +16,6 @@
 
 plugins { `kotlin-dsl` }
 
-repositories {
-  mavenCentral()
-  gradlePluginPortal()
-  if (System.getProperty("withMavenLocal").toBoolean()) {
-    mavenLocal()
-  }
-}
-
 dependencies {
   implementation(gradleKotlinDsl())
   implementation(baselibs.spotless)
@@ -31,6 +23,7 @@ dependencies {
   implementation(baselibs.idea.ext)
   implementation(baselibs.shadow)
   implementation(baselibs.errorprone)
+  implementation(baselibs.license.report)
 
   testImplementation(platform(baselibs.junit.bom))
   testImplementation(baselibs.assertj.core)
@@ -39,6 +32,20 @@ dependencies {
   testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine")
 }
 
-java { toolchain { languageVersion.set(JavaLanguageVersion.of(11)) } }
-
 tasks.withType<Test>().configureEach { useJUnitPlatform() }
+
+tasks.register("compileAll").configure {
+  group = "build"
+  description = "Runs all compilation and jar tasks"
+  dependsOn(tasks.withType<AbstractCompile>(), tasks.withType<ProcessResources>())
+}
+
+tasks.register("codeChecks").configure {
+  group = "build"
+  description = "Runs code style and license checks"
+  dependsOn("spotlessCheck")
+}
+
+kotlin {
+  jvmToolchain { (this as JavaToolchainSpec).languageVersion.set(JavaLanguageVersion.of(21)) }
+}

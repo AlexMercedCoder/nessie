@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-plugins { id("nessie-conventions-iceberg") }
+plugins { id("nessie-conventions-java11") }
 
-extra["maven.name"] = "Nessie - GC - Base Implementation Tests"
+publishingHelper { mavenName = "Nessie - GC - Base Implementation Tests" }
 
 dependencies {
   implementation(nessieProject("nessie-model"))
@@ -24,11 +24,8 @@ dependencies {
 
   compileOnly(libs.microprofile.openapi)
 
-  // javax/jakarta
   compileOnly(libs.jakarta.validation.api)
-  compileOnly(libs.javax.validation.api)
   compileOnly(libs.jakarta.annotation.api)
-  compileOnly(libs.findbugs.jsr305)
 
   compileOnly(platform(libs.jackson.bom))
   compileOnly("com.fasterxml.jackson.core:jackson-annotations")

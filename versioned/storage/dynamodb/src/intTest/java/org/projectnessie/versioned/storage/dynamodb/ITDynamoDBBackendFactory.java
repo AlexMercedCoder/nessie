@@ -32,6 +32,7 @@ import org.projectnessie.versioned.storage.common.persist.BackendFactory;
 import org.projectnessie.versioned.storage.common.persist.Persist;
 import org.projectnessie.versioned.storage.common.persist.PersistFactory;
 import org.projectnessie.versioned.storage.common.persist.PersistLoader;
+import org.projectnessie.versioned.storage.dynamodbtests.DynamoDBBackendTestFactory;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeDefinition;
 import software.amazon.awssdk.services.dynamodb.model.BillingMode;
@@ -42,8 +43,6 @@ import software.amazon.awssdk.services.dynamodb.model.ScalarAttributeType;
 @ExtendWith(SoftAssertionsExtension.class)
 public class ITDynamoDBBackendFactory {
   @InjectSoftAssertions protected SoftAssertions soft;
-
-  static StoreConfig DEFAULT_CONFIG = new StoreConfig() {};
 
   @Test
   public void productionLike() throws Exception {
@@ -62,7 +61,7 @@ public class ITDynamoDBBackendFactory {
           backend.setupSchema();
           PersistFactory persistFactory = backend.createFactory();
           soft.assertThat(persistFactory).isNotNull().isInstanceOf(DynamoDBPersistFactory.class);
-          Persist persist = persistFactory.newPersist(DEFAULT_CONFIG);
+          Persist persist = persistFactory.newPersist(StoreConfig.Adjustable.empty());
           soft.assertThat(persist).isNotNull().isInstanceOf(DynamoDBPersist.class);
 
           RepositoryLogic repositoryLogic = repositoryLogic(persist);
@@ -77,7 +76,7 @@ public class ITDynamoDBBackendFactory {
           backend.setupSchema();
           PersistFactory persistFactory = backend.createFactory();
           soft.assertThat(persistFactory).isNotNull().isInstanceOf(DynamoDBPersistFactory.class);
-          Persist persist = persistFactory.newPersist(DEFAULT_CONFIG);
+          Persist persist = persistFactory.newPersist(StoreConfig.Adjustable.empty());
           soft.assertThat(persist).isNotNull().isInstanceOf(DynamoDBPersist.class);
 
           RepositoryLogic repositoryLogic = repositoryLogic(persist);
@@ -105,7 +104,7 @@ public class ITDynamoDBBackendFactory {
         backend.setupSchema();
         PersistFactory persistFactory = backend.createFactory();
         soft.assertThat(persistFactory).isNotNull().isInstanceOf(DynamoDBPersistFactory.class);
-        Persist persist = persistFactory.newPersist(DEFAULT_CONFIG);
+        Persist persist = persistFactory.newPersist(StoreConfig.Adjustable.empty());
         soft.assertThat(persist).isNotNull().isInstanceOf(DynamoDBPersist.class);
 
         RepositoryLogic repositoryLogic = repositoryLogic(persist);
@@ -119,7 +118,7 @@ public class ITDynamoDBBackendFactory {
         backend.setupSchema();
         PersistFactory persistFactory = backend.createFactory();
         soft.assertThat(persistFactory).isNotNull().isInstanceOf(DynamoDBPersistFactory.class);
-        Persist persist = persistFactory.newPersist(DEFAULT_CONFIG);
+        Persist persist = persistFactory.newPersist(StoreConfig.Adjustable.empty());
         soft.assertThat(persist).isNotNull().isInstanceOf(DynamoDBPersist.class);
 
         RepositoryLogic repositoryLogic = repositoryLogic(persist);
@@ -163,7 +162,10 @@ public class ITDynamoDBBackendFactory {
         try (DynamoDBBackend backend = testFactory.createNewBackend()) {
           soft.assertThatIllegalStateException()
               .isThrownBy(backend::setupSchema)
-              .withMessageStartingWith("Invalid key schema for table: ");
+              .withMessage(
+                  "Invalid key schema for table: %s. "
+                      + "Key schema should be a hash partitioned attribute with the name '%s'.",
+                  TABLE_REFS, KEY_NAME);
         }
 
         client.deleteTable(b -> b.tableName(TABLE_REFS));
@@ -187,7 +189,10 @@ public class ITDynamoDBBackendFactory {
         try (DynamoDBBackend backend = testFactory.createNewBackend()) {
           soft.assertThatIllegalStateException()
               .isThrownBy(backend::setupSchema)
-              .withMessageStartingWith("Invalid key schema for table: ");
+              .withMessage(
+                  "Invalid key schema for table: %s. "
+                      + "Key schema should be a hash partitioned attribute with the name '%s'.",
+                  TABLE_REFS, KEY_NAME);
         }
       }
     } finally {

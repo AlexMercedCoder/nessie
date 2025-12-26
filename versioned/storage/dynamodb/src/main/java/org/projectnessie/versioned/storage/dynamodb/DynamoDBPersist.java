@@ -16,139 +16,89 @@
 package org.projectnessie.versioned.storage.dynamodb;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkState;
+import static java.util.Collections.emptyList;
 import static java.util.Collections.emptyListIterator;
 import static java.util.Collections.singleton;
 import static java.util.Collections.singletonMap;
-import static org.projectnessie.nessie.relocated.protobuf.UnsafeByteOperations.unsafeWrap;
-import static org.projectnessie.versioned.storage.common.indexes.StoreKey.keyFromString;
-import static org.projectnessie.versioned.storage.common.objtypes.CommitHeaders.newCommitHeaders;
-import static org.projectnessie.versioned.storage.common.objtypes.CommitObj.commitBuilder;
-import static org.projectnessie.versioned.storage.common.objtypes.ContentValueObj.contentValue;
-import static org.projectnessie.versioned.storage.common.objtypes.IndexObj.index;
-import static org.projectnessie.versioned.storage.common.objtypes.IndexSegmentsObj.indexSegments;
-import static org.projectnessie.versioned.storage.common.objtypes.IndexStripe.indexStripe;
-import static org.projectnessie.versioned.storage.common.objtypes.RefObj.ref;
-import static org.projectnessie.versioned.storage.common.objtypes.StringObj.stringData;
-import static org.projectnessie.versioned.storage.common.objtypes.TagObj.tag;
-import static org.projectnessie.versioned.storage.common.persist.ObjId.objIdFromByteBuffer;
 import static org.projectnessie.versioned.storage.common.persist.ObjId.objIdFromString;
+import static org.projectnessie.versioned.storage.common.persist.ObjTypes.objTypeByName;
 import static org.projectnessie.versioned.storage.common.persist.Reference.reference;
 import static org.projectnessie.versioned.storage.dynamodb.DynamoDBBackend.condition;
 import static org.projectnessie.versioned.storage.dynamodb.DynamoDBBackend.keyPrefix;
 import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.BATCH_GET_LIMIT;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_COMMIT;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_COMMIT_CREATED;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_COMMIT_HEADERS;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_COMMIT_INCOMPLETE_INDEX;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_COMMIT_INCREMENTAL_INDEX;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_COMMIT_MESSAGE;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_COMMIT_REFERENCE_INDEX;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_COMMIT_REFERENCE_INDEX_STRIPES;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_COMMIT_SECONDARY_PARENTS;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_COMMIT_SEQ;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_COMMIT_TAIL;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_COMMIT_TYPE;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_INDEX;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_INDEX_INDEX;
+import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_OBJ_REFERENCED;
 import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_OBJ_TYPE;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_REF;
+import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_OBJ_VERS;
 import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_REFERENCES_CONDITION_COMMON;
 import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_REFERENCES_CREATED_AT;
 import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_REFERENCES_DELETED;
 import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_REFERENCES_EXTENDED_INFO;
 import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_REFERENCES_POINTER;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_REF_CREATED_AT;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_REF_EXTENDED_INFO;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_REF_INITIAL_POINTER;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_REF_NAME;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_SEGMENTS;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_SEGMENTS_STRIPES;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_STRING;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_STRING_COMPRESSION;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_STRING_CONTENT_TYPE;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_STRING_FILENAME;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_STRING_PREDECESSORS;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_STRING_TEXT;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_STRIPES_FIRST_KEY;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_STRIPES_LAST_KEY;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_STRIPES_SEGMENT;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_TAG;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_TAG_HEADERS;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_TAG_MESSAGE;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_TAG_SIGNATURE;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_VALUE;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_VALUE_CONTENT_ID;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_VALUE_DATA;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_VALUE_PAYLOAD;
+import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.COL_REFERENCES_PREVIOUS;
 import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.CONDITION_STORE_OBJ;
 import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.CONDITION_STORE_REF;
 import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.ITEM_SIZE_LIMIT;
 import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.KEY_NAME;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.TABLE_OBJS;
-import static org.projectnessie.versioned.storage.dynamodb.DynamoDBConstants.TABLE_REFS;
-import static software.amazon.awssdk.core.SdkBytes.fromByteBuffer;
+import static org.projectnessie.versioned.storage.dynamodb.DynamoDBSerde.attributeToString;
+import static org.projectnessie.versioned.storage.serialize.ProtoSerialization.deserializePreviousPointers;
+import static org.projectnessie.versioned.storage.serialize.ProtoSerialization.serializePreviousPointers;
+import static software.amazon.awssdk.core.SdkBytes.fromByteArray;
 import static software.amazon.awssdk.services.dynamodb.model.AttributeValue.fromB;
 import static software.amazon.awssdk.services.dynamodb.model.AttributeValue.fromBool;
-import static software.amazon.awssdk.services.dynamodb.model.AttributeValue.fromL;
 import static software.amazon.awssdk.services.dynamodb.model.AttributeValue.fromM;
 import static software.amazon.awssdk.services.dynamodb.model.AttributeValue.fromS;
 import static software.amazon.awssdk.services.dynamodb.model.ComparisonOperator.BEGINS_WITH;
 import static software.amazon.awssdk.services.dynamodb.model.ComparisonOperator.IN;
 
 import com.google.common.collect.AbstractIterator;
+import jakarta.annotation.Nonnull;
+import jakarta.annotation.Nullable;
+import java.lang.reflect.Array;
 import java.util.ArrayList;
-import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.function.Consumer;
 import java.util.stream.Collectors;
-import javax.annotation.Nonnull;
-import javax.annotation.Nullable;
 import org.agrona.collections.Hashing;
 import org.agrona.collections.Object2IntHashMap;
-import org.projectnessie.nessie.relocated.protobuf.ByteString;
 import org.projectnessie.versioned.storage.common.config.StoreConfig;
 import org.projectnessie.versioned.storage.common.exceptions.ObjNotFoundException;
 import org.projectnessie.versioned.storage.common.exceptions.ObjTooLargeException;
 import org.projectnessie.versioned.storage.common.exceptions.RefAlreadyExistsException;
 import org.projectnessie.versioned.storage.common.exceptions.RefConditionFailedException;
 import org.projectnessie.versioned.storage.common.exceptions.RefNotFoundException;
-import org.projectnessie.versioned.storage.common.objtypes.CommitHeaders;
-import org.projectnessie.versioned.storage.common.objtypes.CommitObj;
-import org.projectnessie.versioned.storage.common.objtypes.CommitType;
-import org.projectnessie.versioned.storage.common.objtypes.Compression;
-import org.projectnessie.versioned.storage.common.objtypes.ContentValueObj;
-import org.projectnessie.versioned.storage.common.objtypes.IndexObj;
-import org.projectnessie.versioned.storage.common.objtypes.IndexSegmentsObj;
-import org.projectnessie.versioned.storage.common.objtypes.IndexStripe;
-import org.projectnessie.versioned.storage.common.objtypes.RefObj;
-import org.projectnessie.versioned.storage.common.objtypes.StringObj;
-import org.projectnessie.versioned.storage.common.objtypes.TagObj;
+import org.projectnessie.versioned.storage.common.exceptions.UnknownOperationResultException;
+import org.projectnessie.versioned.storage.common.objtypes.UpdateableObj;
 import org.projectnessie.versioned.storage.common.persist.CloseableIterator;
 import org.projectnessie.versioned.storage.common.persist.Obj;
 import org.projectnessie.versioned.storage.common.persist.ObjId;
 import org.projectnessie.versioned.storage.common.persist.ObjType;
 import org.projectnessie.versioned.storage.common.persist.Persist;
 import org.projectnessie.versioned.storage.common.persist.Reference;
+import org.projectnessie.versioned.storage.dynamodb.serializers.ObjSerializer;
+import org.projectnessie.versioned.storage.dynamodb.serializers.ObjSerializers;
 import software.amazon.awssdk.awscore.exception.AwsErrorDetails;
-import software.amazon.awssdk.core.SdkBytes;
+import software.amazon.awssdk.awscore.exception.AwsServiceException;
+import software.amazon.awssdk.core.exception.AbortedException;
+import software.amazon.awssdk.core.exception.ApiCallAttemptTimeoutException;
+import software.amazon.awssdk.core.exception.ApiCallTimeoutException;
+import software.amazon.awssdk.core.exception.SdkException;
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
+import software.amazon.awssdk.services.dynamodb.model.AttributeValueUpdate;
 import software.amazon.awssdk.services.dynamodb.model.BatchGetItemResponse;
 import software.amazon.awssdk.services.dynamodb.model.Condition;
 import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedException;
+import software.amazon.awssdk.services.dynamodb.model.DeleteItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.DynamoDbException;
+import software.amazon.awssdk.services.dynamodb.model.ExpectedAttributeValue;
 import software.amazon.awssdk.services.dynamodb.model.GetItemResponse;
 import software.amazon.awssdk.services.dynamodb.model.KeysAndAttributes;
 import software.amazon.awssdk.services.dynamodb.model.ScanResponse;
 
 public class DynamoDBPersist implements Persist {
-
-  private static final Map<ObjType, StoreObjDesc<?>> STORE_OBJ_TYPE = new EnumMap<>(ObjType.class);
 
   private final DynamoDBBackend backend;
   private final StoreConfig config;
@@ -161,7 +111,6 @@ public class DynamoDBPersist implements Persist {
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
   public String name() {
     return DynamoDBBackendFactory.NAME;
@@ -173,17 +122,14 @@ public class DynamoDBPersist implements Persist {
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
   public StoreConfig config() {
     return config;
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
-  public Reference addReference(@Nonnull @jakarta.annotation.Nonnull Reference reference)
-      throws RefAlreadyExistsException {
+  public Reference addReference(@Nonnull Reference reference) throws RefAlreadyExistsException {
     checkArgument(!reference.deleted(), "Deleted references must not be added");
 
     try {
@@ -191,19 +137,20 @@ public class DynamoDBPersist implements Persist {
           .client()
           .putItem(
               b ->
-                  b.tableName(TABLE_REFS)
+                  b.tableName(backend.tableRefs)
                       .conditionExpression(CONDITION_STORE_REF)
                       .item(referenceAttributeValues(reference)));
       return reference;
     } catch (ConditionalCheckFailedException e) {
       throw new RefAlreadyExistsException(fetchReference(reference.name()));
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
     }
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
-  public Reference markReferenceAsDeleted(@Nonnull @jakarta.annotation.Nonnull Reference reference)
+  public Reference markReferenceAsDeleted(@Nonnull Reference reference)
       throws RefNotFoundException, RefConditionFailedException {
     try {
       reference = reference.withDeleted(false);
@@ -220,15 +167,12 @@ public class DynamoDBPersist implements Persist {
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
-  public Reference updateReferencePointer(
-      @Nonnull @jakarta.annotation.Nonnull Reference reference,
-      @Nonnull @jakarta.annotation.Nonnull ObjId newPointer)
+  public Reference updateReferencePointer(@Nonnull Reference reference, @Nonnull ObjId newPointer)
       throws RefNotFoundException, RefConditionFailedException {
     try {
       reference = reference.withDeleted(false);
-      Reference bumpedReference = reference.forNewPointer(newPointer);
+      Reference bumpedReference = reference.forNewPointer(newPointer, config);
       conditionalReferencePut(bumpedReference, reference);
       return bumpedReference;
     } catch (ConditionalCheckFailedException e) {
@@ -241,7 +185,7 @@ public class DynamoDBPersist implements Persist {
   }
 
   @Override
-  public void purgeReference(@Nonnull @jakarta.annotation.Nonnull Reference reference)
+  public void purgeReference(@Nonnull Reference reference)
       throws RefNotFoundException, RefConditionFailedException {
     reference = reference.withDeleted(true);
     String condition = referenceCondition(reference);
@@ -253,7 +197,7 @@ public class DynamoDBPersist implements Persist {
           .client()
           .deleteItem(
               b ->
-                  b.tableName(TABLE_REFS)
+                  b.tableName(backend.tableRefs)
                       .key(referenceKeyMap(refName))
                       .expressionAttributeValues(values)
                       .conditionExpression(condition));
@@ -263,15 +207,21 @@ public class DynamoDBPersist implements Persist {
         throw new RefNotFoundException(refName);
       }
       throw new RefConditionFailedException(r);
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
     }
   }
 
   @Override
   @Nullable
-  @jakarta.annotation.Nullable
-  public Reference fetchReference(@Nonnull @jakarta.annotation.Nonnull String name) {
-    GetItemResponse item =
-        backend.client().getItem(b -> b.tableName(TABLE_REFS).key(referenceKeyMap(name)));
+  public Reference fetchReference(@Nonnull String name) {
+    GetItemResponse item;
+    try {
+      item =
+          backend.client().getItem(b -> b.tableName(backend.tableRefs).key(referenceKeyMap(name)));
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
+    }
     if (!item.hasItem()) {
       return null;
     }
@@ -282,16 +232,16 @@ public class DynamoDBPersist implements Persist {
     long createdAt = createdAtStr != null ? Long.parseLong(createdAtStr) : 0L;
     return reference(
         name,
-        attributeToObjId(i, COL_REFERENCES_POINTER),
-        attributeToBool(i, COL_REFERENCES_DELETED),
+        DynamoDBSerde.attributeToObjId(i, COL_REFERENCES_POINTER),
+        DynamoDBSerde.attributeToBool(i, COL_REFERENCES_DELETED),
         createdAt,
-        attributeToObjId(i, COL_REFERENCES_EXTENDED_INFO));
+        DynamoDBSerde.attributeToObjId(i, COL_REFERENCES_EXTENDED_INFO),
+        attributeToPreviousPointers(i));
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
-  public Reference[] fetchReferences(@Nonnull @jakarta.annotation.Nonnull String[] names) {
+  public Reference[] fetchReferences(@Nonnull String[] names) {
     List<Map<String, AttributeValue>> keys =
         new ArrayList<>(Math.min(names.length, BATCH_GET_LIMIT));
     Object2IntHashMap<String> nameToIndex =
@@ -323,93 +273,100 @@ public class DynamoDBPersist implements Persist {
       List<Map<String, AttributeValue>> keys,
       Object2IntHashMap<String> nameToIndex) {
     Map<String, KeysAndAttributes> requestItems =
-        singletonMap(TABLE_REFS, KeysAndAttributes.builder().keys(keys).build());
+        singletonMap(backend.tableRefs, KeysAndAttributes.builder().keys(keys).build());
 
-    BatchGetItemResponse response =
-        backend.client().batchGetItem(b -> b.requestItems(requestItems));
+    try {
+      BatchGetItemResponse response =
+          backend.client().batchGetItem(b -> b.requestItems(requestItems));
 
-    response
-        .responses()
-        .get(TABLE_REFS)
-        .forEach(
-            item -> {
-              String name = item.get(KEY_NAME).s().substring(keyPrefix.length());
-              String createdAtStr = attributeToString(item, COL_REFERENCES_CREATED_AT);
-              long createdAt = createdAtStr != null ? Long.parseLong(createdAtStr) : 0L;
-              Reference reference =
-                  reference(
-                      name,
-                      attributeToObjId(item, COL_REFERENCES_POINTER),
-                      attributeToBool(item, COL_REFERENCES_DELETED),
-                      createdAt,
-                      attributeToObjId(item, COL_REFERENCES_EXTENDED_INFO));
-              int idx = nameToIndex.getValue(name);
-              if (idx >= 0) {
-                r[idx] = reference;
-              }
-            });
-  }
-
-  @Override
-  @Nonnull
-  @jakarta.annotation.Nonnull
-  public Obj fetchObj(@Nonnull @jakarta.annotation.Nonnull ObjId id) throws ObjNotFoundException {
-    GetItemResponse item =
-        backend.client().getItem(b -> b.tableName(TABLE_OBJS).key(objKeyMap(id)));
-    if (!item.hasItem()) {
-      throw new ObjNotFoundException(id);
+      response
+          .responses()
+          .get(backend.tableRefs)
+          .forEach(
+              item -> {
+                String name = item.get(KEY_NAME).s().substring(keyPrefix.length());
+                String createdAtStr = attributeToString(item, COL_REFERENCES_CREATED_AT);
+                long createdAt = createdAtStr != null ? Long.parseLong(createdAtStr) : 0L;
+                Reference reference =
+                    reference(
+                        name,
+                        DynamoDBSerde.attributeToObjId(item, COL_REFERENCES_POINTER),
+                        DynamoDBSerde.attributeToBool(item, COL_REFERENCES_DELETED),
+                        createdAt,
+                        DynamoDBSerde.attributeToObjId(item, COL_REFERENCES_EXTENDED_INFO),
+                        attributeToPreviousPointers(item));
+                int idx = nameToIndex.getValue(name);
+                if (idx >= 0) {
+                  r[idx] = reference;
+                }
+              });
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
     }
+  }
 
-    return decomposeObj(item.item());
+  private List<Reference.PreviousPointer> attributeToPreviousPointers(
+      Map<String, AttributeValue> item) {
+    AttributeValue attr = item.get(COL_REFERENCES_PREVIOUS);
+    if (attr == null) {
+      return emptyList();
+    }
+    return deserializePreviousPointers(attr.b().asByteArray());
   }
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
   public <T extends Obj> T fetchTypedObj(
-      @Nonnull @jakarta.annotation.Nonnull ObjId id, ObjType type, Class<T> typeClass)
-      throws ObjNotFoundException {
-    GetItemResponse item =
-        backend.client().getItem(b -> b.tableName(TABLE_OBJS).key(objKeyMap(id)));
+      @Nonnull ObjId id, ObjType type, @Nonnull Class<T> typeClass) throws ObjNotFoundException {
+    GetItemResponse item;
+    try {
+      item = backend.client().getItem(b -> b.tableName(backend.tableObjs).key(objKeyMap(id)));
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
+    }
     if (!item.hasItem()) {
       throw new ObjNotFoundException(id);
     }
 
-    Obj obj = decomposeObj(item.item());
-    if (obj.type() != type) {
+    T obj = itemToObj(item.item(), type, typeClass);
+    if (obj == null) {
       throw new ObjNotFoundException(id);
     }
-
-    @SuppressWarnings("unchecked")
-    T r = (T) obj;
-    return r;
+    return obj;
   }
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public ObjType fetchObjType(@Nonnull @jakarta.annotation.Nonnull ObjId id)
-      throws ObjNotFoundException {
-    GetItemResponse item =
-        backend
-            .client()
-            .getItem(b -> b.tableName(TABLE_OBJS).key(objKeyMap(id)).attributesToGet(COL_OBJ_TYPE));
+  public ObjType fetchObjType(@Nonnull ObjId id) throws ObjNotFoundException {
+    GetItemResponse item;
+    try {
+      item =
+          backend
+              .client()
+              .getItem(
+                  b ->
+                      b.tableName(backend.tableObjs)
+                          .key(objKeyMap(id))
+                          .attributesToGet(COL_OBJ_TYPE));
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
+    }
     if (!item.hasItem()) {
       throw new ObjNotFoundException(id);
     }
 
-    return objTypeFromItem(item.item());
+    return objTypeByName(item.item().get(COL_OBJ_TYPE).s());
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
-  public Obj[] fetchObjs(@Nonnull @jakarta.annotation.Nonnull ObjId[] ids)
-      throws ObjNotFoundException {
+  public <T extends Obj> T[] fetchTypedObjsIfExist(
+      @Nonnull ObjId[] ids, ObjType type, @Nonnull Class<T> typeClass) {
     List<Map<String, AttributeValue>> keys = new ArrayList<>(Math.min(ids.length, BATCH_GET_LIMIT));
     Object2IntHashMap<ObjId> idToIndex =
         new Object2IntHashMap<>(200, Hashing.DEFAULT_LOAD_FACTOR, -1);
-    Obj[] r = new Obj[ids.length];
+    @SuppressWarnings("unchecked")
+    T[] r = (T[]) Array.newInstance(typeClass, ids.length);
     for (int i = 0; i < ids.length; i++) {
       ObjId id = ids[i];
       if (id != null) {
@@ -417,7 +374,7 @@ public class DynamoDBPersist implements Persist {
         idToIndex.put(id, i);
 
         if (keys.size() == BATCH_GET_LIMIT) {
-          fetchObjsPage(r, keys, idToIndex);
+          fetchObjsPage(r, keys, idToIndex, type, typeClass);
           keys.clear();
           idToIndex.clear();
         }
@@ -425,53 +382,47 @@ public class DynamoDBPersist implements Persist {
     }
 
     if (!keys.isEmpty()) {
-      fetchObjsPage(r, keys, idToIndex);
-    }
-
-    List<ObjId> notFound = null;
-    for (int i = 0; i < ids.length; i++) {
-      ObjId id = ids[i];
-      if (id != null && r[i] == null) {
-        if (notFound == null) {
-          notFound = new ArrayList<>();
-        }
-        notFound.add(id);
-      }
-    }
-    if (notFound != null) {
-      throw new ObjNotFoundException(notFound);
+      fetchObjsPage(r, keys, idToIndex, type, typeClass);
     }
 
     return r;
   }
 
-  private void fetchObjsPage(
-      Obj[] r, List<Map<String, AttributeValue>> keys, Object2IntHashMap<ObjId> idToIndex) {
+  private <T extends Obj> void fetchObjsPage(
+      T[] r,
+      List<Map<String, AttributeValue>> keys,
+      Object2IntHashMap<ObjId> idToIndex,
+      ObjType type,
+      Class<T> typeClass) {
 
     Map<String, KeysAndAttributes> requestItems =
-        singletonMap(TABLE_OBJS, KeysAndAttributes.builder().keys(keys).build());
+        singletonMap(backend.tableObjs, KeysAndAttributes.builder().keys(keys).build());
 
-    BatchGetItemResponse response =
-        backend.client().batchGetItem(b -> b.requestItems(requestItems));
+    try {
+      BatchGetItemResponse response =
+          backend.client().batchGetItem(b -> b.requestItems(requestItems));
 
-    response
-        .responses()
-        .get(TABLE_OBJS)
-        .forEach(
-            item -> {
-              Obj obj = decomposeObj(item);
-              int idx = idToIndex.getValue(obj.id());
-              if (idx != -1) {
-                r[idx] = obj;
-              }
-            });
+      response
+          .responses()
+          .get(backend.tableObjs)
+          .forEach(
+              item -> {
+                T obj = itemToObj(item, type, typeClass);
+                if (obj != null) {
+                  int idx = idToIndex.getValue(obj.id());
+                  if (idx != -1) {
+                    r[idx] = obj;
+                  }
+                }
+              });
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
+    }
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
-  public boolean[] storeObjs(@Nonnull @jakarta.annotation.Nonnull Obj[] objs)
-      throws ObjTooLargeException {
+  public boolean[] storeObjs(@Nonnull Obj[] objs) throws ObjTooLargeException {
     // DynamoDB does not support "PUT IF NOT EXISTS" in a BatchWriteItemRequest/PutItem
     boolean[] r = new boolean[objs.length];
     for (int i = 0; i < objs.length; i++) {
@@ -484,87 +435,220 @@ public class DynamoDBPersist implements Persist {
   }
 
   @Override
-  public boolean storeObj(
-      @Nonnull @jakarta.annotation.Nonnull Obj obj, boolean ignoreSoftSizeRestrictions)
+  public boolean storeObj(@Nonnull Obj obj, boolean ignoreSoftSizeRestrictions)
       throws ObjTooLargeException {
     ObjId id = obj.id();
     checkArgument(id != null, "Obj to store must have a non-null ID");
 
-    Map<String, AttributeValue> item = objToItem(obj, id, ignoreSoftSizeRestrictions);
+    long referenced = config.currentTimeMicros();
+
+    Map<String, AttributeValue> item = objToItem(obj, referenced, id, ignoreSoftSizeRestrictions);
 
     try {
-      backend
-          .client()
-          .putItem(
-              b -> b.tableName(TABLE_OBJS).conditionExpression(CONDITION_STORE_OBJ).item(item));
-    } catch (ConditionalCheckFailedException e) {
-      return false;
+      try {
+        backend
+            .client()
+            .putItem(
+                b ->
+                    b.tableName(backend.tableObjs)
+                        .conditionExpression(CONDITION_STORE_OBJ)
+                        .item(item));
+      } catch (ConditionalCheckFailedException e) {
+        backend
+            .client()
+            .updateItem(
+                b ->
+                    b.tableName(backend.tableObjs)
+                        .key(objKeyMap(id))
+                        .attributeUpdates(
+                            Map.of(
+                                COL_OBJ_REFERENCED,
+                                AttributeValueUpdate.builder()
+                                    .value(fromS(Long.toString(referenced)))
+                                    .build())));
+        return false;
+      }
     } catch (DynamoDbException e) {
       // Best effort to detect whether an object exceeded DynamoDB's hard item size limit of 400k.
       AwsErrorDetails errorDetails = e.awsErrorDetails();
       if (checkItemSizeExceeded(errorDetails)) {
         throw new ObjTooLargeException();
       }
-      throw e;
+      throw unhandledException(e);
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
     }
 
     return true;
   }
 
   @Override
-  public void deleteObj(@Nonnull @jakarta.annotation.Nonnull ObjId id) {
-    backend.client().deleteItem(b -> b.tableName(TABLE_OBJS).key(objKeyMap(id)));
+  public void deleteObj(@Nonnull ObjId id) {
+    backend.client().deleteItem(b -> b.tableName(backend.tableObjs).key(objKeyMap(id)));
   }
 
   @Override
-  public void deleteObjs(@Nonnull @jakarta.annotation.Nonnull ObjId[] ids) {
-    try (BatchWrite batchWrite = new BatchWrite(backend, TABLE_OBJS)) {
+  public void deleteObjs(@Nonnull ObjId[] ids) {
+    try (BatchWrite batchWrite = new BatchWrite(backend, backend.tableObjs)) {
       for (ObjId id : ids) {
-        batchWrite.addDelete(objKey(id));
+        if (id != null) {
+          batchWrite.addDelete(objKey(id));
+        }
       }
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
     }
   }
 
   @Override
-  public void upsertObj(@Nonnull @jakarta.annotation.Nonnull Obj obj) throws ObjTooLargeException {
+  public void upsertObj(@Nonnull Obj obj) throws ObjTooLargeException {
     ObjId id = obj.id();
     checkArgument(id != null, "Obj to store must have a non-null ID");
 
-    Map<String, AttributeValue> item = objToItem(obj, id, false);
+    long referenced = config.currentTimeMicros();
+    obj = obj.withReferenced(referenced);
+
+    Map<String, AttributeValue> item = objToItem(obj, config.currentTimeMicros(), id, false);
 
     try {
-      backend.client().putItem(b -> b.tableName(TABLE_OBJS).item(item));
+      backend.client().putItem(b -> b.tableName(backend.tableObjs).item(item));
     } catch (DynamoDbException e) {
       // Best effort to detect whether an object exceeded DynamoDB's hard item size limit of 400k.
       AwsErrorDetails errorDetails = e.awsErrorDetails();
       if (checkItemSizeExceeded(errorDetails)) {
         throw new ObjTooLargeException();
       }
-      throw e;
+      throw unhandledException(e);
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
     }
   }
 
   @Override
-  public void upsertObjs(@Nonnull @jakarta.annotation.Nonnull Obj[] objs)
-      throws ObjTooLargeException {
+  public void upsertObjs(@Nonnull Obj[] objs) throws ObjTooLargeException {
     // DynamoDB does not support "PUT IF NOT EXISTS" in a BatchWriteItemRequest/PutItem
-    try (BatchWrite batchWrite = new BatchWrite(backend, TABLE_OBJS)) {
+    try (BatchWrite batchWrite = new BatchWrite(backend, backend.tableObjs)) {
+      long referenced = config.currentTimeMicros();
       for (Obj obj : objs) {
-        ObjId id = obj.id();
-        checkArgument(id != null, "Obj to store must have a non-null ID");
+        if (obj != null) {
+          ObjId id = obj.id();
+          checkArgument(id != null, "Obj to store must have a non-null ID");
 
-        Map<String, AttributeValue> item = objToItem(obj, id, false);
+          obj = obj.withReferenced(referenced);
 
-        batchWrite.addPut(item);
+          Map<String, AttributeValue> item = objToItem(obj, config.currentTimeMicros(), id, false);
+
+          batchWrite.addPut(item);
+        }
       }
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
     }
+  }
+
+  @Override
+  public boolean deleteWithReferenced(@Nonnull Obj obj) {
+    ObjId id = obj.id();
+
+    var deleteItemRequest =
+        DeleteItemRequest.builder().tableName(backend.tableObjs).key(objKeyMap(id));
+    if (obj.referenced() != -1L) {
+      // We take a risk here in case the given object does _not_ have a referenced() value
+      // (old object). It's not possible in DynamoDB to check for '== 0 OR IS ABSENT/NULL'.
+      deleteItemRequest.expected(
+          Map.of(
+              COL_OBJ_REFERENCED,
+              ExpectedAttributeValue.builder()
+                  .value(fromS(Long.toString(obj.referenced())))
+                  .build()));
+    }
+
+    try {
+      backend.client().deleteItem(deleteItemRequest.build());
+      return true;
+    } catch (ConditionalCheckFailedException checkFailedException) {
+      return false;
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
+    }
+  }
+
+  @Override
+  public boolean deleteConditional(@Nonnull UpdateableObj obj) {
+    ObjId id = obj.id();
+
+    Map<String, ExpectedAttributeValue> expectedValues = conditionalUpdateExpectedValues(obj);
+
+    try {
+      backend
+          .client()
+          .deleteItem(
+              b -> b.tableName(backend.tableObjs).key(objKeyMap(id)).expected(expectedValues));
+      return true;
+    } catch (ConditionalCheckFailedException checkFailedException) {
+      return false;
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
+    }
+  }
+
+  @Override
+  public boolean updateConditional(@Nonnull UpdateableObj expected, @Nonnull UpdateableObj newValue)
+      throws ObjTooLargeException {
+    ObjId id = expected.id();
+
+    checkArgument(id != null && id.equals(newValue.id()));
+    checkArgument(expected.type().equals(newValue.type()));
+    checkArgument(!expected.versionToken().equals(newValue.versionToken()));
+
+    Map<String, ExpectedAttributeValue> expectedValues = conditionalUpdateExpectedValues(expected);
+
+    long referenced = config.currentTimeMicros();
+    Map<String, AttributeValueUpdate> updates =
+        objToItem(newValue.withReferenced(referenced), config.currentTimeMicros(), id, false)
+            .entrySet()
+            .stream()
+            .filter(e -> !COL_OBJ_TYPE.equals(e.getKey()) && !KEY_NAME.equals(e.getKey()))
+            .collect(
+                Collectors.toMap(
+                    Map.Entry::getKey,
+                    e -> AttributeValueUpdate.builder().value(e.getValue()).build()));
+
+    try {
+      // Although '.attributeUpdates()' + '.expected()' are deprecated those functionalities do
+      // work, unlike the recommended expression(s) approach, which fails with HTTP/550 for our
+      // 'updateConditional()'.
+      backend
+          .client()
+          .updateItem(
+              b ->
+                  b.tableName(backend.tableObjs)
+                      .key(objKeyMap(id))
+                      .attributeUpdates(updates)
+                      .expected(expectedValues));
+      return true;
+    } catch (ConditionalCheckFailedException checkFailedException) {
+      return false;
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
+    }
+  }
+
+  private static Map<String, ExpectedAttributeValue> conditionalUpdateExpectedValues(
+      UpdateableObj expected) {
+    Map<String, ExpectedAttributeValue> expectedValues = new HashMap<>();
+    expectedValues.put(
+        COL_OBJ_TYPE,
+        ExpectedAttributeValue.builder().value(fromS(expected.type().shortName())).build());
+    expectedValues.put(
+        COL_OBJ_VERS,
+        ExpectedAttributeValue.builder().value(fromS(expected.versionToken())).build());
+    return expectedValues;
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
-  public CloseableIterator<Obj> scanAllObjects(
-      @Nonnull @jakarta.annotation.Nonnull Set<ObjType> returnedObjTypes) {
+  public CloseableIterator<Obj> scanAllObjects(@Nonnull Set<ObjType> returnedObjTypes) {
     return new ScanAllObjectsIterator(returnedObjTypes);
   }
 
@@ -573,358 +657,47 @@ public class DynamoDBPersist implements Persist {
     backend.eraseRepositories(singleton(config().repositoryId()));
   }
 
-  private ObjType objTypeFromItem(Map<String, AttributeValue> item) {
-    return objTypeFromItem(item.get(COL_OBJ_TYPE));
-  }
-
-  private ObjType objTypeFromItem(AttributeValue attributeValue) {
-    String shortType = attributeValue.s();
-    return ObjType.fromShortName(shortType);
-  }
-
-  @SuppressWarnings("unchecked")
-  private Obj decomposeObj(Map<String, AttributeValue> item) {
+  private <T extends Obj> T itemToObj(
+      Map<String, AttributeValue> item, ObjType t, @SuppressWarnings("unused") Class<T> typeClass) {
     ObjId id = objIdFromString(item.get(KEY_NAME).s().substring(keyPrefix.length()));
-    ObjType type = objTypeFromItem(item);
-    @SuppressWarnings("rawtypes")
-    StoreObjDesc storeObj = STORE_OBJ_TYPE.get(type);
-    checkState(storeObj != null, "Cannot deserialize object type %s", type);
-    Map<String, AttributeValue> inner = item.get(storeObj.typeName).m();
-    return storeObj.fromMap(id, inner);
+    AttributeValue attributeValue = item.get(COL_OBJ_TYPE);
+    ObjType type = objTypeByName(attributeValue.s());
+    if (t != null && !t.equals(type)) {
+      return null;
+    }
+    ObjSerializer<?> serializer = ObjSerializers.forType(type);
+    Map<String, AttributeValue> inner = item.get(serializer.attributeName()).m();
+    String versionToken = attributeToString(item, COL_OBJ_VERS);
+    String referencedString = attributeToString(item, COL_OBJ_REFERENCED);
+    long referenced = referencedString != null ? Long.parseLong(referencedString) : -1L;
+    @SuppressWarnings("unchecked")
+    T typed = (T) serializer.fromMap(id, type, referenced, inner, versionToken);
+    return typed;
   }
 
-  @SuppressWarnings("unchecked")
   @Nonnull
-  @jakarta.annotation.Nonnull
   private Map<String, AttributeValue> objToItem(
-      @Nonnull @jakarta.annotation.Nonnull Obj obj, ObjId id, boolean ignoreSoftSizeRestrictions)
+      @Nonnull Obj obj, long referenced, ObjId id, boolean ignoreSoftSizeRestrictions)
       throws ObjTooLargeException {
     ObjType type = obj.type();
-    @SuppressWarnings("rawtypes")
-    StoreObjDesc storeObj = STORE_OBJ_TYPE.get(type);
-    checkArgument(storeObj != null, "Cannot serialize object type %s ", type);
+    ObjSerializer<Obj> serializer = ObjSerializers.forType(type);
 
     Map<String, AttributeValue> item = new HashMap<>();
     Map<String, AttributeValue> inner = new HashMap<>();
     item.put(KEY_NAME, objKey(id));
     item.put(COL_OBJ_TYPE, fromS(type.shortName()));
+    if (obj.referenced() != -1) {
+      // -1 is a sentinel for AbstractBasePersistTests.deleteWithReferenced()
+      item.put(COL_OBJ_REFERENCED, fromS(Long.toString(referenced)));
+    }
+    UpdateableObj.extractVersionToken(obj).ifPresent(token -> item.put(COL_OBJ_VERS, fromS(token)));
     int incrementalIndexSizeLimit =
         ignoreSoftSizeRestrictions ? Integer.MAX_VALUE : effectiveIncrementalIndexSizeLimit();
     int indexSizeLimit =
         ignoreSoftSizeRestrictions ? Integer.MAX_VALUE : effectiveIndexSegmentSizeLimit();
-    storeObj.toMap(obj, inner, incrementalIndexSizeLimit, indexSizeLimit);
-    item.put(storeObj.typeName, fromM(inner));
+    serializer.toMap(obj, inner, incrementalIndexSizeLimit, indexSizeLimit);
+    item.put(serializer.attributeName(), fromM(inner));
     return item;
-  }
-
-  private abstract static class StoreObjDesc<O extends Obj> {
-    final String typeName;
-
-    StoreObjDesc(String typeName) {
-      this.typeName = typeName;
-    }
-
-    abstract void toMap(
-        O obj, Map<String, AttributeValue> i, int incrementalIndexSize, int maxSerializedIndexSize)
-        throws ObjTooLargeException;
-
-    abstract O fromMap(ObjId id, Map<String, AttributeValue> i);
-  }
-
-  static {
-    STORE_OBJ_TYPE.put(
-        ObjType.COMMIT,
-        new StoreObjDesc<CommitObj>(COL_COMMIT) {
-          @Override
-          void toMap(
-              CommitObj obj,
-              Map<String, AttributeValue> i,
-              int incrementalIndexSize,
-              int maxSerializedIndexSize)
-              throws ObjTooLargeException {
-            i.put(COL_COMMIT_SEQ, fromS(Long.toString(obj.seq())));
-            i.put(COL_COMMIT_CREATED, fromS(Long.toString(obj.created())));
-            ObjId referenceIndex = obj.referenceIndex();
-            if (referenceIndex != null) {
-              objIdToAttribute(i, COL_COMMIT_REFERENCE_INDEX, referenceIndex);
-            }
-            i.put(COL_COMMIT_MESSAGE, fromS(obj.message()));
-            objIdsAttribute(i, COL_COMMIT_TAIL, obj.tail());
-            objIdsAttribute(i, COL_COMMIT_SECONDARY_PARENTS, obj.secondaryParents());
-
-            ByteString index = obj.incrementalIndex();
-            if (index.size() > incrementalIndexSize) {
-              throw new ObjTooLargeException(index.size(), incrementalIndexSize);
-            }
-            bytesAttribute(i, COL_COMMIT_INCREMENTAL_INDEX, index);
-
-            if (!obj.referenceIndexStripes().isEmpty()) {
-              i.put(
-                  COL_COMMIT_REFERENCE_INDEX_STRIPES, stripesAttrList(obj.referenceIndexStripes()));
-            }
-
-            Map<String, AttributeValue> headerMap = new HashMap<>();
-            CommitHeaders headers = obj.headers();
-            for (String s : headers.keySet()) {
-              headerMap.put(
-                  s,
-                  fromL(
-                      headers.getAll(s).stream()
-                          .map(AttributeValue::fromS)
-                          .collect(Collectors.toList())));
-            }
-            if (!headerMap.isEmpty()) {
-              i.put(COL_COMMIT_HEADERS, fromM(headerMap));
-            }
-            i.put(COL_COMMIT_INCOMPLETE_INDEX, fromBool(obj.incompleteIndex()));
-            i.put(COL_COMMIT_TYPE, fromS(obj.commitType().shortName()));
-          }
-
-          @Override
-          CommitObj fromMap(ObjId id, Map<String, AttributeValue> i) {
-            CommitObj.Builder b =
-                commitBuilder()
-                    .id(id)
-                    .seq(Long.parseLong(attributeToString(i, COL_COMMIT_SEQ)))
-                    .created(Long.parseLong(attributeToString(i, COL_COMMIT_CREATED)))
-                    .message(attributeToString(i, COL_COMMIT_MESSAGE))
-                    .incrementalIndex(attributeToBytes(i, COL_COMMIT_INCREMENTAL_INDEX))
-                    .incompleteIndex(attributeToBool(i, COL_COMMIT_INCOMPLETE_INDEX))
-                    .commitType(CommitType.fromShortName(attributeToString(i, COL_COMMIT_TYPE)));
-            AttributeValue v = i.get(COL_COMMIT_REFERENCE_INDEX);
-            if (v != null) {
-              b.referenceIndex(attributeToObjId(v));
-            }
-
-            fromStripesAttrList(
-                i.get(COL_COMMIT_REFERENCE_INDEX_STRIPES), b::addReferenceIndexStripes);
-
-            attributeToObjIds(i, COL_COMMIT_TAIL, b::addTail);
-            attributeToObjIds(i, COL_COMMIT_SECONDARY_PARENTS, b::addSecondaryParents);
-
-            CommitHeaders.Builder headers = newCommitHeaders();
-            AttributeValue headerMap = i.get(COL_COMMIT_HEADERS);
-            if (headerMap != null) {
-              headerMap.m().forEach((k, l) -> l.l().forEach(hv -> headers.add(k, hv.s())));
-            }
-            b.headers(headers.build());
-
-            return b.build();
-          }
-        });
-
-    STORE_OBJ_TYPE.put(
-        ObjType.REF,
-        new StoreObjDesc<RefObj>(COL_REF) {
-          @Override
-          void toMap(
-              RefObj obj,
-              Map<String, AttributeValue> i,
-              int incrementalIndexSize,
-              int maxSerializedIndexSize) {
-            i.put(COL_REF_NAME, fromS(obj.name()));
-            i.put(COL_REF_CREATED_AT, fromS(Long.toString(obj.createdAtMicros())));
-            objIdToAttribute(i, COL_REF_INITIAL_POINTER, obj.initialPointer());
-            ObjId extendedInfoObj = obj.extendedInfoObj();
-            if (extendedInfoObj != null) {
-              objIdToAttribute(i, COL_REF_EXTENDED_INFO, extendedInfoObj);
-            }
-          }
-
-          @Override
-          RefObj fromMap(ObjId id, Map<String, AttributeValue> i) {
-            String createdAtStr = attributeToString(i, COL_REFERENCES_CREATED_AT);
-            long createdAt = createdAtStr != null ? Long.parseLong(createdAtStr) : 0L;
-            return ref(
-                id,
-                attributeToString(i, COL_REF_NAME),
-                attributeToObjId(i, COL_REF_INITIAL_POINTER),
-                createdAt,
-                attributeToObjId(i, COL_REF_EXTENDED_INFO));
-          }
-        });
-
-    STORE_OBJ_TYPE.put(
-        ObjType.VALUE,
-        new StoreObjDesc<ContentValueObj>(COL_VALUE) {
-          @Override
-          void toMap(
-              ContentValueObj obj,
-              Map<String, AttributeValue> i,
-              int incrementalIndexSize,
-              int maxSerializedIndexSize) {
-            i.put(COL_VALUE_CONTENT_ID, fromS(obj.contentId()));
-            i.put(COL_VALUE_PAYLOAD, fromS(Integer.toString(obj.payload())));
-            bytesAttribute(i, COL_VALUE_DATA, obj.data());
-          }
-
-          @Override
-          ContentValueObj fromMap(ObjId id, Map<String, AttributeValue> i) {
-            return contentValue(
-                id,
-                attributeToString(i, COL_VALUE_CONTENT_ID),
-                Integer.parseInt(attributeToString(i, COL_VALUE_PAYLOAD)),
-                attributeToBytes(i, COL_VALUE_DATA));
-          }
-        });
-
-    STORE_OBJ_TYPE.put(
-        ObjType.INDEX_SEGMENTS,
-        new StoreObjDesc<IndexSegmentsObj>(COL_SEGMENTS) {
-          @Override
-          void toMap(
-              IndexSegmentsObj obj,
-              Map<String, AttributeValue> i,
-              int incrementalIndexSize,
-              int maxSerializedIndexSize) {
-            i.put(COL_SEGMENTS_STRIPES, stripesAttrList(obj.stripes()));
-          }
-
-          @Override
-          IndexSegmentsObj fromMap(ObjId id, Map<String, AttributeValue> i) {
-            List<IndexStripe> stripes = new ArrayList<>();
-            fromStripesAttrList(i.get(COL_SEGMENTS_STRIPES), stripes::add);
-            return indexSegments(id, stripes);
-          }
-        });
-
-    STORE_OBJ_TYPE.put(
-        ObjType.INDEX,
-        new StoreObjDesc<IndexObj>(COL_INDEX) {
-          @Override
-          void toMap(
-              IndexObj obj,
-              Map<String, AttributeValue> i,
-              int incrementalIndexSize,
-              int maxSerializedIndexSize)
-              throws ObjTooLargeException {
-            ByteString index = obj.index();
-            if (index.size() > maxSerializedIndexSize) {
-              throw new ObjTooLargeException(index.size(), maxSerializedIndexSize);
-            }
-            bytesAttribute(i, COL_INDEX_INDEX, index);
-          }
-
-          @Override
-          IndexObj fromMap(ObjId id, Map<String, AttributeValue> i) {
-            return index(id, attributeToBytes(i, COL_INDEX_INDEX));
-          }
-        });
-
-    STORE_OBJ_TYPE.put(
-        ObjType.TAG,
-        new StoreObjDesc<TagObj>(COL_TAG) {
-          @Override
-          void toMap(
-              TagObj obj,
-              Map<String, AttributeValue> i,
-              int incrementalIndexSize,
-              int maxSerializedIndexSize) {
-            String message = obj.message();
-            if (message != null) {
-              i.put(COL_TAG_MESSAGE, fromS(message));
-            }
-
-            Map<String, AttributeValue> headerMap = new HashMap<>();
-            CommitHeaders headers = obj.headers();
-            if (headers != null) {
-              for (String s : headers.keySet()) {
-                headerMap.put(
-                    s,
-                    fromL(
-                        headers.getAll(s).stream()
-                            .map(AttributeValue::fromS)
-                            .collect(Collectors.toList())));
-              }
-              if (!headerMap.isEmpty()) {
-                i.put(COL_TAG_HEADERS, fromM(headerMap));
-              }
-            }
-
-            ByteString signature = obj.signature();
-            if (signature != null) {
-              bytesAttribute(i, COL_TAG_SIGNATURE, signature);
-            }
-          }
-
-          @Override
-          TagObj fromMap(ObjId id, Map<String, AttributeValue> i) {
-            CommitHeaders tagHeaders = null;
-            AttributeValue headerMap = i.get(COL_COMMIT_HEADERS);
-            if (headerMap != null) {
-              CommitHeaders.Builder headers = newCommitHeaders();
-              headerMap.m().forEach((k, l) -> l.l().forEach(hv -> headers.add(k, hv.s())));
-              tagHeaders = headers.build();
-            }
-
-            return tag(
-                id,
-                attributeToString(i, COL_TAG_MESSAGE),
-                tagHeaders,
-                attributeToBytes(i, COL_TAG_SIGNATURE));
-          }
-        });
-
-    STORE_OBJ_TYPE.put(
-        ObjType.STRING,
-        new StoreObjDesc<StringObj>(COL_STRING) {
-          @Override
-          void toMap(
-              StringObj obj,
-              Map<String, AttributeValue> i,
-              int incrementalIndexSize,
-              int maxSerializedIndexSize) {
-            String s = obj.contentType();
-            if (s != null && !s.isEmpty()) {
-              i.put(COL_STRING_CONTENT_TYPE, fromS(s));
-            }
-            i.put(COL_STRING_COMPRESSION, fromS(obj.compression().name()));
-            s = obj.filename();
-            if (s != null && !s.isEmpty()) {
-              i.put(COL_STRING_FILENAME, fromS(s));
-            }
-            objIdsAttribute(i, COL_STRING_PREDECESSORS, obj.predecessors());
-            bytesAttribute(i, COL_STRING_TEXT, obj.text());
-          }
-
-          @Override
-          StringObj fromMap(ObjId id, Map<String, AttributeValue> i) {
-            List<ObjId> predecessors = new ArrayList<>();
-            attributeToObjIds(i, COL_STRING_PREDECESSORS, predecessors::add);
-            return stringData(
-                id,
-                attributeToString(i, COL_STRING_CONTENT_TYPE),
-                Compression.valueOf(attributeToString(i, COL_STRING_COMPRESSION)),
-                attributeToString(i, COL_STRING_FILENAME),
-                predecessors,
-                attributeToBytes(i, COL_STRING_TEXT));
-          }
-        });
-  }
-
-  private static void fromStripesAttrList(AttributeValue attrList, Consumer<IndexStripe> consumer) {
-    if (attrList != null) {
-      for (AttributeValue seg : attrList.l()) {
-        Map<String, AttributeValue> m = seg.m();
-        consumer.accept(
-            indexStripe(
-                keyFromString(attributeToString(m, COL_STRIPES_FIRST_KEY)),
-                keyFromString(attributeToString(m, COL_STRIPES_LAST_KEY)),
-                attributeToObjId(m, COL_STRIPES_SEGMENT)));
-      }
-    }
-  }
-
-  private static AttributeValue stripesAttrList(List<IndexStripe> stripes) {
-    List<AttributeValue> stripeAttr = new ArrayList<>();
-    for (IndexStripe stripe : stripes) {
-      Map<String, AttributeValue> sv = new HashMap<>();
-      sv.put(COL_STRIPES_FIRST_KEY, fromS(stripe.firstKey().rawString()));
-      sv.put(COL_STRIPES_LAST_KEY, fromS(stripe.lastKey().rawString()));
-      objIdToAttribute(sv, COL_STRIPES_SEGMENT, stripe.segment());
-      stripeAttr.add(fromM(sv));
-    }
-    return fromL(stripeAttr);
   }
 
   private static boolean checkItemSizeExceeded(AwsErrorDetails errorDetails) {
@@ -934,40 +707,46 @@ public class DynamoDBPersist implements Persist {
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
-  private Map<String, AttributeValue> referenceAttributeValues(
-      @Nonnull @jakarta.annotation.Nonnull Reference reference) {
+  private Map<String, AttributeValue> referenceAttributeValues(@Nonnull Reference reference) {
     Map<String, AttributeValue> item = new HashMap<>();
     item.put(KEY_NAME, referenceKey(reference.name()));
-    objIdToAttribute(item, COL_REFERENCES_POINTER, reference.pointer());
+    DynamoDBSerde.objIdToAttribute(item, COL_REFERENCES_POINTER, reference.pointer());
     item.put(COL_REFERENCES_DELETED, fromBool(reference.deleted()));
     item.put(COL_REFERENCES_CREATED_AT, referencesCreatedAt(reference));
-    objIdToAttribute(item, COL_REFERENCES_EXTENDED_INFO, reference.extendedInfoObj());
+    DynamoDBSerde.objIdToAttribute(item, COL_REFERENCES_EXTENDED_INFO, reference.extendedInfoObj());
+
+    byte[] previousPointers = serializePreviousPointers(reference.previousPointers());
+    if (previousPointers != null) {
+      item.put(COL_REFERENCES_PREVIOUS, fromB(fromByteArray(previousPointers)));
+    }
 
     return item;
   }
 
-  private void conditionalReferencePut(
-      @Nonnull @jakarta.annotation.Nonnull Reference reference, Reference expected) {
+  private void conditionalReferencePut(@Nonnull Reference reference, Reference expected) {
     String condition = referenceCondition(expected);
     Map<String, AttributeValue> values = referenceConditionAttributes(expected);
 
-    backend
-        .client()
-        .putItem(
-            b ->
-                b.tableName(TABLE_REFS)
-                    .conditionExpression(condition)
-                    .expressionAttributeValues(values)
-                    .item(referenceAttributeValues(reference)));
+    try {
+      backend
+          .client()
+          .putItem(
+              b ->
+                  b.tableName(backend.tableRefs)
+                      .conditionExpression(condition)
+                      .expressionAttributeValues(values)
+                      .item(referenceAttributeValues(reference)));
+    } catch (RuntimeException e) {
+      throw unhandledException(e);
+    }
   }
 
   private static Map<String, AttributeValue> referenceConditionAttributes(Reference reference) {
     Map<String, AttributeValue> values = new HashMap<>();
-    objIdToAttribute(values, ":pointer", reference.pointer());
+    DynamoDBSerde.objIdToAttribute(values, ":pointer", reference.pointer());
     values.put(":deleted", fromBool(reference.deleted()));
     values.put(":createdAt", referencesCreatedAt(reference));
-    objIdToAttribute(values, ":extendedInfo", reference.extendedInfoObj());
+    DynamoDBSerde.objIdToAttribute(values, ":extendedInfo", reference.extendedInfoObj());
     return values;
   }
 
@@ -987,85 +766,23 @@ public class DynamoDBPersist implements Persist {
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
-  private AttributeValue referenceKey(@Nonnull @jakarta.annotation.Nonnull String reference) {
+  private AttributeValue referenceKey(@Nonnull String reference) {
     return fromS(keyPrefix + reference);
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
-  private Map<String, AttributeValue> referenceKeyMap(
-      @Nonnull @jakarta.annotation.Nonnull String reference) {
+  private Map<String, AttributeValue> referenceKeyMap(@Nonnull String reference) {
     return singletonMap(KEY_NAME, referenceKey(reference));
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
-  private AttributeValue objKey(@Nonnull @jakarta.annotation.Nonnull ObjId id) {
+  private AttributeValue objKey(@Nonnull ObjId id) {
     return fromS(keyPrefix + id);
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
-  private Map<String, AttributeValue> objKeyMap(@Nonnull @jakarta.annotation.Nonnull ObjId id) {
+  private Map<String, AttributeValue> objKeyMap(@Nonnull ObjId id) {
     return singletonMap(KEY_NAME, objKey(id));
-  }
-
-  private static void attributeToObjIds(
-      Map<String, AttributeValue> i, String n, Consumer<ObjId> receiver) {
-    AttributeValue v = i.get(n);
-    if (v != null) {
-      v.l().stream().map(el -> objIdFromByteBuffer(el.b().asByteBuffer())).forEach(receiver);
-    }
-  }
-
-  private static String attributeToString(Map<String, AttributeValue> i, String n) {
-    AttributeValue v = i.get(n);
-    return v != null ? v.s() : null;
-  }
-
-  private static ByteString attributeToBytes(Map<String, AttributeValue> i, String n) {
-    AttributeValue v = i.get(n);
-    return v != null ? unsafeWrap(v.b().asByteArrayUnsafe()) : null;
-  }
-
-  private static boolean attributeToBool(Map<String, AttributeValue> i, String n) {
-    AttributeValue v = i.get(n);
-    if (v == null) {
-      return false;
-    }
-    Boolean b = v.bool();
-    return b != null && b;
-  }
-
-  private static ObjId attributeToObjId(Map<String, AttributeValue> i, String n) {
-    return attributeToObjId(i.get(n));
-  }
-
-  private static ObjId attributeToObjId(AttributeValue v) {
-    return v == null ? null : objIdFromByteBuffer(v.b().asByteBuffer());
-  }
-
-  private static void objIdToAttribute(Map<String, AttributeValue> i, String n, ObjId id) {
-    i.put(n, id != null ? fromB(fromByteBuffer(id.asByteBuffer())) : null);
-  }
-
-  private static void objIdsAttribute(Map<String, AttributeValue> i, String n, List<ObjId> l) {
-    if (l == null || l.isEmpty()) {
-      return;
-    }
-    i.put(
-        n,
-        fromL(
-            l.stream()
-                .map(ObjId::asByteBuffer)
-                .map(SdkBytes::fromByteBuffer)
-                .map(AttributeValue::fromB)
-                .collect(Collectors.toList())));
-  }
-
-  private static void bytesAttribute(Map<String, AttributeValue> i, String n, ByteString b) {
-    i.put(n, fromB(fromByteBuffer(b.asReadOnlyByteBuffer())));
   }
 
   private class ScanAllObjectsIterator extends AbstractIterator<Obj>
@@ -1076,40 +793,68 @@ public class DynamoDBPersist implements Persist {
 
     public ScanAllObjectsIterator(Set<ObjType> returnedObjTypes) {
 
-      AttributeValue[] objTypes =
-          returnedObjTypes.stream()
-              .map(ObjType::shortName)
-              .map(AttributeValue::fromS)
-              .toArray(AttributeValue[]::new);
       Map<String, Condition> scanFilter = new HashMap<>();
       scanFilter.put(KEY_NAME, condition(BEGINS_WITH, fromS(keyPrefix)));
-      scanFilter.put(COL_OBJ_TYPE, condition(IN, objTypes));
 
-      iter =
-          backend
-              .client()
-              .scanPaginator(b -> b.tableName(TABLE_OBJS).scanFilter(scanFilter))
-              .iterator();
+      if (!returnedObjTypes.isEmpty()) {
+        AttributeValue[] objTypes =
+            returnedObjTypes.stream()
+                .map(ObjType::shortName)
+                .map(AttributeValue::fromS)
+                .toArray(AttributeValue[]::new);
+        scanFilter.put(COL_OBJ_TYPE, condition(IN, objTypes));
+      }
+
+      try {
+        iter =
+            backend
+                .client()
+                .scanPaginator(b -> b.tableName(backend.tableObjs).scanFilter(scanFilter))
+                .iterator();
+      } catch (RuntimeException e) {
+        throw unhandledException(e);
+      }
     }
 
     @Override
     protected Obj computeNext() {
-      while (true) {
-        if (!pageIter.hasNext()) {
-          if (!iter.hasNext()) {
-            return endOfData();
+      try {
+        while (true) {
+          if (!pageIter.hasNext()) {
+            if (!iter.hasNext()) {
+              return endOfData();
+            }
+            ScanResponse r = iter.next();
+            pageIter = r.items().iterator();
+            continue;
           }
-          ScanResponse r = iter.next();
-          pageIter = r.items().iterator();
-          continue;
-        }
 
-        Map<String, AttributeValue> item = pageIter.next();
-        return decomposeObj(item);
+          Map<String, AttributeValue> item = pageIter.next();
+          return itemToObj(item, null, Obj.class);
+        }
+      } catch (RuntimeException e) {
+        throw unhandledException(e);
       }
     }
 
     @Override
     public void close() {}
+  }
+
+  static RuntimeException unhandledException(RuntimeException e) {
+    if (e instanceof SdkException) {
+      if (((SdkException) e).retryable()
+          || e instanceof ApiCallTimeoutException
+          || e instanceof ApiCallAttemptTimeoutException
+          || e instanceof AbortedException) {
+        return new UnknownOperationResultException(e);
+      }
+    }
+    if (e instanceof AwsServiceException) {
+      if (((AwsServiceException) e).isThrottlingException()) {
+        return new UnknownOperationResultException(e);
+      }
+    }
+    return e;
   }
 }

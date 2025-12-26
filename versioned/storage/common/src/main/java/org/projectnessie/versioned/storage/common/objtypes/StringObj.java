@@ -15,14 +15,16 @@
  */
 package org.projectnessie.versioned.storage.common.objtypes;
 
-import static org.projectnessie.versioned.storage.common.objtypes.Hashes.stringDataHash;
+import static org.projectnessie.versioned.storage.common.objtypes.StandardObjType.STRING;
+import static org.projectnessie.versioned.storage.common.persist.ObjIdHasher.objIdHasher;
 
+import jakarta.annotation.Nullable;
 import java.util.List;
-import javax.annotation.Nullable;
 import org.immutables.value.Value;
 import org.projectnessie.nessie.relocated.protobuf.ByteString;
 import org.projectnessie.versioned.storage.common.persist.Obj;
 import org.projectnessie.versioned.storage.common.persist.ObjId;
+import org.projectnessie.versioned.storage.common.persist.ObjIdHasher;
 import org.projectnessie.versioned.storage.common.persist.ObjType;
 
 @Value.Immutable
@@ -30,14 +32,18 @@ public interface StringObj extends Obj {
 
   @Override
   default ObjType type() {
-    return ObjType.STRING;
+    return StandardObjType.STRING;
   }
 
   @Override
   @Value.Parameter(order = 1)
   @Nullable
-  @jakarta.annotation.Nullable
   ObjId id();
+
+  @Override
+  @Value.Parameter(order = 1)
+  @Value.Auxiliary
+  long referenced();
 
   @Value.Parameter(order = 2)
   String contentType();
@@ -46,7 +52,6 @@ public interface StringObj extends Obj {
   Compression compression();
 
   @Nullable
-  @jakarta.annotation.Nullable
   @Value.Parameter(order = 4)
   String filename();
 
@@ -71,26 +76,28 @@ public interface StringObj extends Obj {
 
   static StringObj stringData(
       ObjId id,
+      long referenced,
       String contentType,
       Compression compression,
-      @Nullable @jakarta.annotation.Nullable String filename,
+      @Nullable String filename,
       List<ObjId> predecessors,
       ByteString text) {
-    return ImmutableStringObj.of(id, contentType, compression, filename, predecessors, text);
+    return ImmutableStringObj.of(
+        id, referenced, contentType, compression, filename, predecessors, text);
   }
 
   static StringObj stringData(
       String contentType,
       Compression compression,
-      @Nullable @jakarta.annotation.Nullable String filename,
+      @Nullable String filename,
       List<ObjId> predecessors,
       ByteString text) {
+    ObjIdHasher hasher =
+        objIdHasher(STRING).hash(contentType).hash(compression.value()).hash(filename);
+    predecessors.forEach(id -> hasher.hash(id.asByteArray()));
+    hasher.hash(text.asReadOnlyByteBuffer());
+
     return stringData(
-        stringDataHash(contentType, compression, filename, predecessors, text),
-        contentType,
-        compression,
-        filename,
-        predecessors,
-        text);
+        hasher.generate(), 0L, contentType, compression, filename, predecessors, text);
   }
 }

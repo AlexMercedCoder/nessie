@@ -15,12 +15,11 @@
  */
 package org.projectnessie.quarkus.tests.profiles;
 
-import com.google.common.collect.ImmutableMap;
 import io.quarkus.test.common.DevServicesContext;
 import io.quarkus.test.common.QuarkusTestResourceLifecycleManager;
 import java.util.Map;
 import java.util.Optional;
-import org.projectnessie.versioned.storage.bigtable.BigTableBackendContainerTestFactory;
+import org.projectnessie.versioned.storage.bigtabletests.BigTableBackendContainerTestFactory;
 
 public class BigTableTestResourceLifecycleManager
     implements QuarkusTestResourceLifecycleManager, DevServicesContext.ContextAware {
@@ -37,13 +36,9 @@ public class BigTableTestResourceLifecycleManager
   @Override
   public Map<String, String> start() {
     bigTable = new BigTableBackendContainerTestFactory();
-    bigTable.startBigtable(containerNetworkId);
+    bigTable.start(containerNetworkId);
 
-    return ImmutableMap.of(
-        "nessie.version.store.persist.bigtable.emulator-host",
-        bigTable.getEmulatorHost(),
-        "nessie.version.store.persist.bigtable.emulator-port",
-        Integer.toString(bigTable.getEmulatorPort()));
+    return bigTable.getQuarkusConfig();
   }
 
   @Override

@@ -17,23 +17,26 @@ package org.projectnessie.versioned;
 
 import static org.projectnessie.versioned.DefaultMetadataRewriter.DEFAULT_METADATA_REWRITER;
 
-import com.google.errorprone.annotations.MustBeClosed;
+import jakarta.annotation.Nonnull;
+import jakarta.annotation.Nullable;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.BiConsumer;
-import java.util.function.Predicate;
+import java.util.function.BiPredicate;
 import java.util.stream.Stream;
-import javax.annotation.Nonnull;
-import javax.annotation.Nullable;
 import org.immutables.value.Value;
 import org.projectnessie.error.BaseNessieClientServerException;
 import org.projectnessie.model.CommitMeta;
+import org.projectnessie.model.Content;
 import org.projectnessie.model.ContentKey;
 import org.projectnessie.model.IdentifiedContentKey;
 import org.projectnessie.model.MergeBehavior;
 import org.projectnessie.model.MergeKeyBehavior;
+import org.projectnessie.model.Operation;
+import org.projectnessie.model.RepositoryConfig;
 import org.projectnessie.versioned.paging.PaginationIterator;
 
 /**
@@ -43,7 +46,6 @@ import org.projectnessie.versioned.paging.PaginationIterator;
 public interface VersionStore {
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   RepositoryInformation getRepositoryInformation();
 
   /**
@@ -74,7 +76,6 @@ public interface VersionStore {
    * for different backends and even for different instances of the same backend.
    */
   @Nonnull
-  @jakarta.annotation.Nonnull
   Hash noAncestorHash();
 
   /**
@@ -97,23 +98,28 @@ public interface VersionStore {
    * @throws ReferenceNotFoundException if {@code branch} is not present in the store
    * @throws NullPointerException if one of the argument is {@code null}
    */
-  CommitResult<Commit> commit(
-      @Nonnull @jakarta.annotation.Nonnull BranchName branch,
-      @Nonnull @jakarta.annotation.Nonnull Optional<Hash> referenceHash,
-      @Nonnull @jakarta.annotation.Nonnull CommitMeta metadata,
-      @Nonnull @jakarta.annotation.Nonnull List<Operation> operations,
-      @Nonnull @jakarta.annotation.Nonnull CommitValidator validator,
-      @Nonnull @jakarta.annotation.Nonnull BiConsumer<ContentKey, String> addedContents)
+  CommitResult commit(
+      @Nonnull BranchName branch,
+      @Nonnull Optional<Hash> referenceHash,
+      @Nonnull CommitMeta metadata,
+      @Nonnull List<Operation> operations,
+      @Nonnull CommitValidator validator,
+      @Nonnull BiConsumer<ContentKey, String> addedContents)
       throws ReferenceNotFoundException, ReferenceConflictException;
 
-  default CommitResult<Commit> commit(
-      @Nonnull @jakarta.annotation.Nonnull BranchName branch,
-      @Nonnull @jakarta.annotation.Nonnull Optional<Hash> referenceHash,
-      @Nonnull @jakarta.annotation.Nonnull CommitMeta metadata,
-      @Nonnull @jakarta.annotation.Nonnull List<Operation> operations)
+  default CommitResult commit(
+      @Nonnull BranchName branch,
+      @Nonnull Optional<Hash> referenceHash,
+      @Nonnull CommitMeta metadata,
+      @Nonnull List<Operation> operations)
       throws ReferenceNotFoundException, ReferenceConflictException {
     return commit(branch, referenceHash, metadata, operations, x -> {}, (k, c) -> {});
   }
+
+  List<RepositoryConfig> getRepositoryConfig(Set<RepositoryConfig.Type> repositoryConfigTypes);
+
+  RepositoryConfig updateRepositoryConfig(RepositoryConfig repositoryConfig)
+      throws ReferenceConflictException;
 
   @FunctionalInterface
   interface CommitValidator {
@@ -202,7 +208,7 @@ public interface VersionStore {
    * @throws ReferenceNotFoundException if {@code branch} or if any of the hashes from {@code
    *     sequenceToTransplant} is not present in the store.
    */
-  MergeResult<Commit> transplant(TransplantOp transplantOp)
+  TransplantResult transplant(TransplantOp transplantOp)
       throws ReferenceNotFoundException, ReferenceConflictException;
 
   /**
@@ -226,8 +232,7 @@ public interface VersionStore {
    * @throws ReferenceNotFoundException if {@code toBranch} or {@code fromHash} is not present in
    *     the store.
    */
-  MergeResult<Commit> merge(MergeOp mergeOp)
-      throws ReferenceNotFoundException, ReferenceConflictException;
+  MergeResult merge(MergeOp mergeOp) throws ReferenceNotFoundException, ReferenceConflictException;
 
   /**
    * Assign the NamedRef to point to a particular hash.
@@ -237,8 +242,7 @@ public interface VersionStore {
    * not match.
    *
    * @param ref The named ref to be assigned
-   * @param expectedHash The current head of the NamedRef to validate before updating. If not
-   *     present, force assignment.
+   * @param expectedHash The current head of the NamedRef to validate before updating (required).
    * @param targetHash The hash that this ref should refer to.
    * @return A {@link ReferenceAssignedResult} containing the previous and current head of the
    *     reference
@@ -247,7 +251,7 @@ public interface VersionStore {
    * @throws ReferenceConflictException if {@code expectedHash} is not empty and its value doesn't
    *     match the stored hash for {@code ref}
    */
-  ReferenceAssignedResult assign(NamedRef ref, Optional<Hash> expectedHash, Hash targetHash)
+  ReferenceAssignedResult assign(NamedRef ref, Hash expectedHash, Hash targetHash)
       throws ReferenceNotFoundException, ReferenceConflictException;
 
   /**
@@ -266,19 +270,19 @@ public interface VersionStore {
       throws ReferenceNotFoundException, ReferenceAlreadyExistsException;
 
   /**
-   * Delete the provided NamedRef
+   * Delete the provided {@link NamedRef}.
    *
    * <p>Throws exception if the optional hash does not match the provided ref.
    *
    * @param ref The NamedRef to be deleted.
-   * @param hash An optional hash. If provided, this operation will only succeed if the branch is
-   *     pointing at the provided
+   * @param hash The expected hash (required). The operation will only succeed if the branch is
+   *     pointing at the provided hash.
    * @return A {@link ReferenceDeletedResult} containing the head of the deleted reference
    * @throws ReferenceNotFoundException if {@code ref} is not present in the store
    * @throws ReferenceConflictException if {@code hash} doesn't match the stored hash for {@code
    *     ref}
    */
-  ReferenceDeletedResult delete(NamedRef ref, Optional<Hash> hash)
+  ReferenceDeletedResult delete(NamedRef ref, Hash hash)
       throws ReferenceNotFoundException, ReferenceConflictException;
 
   /**
@@ -296,6 +300,16 @@ public interface VersionStore {
    * @throws ReferenceNotFoundException if the reference cannot be found
    */
   ReferenceInfo<CommitMeta> getNamedRef(String ref, GetNamedRefsParams params)
+      throws ReferenceNotFoundException;
+
+  /**
+   * Retrieve the recorded recent history of a reference. A reference's history is a size and time
+   * limited record of changes of the reference's current pointer, aka HEAD. The size and time
+   * limits are configured in the Nessie server configuration.
+   *
+   * @return recorded reference history
+   */
+  ReferenceHistory getReferenceHistory(String refName, Integer headCommitsToScan)
       throws ReferenceNotFoundException;
 
   /**
@@ -328,23 +342,19 @@ public interface VersionStore {
 
     /** Optional, if not {@code null}: the minimum key to return. */
     @Nullable
-    @jakarta.annotation.Nullable
     ContentKey minKey();
 
     /** Optional, if not {@code null}: the maximum key to return. */
     @Nullable
-    @jakarta.annotation.Nullable
     ContentKey maxKey();
 
     /** Optional, if not {@code null}: the prefix of the keys to return. */
     @Nullable
-    @jakarta.annotation.Nullable
     ContentKey prefixKey();
 
     /** Filter predicate, can be {@code null}. */
     @Nullable
-    @jakarta.annotation.Nullable
-    Predicate<ContentKey> contentKeyPredicate();
+    BiPredicate<ContentKey, Content.Type> contentKeyPredicate();
 
     static ImmutableKeyRestrictions.Builder builder() {
       return ImmutableKeyRestrictions.builder();
@@ -372,20 +382,33 @@ public interface VersionStore {
    *
    * @param ref Any ref type allowed
    * @param key The key for the specific value
-   * @return The value.
+   * @param returnNotFound whether to return a non-{@code null} result object with a {@code null}
+   *     value in {@link ContentResult#content()} instead of a {@code null} return-value for
+   *     non-existing content
+   * @return The value or {@code null} if the key does not exist and {@code returnNotFound} is
+   *     {@code false}. If the content does not exist and {@code returnNotFound} is {@code true},
+   *     {@link ContentResult#content()} will be {@code null}.
    * @throws ReferenceNotFoundException if {@code ref} is not present in the store
    */
-  ContentResult getValue(Ref ref, ContentKey key) throws ReferenceNotFoundException;
+  ContentResult getValue(Ref ref, ContentKey key, boolean returnNotFound)
+      throws ReferenceNotFoundException;
 
   /**
    * Get the values for a list of keys.
    *
    * @param ref The ref to use.
    * @param keys An ordered list of keys to retrieve within the provided ref.
-   * @return A parallel list of values.
+   * @param returnNotFound whether to return non-{@code null} values with a {@code null} value in
+   *     {@link ContentResult#content()} instead of omitting non-existing content in the returned
+   *     map
+   * @return Map of keys to content results. For keys that do not exist: if {@code returnNotFound}
+   *     is {@code false}, the map will not contain an entry for non-existing keys.If {@code
+   *     returnNotFound} is {@code true}, the map will return entries for all requested keys, but
+   *     {@link ContentResult#content()} will be {@code null} for non-existing keys.
    * @throws ReferenceNotFoundException if {@code ref} is not present in the store
    */
-  Map<ContentKey, ContentResult> getValues(Ref ref, Collection<ContentKey> keys)
+  Map<ContentKey, ContentResult> getValues(
+      Ref ref, Collection<ContentKey> keys, boolean returnNotFound)
       throws ReferenceNotFoundException;
 
   /**
@@ -399,14 +422,4 @@ public interface VersionStore {
   PaginationIterator<Diff> getDiffs(
       Ref from, Ref to, String pagingToken, KeyRestrictions keyRestrictions)
       throws ReferenceNotFoundException;
-
-  /**
-   * Get a stream of all reflog entries from the initial refLogId.
-   *
-   * @param refLogId initial reflog id to be used
-   * @return A stream of reflog entries.
-   */
-  @MustBeClosed
-  @Deprecated
-  Stream<RefLogDetails> getRefLog(Hash refLogId) throws RefLogNotFoundException;
 }

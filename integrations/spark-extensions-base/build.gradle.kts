@@ -14,10 +14,7 @@
  * limitations under the License.
  */
 
-plugins {
-  id("nessie-conventions-spark")
-  id("nessie-jacoco")
-}
+plugins { id("nessie-conventions-spark") }
 
 val sparkScala = getSparkScalaVersionsForProject()
 
@@ -25,7 +22,16 @@ dependencies {
   // picks the right dependencies for scala compilation
   forScala(sparkScala.scalaVersion)
 
-  implementation(nessieProject("nessie-spark-extensions-grammar"))
+  compileOnly(platform(libs.iceberg.bom))
+  compileOnly("org.apache.iceberg:iceberg-api")
+  compileOnly("org.apache.iceberg:iceberg-core")
+
+  val versionIceberg = libs.versions.iceberg.get()
+  compileOnly(
+    "org.apache.iceberg:iceberg-spark-${sparkScala.sparkMajorVersion}_${sparkScala.scalaMajorVersion}:$versionIceberg"
+  )
+
+  implementation(nessieProject("nessie-cli-grammar"))
   compileOnly("org.apache.spark:spark-hive_${sparkScala.scalaMajorVersion}") {
     forSpark(sparkScala.sparkVersion)
   }

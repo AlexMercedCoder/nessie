@@ -11,7 +11,7 @@ demonstrate how OpenID authentication works in Nessie servers.
 First, start a Keycloak container using its latest Docker image.
 
 ```shell
-docker run -p 8080:8080 -e KEYCLOAK_ADMIN=admin -e KEYCLOAK_ADMIN_PASSWORD=admin \
+docker run -p 8080:8080 -e KC_BOOTSTRAP_ADMIN_USERNAME=admin -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
   --name keycloak quay.io/keycloak/keycloak:latest start-dev
 ```
 
@@ -76,7 +76,7 @@ with the instructions from this guide.
 
 ## Using Nessie CLI
 
-Now that the Nessie server runs in authenticated mode with a Keycloak, [clients](../tools/cli.md) have to provide
+Now that the Nessie server runs in authenticated mode with a Keycloak, [clients](../nessie-latest/cli.md) have to provide
 credentials in the form of bearer authentication tokens. For example:
 
 ```shell

@@ -11,19 +11,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  java:
-    name: Publish from main
-    runs-on: ubuntu-22.04
+  publish-to-maven:
+    name: Publish to Maven Central
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
     env:
       SPARK_LOCAL_IP: localhost
-    if: github.repository_owner == 'projectnessie'
+    if: github.repository == 'projectnessie/nessie'
 
     steps:
-      - uses: actions/checkout@v3.5.3
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          fetch-depth: '0'
       - name: Setup runner
         uses: ./.github/actions/setup-runner
       - name: Setup Java, Gradle
         uses: ./.github/actions/dev-tool-java
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@4d9f0ba0025fe599b4ebab900eb7f3a1d93ef4c2 # v5
+        with:
+          cache-disabled: true
+          validate-wrappers: false
+
+      - name: List projects
+        run: ./gradlew --no-scan projects
 
       - name: Gradle / publish snapshot
         env:
@@ -31,25 +43,73 @@ jobs:
           ORG_GRADLE_PROJECT_signingPassword: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
           ORG_GRADLE_PROJECT_sonatypeUsername: ${{ secrets.OSSRH_ACCESS_ID }}
           ORG_GRADLE_PROJECT_sonatypePassword: ${{ secrets.OSSRH_TOKEN }}
-        uses: gradle/gradle-build-action@v2
+        run: ./gradlew --no-scan publishAggregationToCentralPortalSnapshots -Prelease -Puber-jar
+
+  publish-images:
+    name: Publish Images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SPARK_LOCAL_IP: localhost
+    if: github.repository == 'projectnessie/nessie'
+
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          fetch-depth: '0'
+      - name: Setup runner
+        uses: ./.github/actions/setup-runner
+      - name: Setup Java, Gradle
+        uses: ./.github/actions/dev-tool-java
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@4d9f0ba0025fe599b4ebab900eb7f3a1d93ef4c2 # v5
         with:
           cache-disabled: true
-          arguments: |
-            --no-watch-fs --no-daemon 
-            publishToSonatype closeAndReleaseSonatypeStagingRepository
-            -Prelease -Puber-jar
+          validate-wrappers: false
+
+      - name: List projects
+        run: ./gradlew --no-scan projects
+
+      - name: Gradle / build
+        env:
+          ORG_GRADLE_PROJECT_signingKey: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          ORG_GRADLE_PROJECT_signingPassword: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        run: |
+          # 2 Retries - due to Gradle's old and unfixed CME bug
+          ./gradlew --no-scan compileAll jar || \
+            ./gradlew --no-scan compileAll jar || \
+            ./gradlew --no-scan compileAll jar 
 
       - name: Docker images publishing
-        env:
-          ARTIFACTS: ../build-artifacts
         run: |
-          rm -rf "${ARTIFACTS}"
-          mkdir -p "${ARTIFACTS}"
-
           echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u $ --password-stdin 
           tools/dockerbuild/build-push-images.sh \
-            -a "${ARTIFACTS}" \
             -g ":nessie-quarkus" \
             -p "servers/quarkus-server" \
             ghcr.io/projectnessie/nessie-unstable
-          rm -rf "${ARTIFACTS}"
+          tools/dockerbuild/build-push-images.sh \
+            -g ":nessie-gc-tool" \
+            -p "gc/gc-tool" \
+            -d "Dockerfile-gctool" \
+            ghcr.io/projectnessie/nessie-gc-unstable
+          tools/dockerbuild/build-push-images.sh \
+            -g ":nessie-server-admin-tool" \
+            -p "tools/server-admin" \
+            -d "Dockerfile-admintool" \
+            ghcr.io/projectnessie/nessie-server-admin-unstable
+          tools/dockerbuild/build-push-images.sh \
+            -g ":nessie-cli" \
+            -p "cli/cli" \
+            -d "Dockerfile-cli" \
+            ghcr.io/projectnessie/nessie-cli-unstable
+
+      # NOTE: GH container registry behaves a bit weird when new images are added.
+      # The first push/publication of a _new_ image (package) fails with a HTTP/403,
+      # but the next one works.
+      # See also the note in .github/docker-sync/regsync.yml about quay.io.
+      #
+      # Also make sure to add the new image to the site, currently in:
+      #   site/docs/downloads/index.md
+      #   site/in-dev/index.md
+      #   site/in-dev/index-release.md

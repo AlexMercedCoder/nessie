@@ -42,38 +42,18 @@ public interface ApiDoc {
           + "at different times depending on the state of the system. Using the full 'name@hash' form is recommended "
           + "to avoid ambiguity.\n";
 
-  String BRANCH_DESCRIPTION =
+  String COMMIT_BRANCH_DESCRIPTION =
       "A reference to a particular version of the contents tree (a point in history) on a branch.\n"
-          + "This reference can be specified in these forms:\n"
-          + "- \\- (literal minus character) - Identifies the HEAD of the default branch \n"
-          + "- name - Identifies the HEAD commit on the named branch\n"
+          + "This reference is specified in this form:\n"
           + "- name@hash - Identifies the 'hash' commit on the named branch.\n"
-          + "- -~3 - The 3rd predecessor commit from the HEAD of the default branch.\n"
-          + "- name~3 - The 3rd predecessor commit from the HEAD of a branch or tag.\n"
-          + "- name@hash^2 - The merge parent of the 'hash' commit of a branch or tag.\n"
-          + "- -*2021-04-07T14:42:25.534748Z - The predecessor commit closest to the HEAD of the default branch for the given ISO-8601 timestamp.\n"
-          + "- name*2021-04-07T14:42:25.534748Z - The predecessor commit closest to the HEAD of a branch or tag valid for the given ISO-8601 timestamp.\n"
-          + "- name*1685185847230 - The predecessor commit closest to HEAD of a branch or tag valid for the given timestamp in milliseconds since epoch.\n"
           + "\n"
-          + "If both 'name' and 'hash' are given, 'hash' must be reachable from the current HEAD of the branch.\n"
-          + "In this case 'hash' indicates the state of contents that should be used for validating incoming changes\n"
-          + "(commits / merges / transplants).\n"
-          + "\n"
-          + "Note that using the simple 'name' form will effectively disable content conflict checks and is "
-          + "generally discouraged.\n"
-          + "\n"
-          + FULL_REF_INFO;
+          + "The 'hash' commit must be reachable from the current HEAD of the branch.\n"
+          + "In this case 'hash' indicates the state of contents that should be used for validating incoming changes.\n";
 
-  String CHECKED_BRANCH_DESCRIPTION =
+  String MERGE_TRANSPLANT_BRANCH_DESCRIPTION =
       "A reference to a specific version of the contents tree (a point in history) on a branch.\n"
           + "This reference is specified in this form:\n"
           + "- name@hash - Identifies the 'hash' commit on the named branch.\n"
-          + "- -~3 - The 3rd predecessor commit from the HEAD of the default branch.\n"
-          + "- name~3 - The 3rd predecessor commit from the HEAD of a branch or tag.\n"
-          + "- name@hash^2 - The merge parent of the 'hash' commit of a branch or tag.\n"
-          + "- -*2021-04-07T14:42:25.534748Z - The predecessor commit closest to the HEAD of the default branch for the given ISO-8601 timestamp.\n"
-          + "- name*2021-04-07T14:42:25.534748Z - The predecessor commit closest to the HEAD of a branch or tag valid for the given ISO-8601 timestamp.\n"
-          + "- name*1685185847230 - The predecessor commit closest to the HEAD of a branch or tag valid for the given timestamp in milliseconds since epoch.\n"
           + "\n"
           + "The 'hash' commit must be reachable from the current HEAD of the branch.\n"
           + "In this case 'hash' indicates the state of contents known to the client and serves to ensure that the "
@@ -133,6 +113,9 @@ public interface ApiDoc {
   String WITH_DOC_PARAMETER_DESCRIPTION =
       "Whether to return the documentation, if it exists. Default is to not return the documentation.";
 
+  String FOR_WRITE_PARAMETER_DESCRIPTION =
+      "If set to 'true', access control checks will check for write/create privilege in addition to read privileges.";
+
   String CHECKED_REF_DESCRIPTION =
       "Specifies a named branch or tag reference with its expected HEAD 'hash' value.\n"
           + "\n"
@@ -149,8 +132,9 @@ public interface ApiDoc {
           + "expects.\n";
 
   String KEY_ELEMENTS_DESCRIPTION =
-      "Key components (namespaces) are separated by the dot ('.') character. Dot ('.') characters that are not "
-          + "Nessie namespace separators must be encoded as the 'group separator' ASCII character (0x1D).\n";
+      "Content key and namespace components are separated by the dot (`.`) character.\n"
+          + "The components itself must be escaped using the rules described in "
+          + "[NESSIE-SPEC-2.0.md in the repository](https://github.com/projectnessie/nessie/blob/main/api/NESSIE-SPEC-2-0.md).";
 
   String KEY_PARAMETER_DESCRIPTION = "The key to a content object.\n\n" + KEY_ELEMENTS_DESCRIPTION;
 

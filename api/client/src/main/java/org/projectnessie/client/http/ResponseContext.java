@@ -15,6 +15,7 @@
  */
 package org.projectnessie.client.http;
 
+import jakarta.annotation.Nullable;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
@@ -22,11 +23,17 @@ import java.net.URI;
 /** Interface for the important parts of a response. This is created after executing the request. */
 public interface ResponseContext {
 
-  Status getResponseCode() throws IOException;
+  /** Get the status of the response. */
+  Status getStatus();
 
+  /**
+   * Get the input stream for the response. Returns null if the response did not contain any
+   * readable entity.
+   *
+   * @implSpec Calling this method multiple times should return the same input stream.
+   */
+  @Nullable
   InputStream getInputStream() throws IOException;
-
-  InputStream getErrorStream() throws IOException;
 
   default boolean isJsonCompatibleResponse() {
     String contentType = getContentType();
@@ -43,4 +50,14 @@ public interface ResponseContext {
   String getContentType();
 
   URI getRequestedUri();
+
+  /**
+   * Close the response context.
+   *
+   * @param error if the request failed, this is the exception that caused the failure; will be null
+   *     otherwise
+   */
+  default void close(Exception error) {
+    // no-op
+  }
 }

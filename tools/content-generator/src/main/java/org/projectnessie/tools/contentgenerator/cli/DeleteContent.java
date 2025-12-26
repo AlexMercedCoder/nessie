@@ -15,57 +15,49 @@
  */
 package org.projectnessie.tools.contentgenerator.cli;
 
+import java.util.Comparator;
+import java.util.Iterator;
 import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.projectnessie.client.api.NessieApiV2;
-import org.projectnessie.error.NessieConflictException;
-import org.projectnessie.error.NessieNotFoundException;
 import org.projectnessie.model.Branch;
-import org.projectnessie.model.CommitMeta;
 import org.projectnessie.model.ContentKey;
 import org.projectnessie.model.Operation;
-import org.projectnessie.model.Reference;
 import picocli.CommandLine.Command;
-import picocli.CommandLine.Option;
 
 /** Deletes content objects. */
-@Command(name = "delete", mixinStandardHelpOptions = true, description = "Delete content objects")
-public class DeleteContent extends AbstractCommand {
-
-  @Option(
-      names = {"-r", "--branch"},
-      description = "Name of the branch where to make changes, defaults to 'main'")
-  private String ref = "main";
-
-  @Option(
-      names = {"-k", "--key"},
-      description = "Content key to delete",
-      required = true)
-  private List<String> key;
-
-  @Option(
-      names = {"-m", "--message"},
-      description = "Commit message (auto-generated if not set)")
-  private String message;
+@Command(
+    name = "delete",
+    mixinStandardHelpOptions = true,
+    description = "Delete selected content objects")
+public class DeleteContent extends BulkCommittingCommand {
 
   @Override
-  public void execute() throws NessieNotFoundException, NessieConflictException {
-    try (NessieApiV2 api = createNessieApiInstance()) {
-      ContentKey contentKey = ContentKey.of(key);
+  protected void processBatch(NessieApiV2 api, Branch ref, List<ContentKey> keys) {
+    String defaultMsg =
+        keys.size() == 1 ? "Delete " + keys.get(0) : "Delete " + keys.size() + " keys.";
 
-      Reference refInfo = api.getReference().refName(ref).get();
-
-      if (message == null) {
-        message = "Delete: " + contentKey;
-      }
-
+    try {
       Branch head =
           api.commitMultipleOperations()
-              .commitMeta(CommitMeta.fromMessage(message))
-              .branch((Branch) refInfo)
-              .operation(Operation.Delete.of(contentKey))
+              .commitMeta(commitMetaFromMessage(defaultMsg))
+              .branch(ref)
+              .operations(keys.stream().map(Operation.Delete::of).collect(Collectors.toList()))
               .commit();
 
-      spec.commandLine().getOut().printf("Deleted %s in %s%n", contentKey, head);
+      spec.commandLine().getOut().printf("Deleted %s keys in %s%n", keys.size(), head);
+    } catch (Exception e) {
+      throw new RuntimeException(e);
     }
+  }
+
+  @Override
+  protected Iterator<List<ContentKey>> partitionKeys(Stream<ContentKey> input, int batchSize) {
+    // Note: Nessie Servers generally return entries in the natural order of ContentKey, so sorting
+    // the stream in the reverse order could have a significant memory impact. At this point the
+    // task of allocating enough heap and/or providing command args to limit the size of the stream
+    // is left to the user.
+    return super.partitionKeys(input.sorted(Comparator.reverseOrder()), batchSize);
   }
 }

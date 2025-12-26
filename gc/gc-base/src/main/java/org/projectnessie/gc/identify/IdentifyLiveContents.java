@@ -15,8 +15,11 @@
  */
 package org.projectnessie.gc.identify;
 
+import static java.lang.String.format;
+
 import com.google.common.base.Preconditions;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
+import jakarta.annotation.Nullable;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -29,7 +32,6 @@ import java.util.concurrent.ForkJoinTask;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import java.util.stream.Stream;
-import javax.annotation.Nullable;
 import org.immutables.value.Value;
 import org.projectnessie.error.NessieNotFoundException;
 import org.projectnessie.gc.contents.AddContents;
@@ -163,6 +165,7 @@ public abstract class IdentifyLiveContents {
       throw new IllegalStateException("identifyLiveContents() has already been called.");
     }
 
+    @SuppressWarnings("resource")
     ForkJoinPool forkJoinPool = new ForkJoinPool(parallelism());
     try {
       return forkJoinPool.invoke(ForkJoinTask.adapt(this::walkAllReferences));
@@ -174,6 +177,7 @@ public abstract class IdentifyLiveContents {
   private UUID walkAllReferences() {
     try (AddContents addContents = liveContentSetsRepository().newAddContents()) {
       try {
+        @SuppressWarnings("resource")
         Stream<Reference> refs = repositoryConnector().allReferences();
 
         // If a Reference comparator is configured, then apply it to the stream of references.
@@ -210,6 +214,7 @@ public abstract class IdentifyLiveContents {
     }
   }
 
+  @SuppressWarnings("resource")
   private ReferencesWalkResult identifyContentsForReference(
       AddContents addContents, Reference namedReference) {
     CutoffPolicy cutoffPolicy = cutOffPolicySupplier().get(namedReference);
@@ -238,6 +243,7 @@ public abstract class IdentifyLiveContents {
 
       LogEntryHolder holder = new LogEntryHolder();
       String lastCommitId = null;
+      String finalCommitId = null;
 
       for (Spliterator<LogResponse.LogEntry> spliterator = commits.spliterator();
           spliterator.tryAdvance(holder::set); ) {
@@ -305,35 +311,37 @@ public abstract class IdentifyLiveContents {
                           }));
         } else {
           // 1st non-live commit
-          try {
-            numContents += collectAllKeys(addContents, Detached.of(lastCommitId));
-          } catch (NessieNotFoundException e) {
-            throw new RuntimeException(e);
-          }
-          LOGGER.info(
-              "live-set#{}: Finished walking the commit log of {} using {} after {} commits, "
-                  + "commit {} is the first non-live commit.",
-              addContents.id(),
-              namedReference,
-              cutoffPolicy,
-              numCommits,
-              commitHash);
-          return ReferencesWalkResult.single(numCommits, numContents);
+          finalCommitId = commitHash;
+          break;
         }
       }
+
+      // Always consider all content reachable from the last live commit.
+      if (lastCommitId != null) {
+        try {
+          numContents += collectAllKeys(addContents, Detached.of(lastCommitId));
+        } catch (NessieNotFoundException e) {
+          throw new RuntimeException(e);
+        }
+      }
+
+      LOGGER.info(
+          "live-set#{}: Finished walking the commit log of {} using {} after {} commits, {}",
+          addContents.id(),
+          namedReference,
+          cutoffPolicy,
+          numCommits,
+          finalCommitId != null
+              ? format("commit %s is the first non-live commit.", finalCommitId)
+              : "no more commits");
+      return ReferencesWalkResult.single(numCommits, numContents);
     } catch (NessieNotFoundException e) {
       throw new RuntimeException(
           "GC-run#" + addContents.id() + ": Could not find reference " + namedReference, e);
     }
-    LOGGER.info(
-        "live-set#{}: Finished walking the commit log of {} using {} after {} commits, no more commits.",
-        addContents.id(),
-        namedReference,
-        cutoffPolicy,
-        numCommits);
-    return ReferencesWalkResult.single(numCommits, numContents);
   }
 
+  @SuppressWarnings("resource")
   private long collectAllKeys(AddContents addContents, Detached ref)
       throws NessieNotFoundException {
     return addContents.addLiveContent(
@@ -417,7 +425,6 @@ public abstract class IdentifyLiveContents {
   }
 
   @Nullable
-  @jakarta.annotation.Nullable
   abstract ReferenceComparator referenceComparator();
 
   @Value.Default

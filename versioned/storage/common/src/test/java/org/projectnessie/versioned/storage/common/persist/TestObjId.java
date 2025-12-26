@@ -15,20 +15,25 @@
  */
 package org.projectnessie.versioned.storage.common.persist;
 
+import static java.lang.Long.parseUnsignedLong;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
 import static org.projectnessie.versioned.storage.common.persist.ObjId.EMPTY_OBJ_ID;
 import static org.projectnessie.versioned.storage.common.persist.ObjId.deserializeObjId;
+import static org.projectnessie.versioned.storage.common.persist.ObjId.objIdFromByteAccessor;
 import static org.projectnessie.versioned.storage.common.persist.ObjId.objIdFromByteArray;
 import static org.projectnessie.versioned.storage.common.persist.ObjId.objIdFromBytes;
+import static org.projectnessie.versioned.storage.common.persist.ObjId.objIdFromLongs;
 import static org.projectnessie.versioned.storage.common.persist.ObjId.objIdFromString;
+import static org.projectnessie.versioned.storage.common.util.Ser.putVarInt;
 
 import com.google.common.hash.Hashing;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.stream.Stream;
+import org.assertj.core.api.Assumptions;
 import org.assertj.core.api.SoftAssertions;
 import org.assertj.core.api.junit.jupiter.InjectSoftAssertions;
 import org.assertj.core.api.junit.jupiter.SoftAssertionsExtension;
@@ -108,20 +113,58 @@ public class TestObjId {
             ObjId256.class),
         arguments(
             "ffddbbaa88665544" + "9192939495969798" + "80776699deadbeef" + "cafebabe12345688",
-            ObjId256.class));
+            ObjId256.class),
+        arguments("0123456789abcdef" + "42", ObjIdGeneric.class),
+        arguments("0123456789abcdef" + "4213", ObjIdGeneric.class),
+        arguments("0123456789abcdef" + "421399", ObjIdGeneric.class),
+        arguments("0123456789abcdef" + "42139987", ObjIdGeneric.class),
+        arguments("0123456789abcdef" + "4213998738", ObjIdGeneric.class),
+        arguments("0123456789abcdef" + "421399873891", ObjIdGeneric.class),
+        arguments("0123456789abcdef" + "421399873891cd", ObjIdGeneric.class),
+        arguments("0123456789abcdef" + "421399873891cdde", ObjIdGeneric.class),
+        arguments("0011223344556677" + "1213141516171819" + "21", ObjIdGeneric.class),
+        arguments("0011223344556677" + "1213141516171819" + "2123", ObjIdGeneric.class),
+        arguments("0011223344556677" + "1213141516171819" + "212324", ObjIdGeneric.class),
+        arguments("0011223344556677" + "1213141516171819" + "21232425", ObjIdGeneric.class),
+        arguments("0011223344556677" + "1213141516171819" + "2123242526", ObjIdGeneric.class),
+        arguments("0011223344556677" + "1213141516171819" + "212324252627", ObjIdGeneric.class),
+        arguments("0011223344556677" + "1213141516171819" + "21232425262728", ObjIdGeneric.class),
+        arguments("0011223344556677" + "1213141516171819" + "2123242526272829", ObjIdGeneric.class),
+        arguments(
+            "ffddbbaa88665544" + "9192939495969798" + "80776699deadbeef" + "ca",
+            ObjIdGeneric.class),
+        arguments(
+            "ffddbbaa88665544" + "9192939495969798" + "80776699deadbeef" + "cafe",
+            ObjIdGeneric.class),
+        arguments(
+            "ffddbbaa88665544" + "9192939495969798" + "80776699deadbeef" + "cafeba",
+            ObjIdGeneric.class),
+        arguments(
+            "ffddbbaa88665544" + "9192939495969798" + "80776699deadbeef" + "cafebabe",
+            ObjIdGeneric.class),
+        arguments(
+            "ffddbbaa88665544" + "9192939495969798" + "80776699deadbeef" + "cafebabe12",
+            ObjIdGeneric.class),
+        arguments(
+            "ffddbbaa88665544" + "9192939495969798" + "80776699deadbeef" + "cafebabe1234",
+            ObjIdGeneric.class));
   }
 
   @ParameterizedTest
   @MethodSource("hashOfString")
   void fromString(String s, Class<? extends ObjId> type) {
     ObjId h = objIdFromString(s);
-    soft.assertThat(h).isInstanceOf(type);
-    soft.assertThat(h.size()).isEqualTo(s.length() / 2);
-    soft.assertThat(h.serializedSize()).isEqualTo(h.size() + 1);
-    soft.assertThat(h.asByteArray()).hasSize(h.size()).isEqualTo(fromHex(s, false).array());
-    soft.assertThat(h.asByteBuffer()).isEqualTo(fromHex(s, false));
-    soft.assertThat(h.toString()).isEqualTo(s.toLowerCase(Locale.US));
-    soft.assertThat(h).isEqualTo(deserializeObjId(fromHex(s, true)));
+    verify(s, type, h);
+  }
+
+  @ParameterizedTest
+  @MethodSource("hashOfString")
+  void fromByteAccessor(String s, Class<? extends ObjId> type) {
+    byte[] bytes = new byte[s.length() / 2];
+    fromHex(s, false).get(bytes);
+
+    ObjId h = objIdFromByteAccessor(bytes.length, i -> bytes[i]);
+    verify(s, type, h);
   }
 
   @ParameterizedTest
@@ -131,13 +174,21 @@ public class TestObjId {
     fromHex(s, false).get(bytes);
 
     ObjId h = objIdFromByteArray(bytes);
-    soft.assertThat(h).isInstanceOf(type);
-    soft.assertThat(h.size()).isEqualTo(s.length() / 2);
-    soft.assertThat(h.serializedSize()).isEqualTo(h.size() + 1);
-    soft.assertThat(h.asByteArray()).hasSize(h.size()).isEqualTo(fromHex(s, false).array());
-    soft.assertThat(h.asByteBuffer()).isEqualTo(fromHex(s, false));
-    soft.assertThat(h.toString()).isEqualTo(s.toLowerCase(Locale.US));
-    soft.assertThat(h).isEqualTo(deserializeObjId(fromHex(s, true)));
+    verify(s, type, h);
+  }
+
+  @ParameterizedTest
+  @MethodSource("hashOfString")
+  void fromLongs(String s, Class<? extends ObjId> type) {
+    Assumptions.assumeThat(s.length()).isEqualTo(64);
+
+    long l0 = parseUnsignedLong(s.substring(0, 16), 16);
+    long l1 = parseUnsignedLong(s.substring(16, 32), 16);
+    long l2 = parseUnsignedLong(s.substring(32, 48), 16);
+    long l3 = parseUnsignedLong(s.substring(48), 16);
+
+    ObjId h = objIdFromLongs(l0, l1, l2, l3);
+    verify(s, type, h);
   }
 
   @ParameterizedTest
@@ -146,14 +197,54 @@ public class TestObjId {
     byte[] bytes = new byte[s.length() / 2];
     fromHex(s, false).get(bytes);
 
-    ObjId h = objIdFromBytes(ByteString.copyFrom(bytes));
+    ByteString byteString = ByteString.copyFrom(bytes);
+    ObjId h = objIdFromBytes(byteString);
+    verify(s, type, h);
+    soft.assertThat(h.asBytes()).isEqualTo(byteString);
+  }
+
+  @ParameterizedTest
+  @MethodSource("hashOfString")
+  void serializeTo(String s, @SuppressWarnings("unused") Class<? extends ObjId> type) {
+    byte[] bytes = new byte[s.length() / 2];
+    fromHex(s, false).get(bytes);
+
+    ObjId h = objIdFromByteArray(bytes);
+
+    ByteBuffer target = ByteBuffer.allocate(h.size() + 1);
+    h.serializeTo(target);
+    target = target.flip();
+    ByteBuffer reference = ByteBuffer.allocate(h.size() + 1);
+    putVarInt(reference, h.size());
+    reference.put(bytes);
+    reference = reference.flip();
+    soft.assertThat(target).isEqualTo(reference);
+
+    ObjId.skipObjId(target);
+    soft.assertThat(target.position()).isEqualTo(target.limit());
+  }
+
+  private void verify(String s, Class<? extends ObjId> type, ObjId h) {
     soft.assertThat(h).isInstanceOf(type);
     soft.assertThat(h.size()).isEqualTo(s.length() / 2);
     soft.assertThat(h.serializedSize()).isEqualTo(h.size() + 1);
-    soft.assertThat(h.asByteArray()).hasSize(h.size()).isEqualTo(fromHex(s, false).array());
-    soft.assertThat(h.asByteBuffer()).isEqualTo(fromHex(s, false));
+    byte[] byteArray = h.asByteArray();
+    soft.assertThat(h.size()).isEqualTo(byteArray.length);
+    soft.assertThat(byteArray).hasSize(h.size()).isEqualTo(fromHex(s, false).array());
+    ByteBuffer byteBuffer = h.asByteBuffer();
+    soft.assertThat(byteBuffer.remaining()).isEqualTo(byteArray.length);
+    soft.assertThat(byteBuffer).isEqualTo(fromHex(s, false));
+    soft.assertThat(ObjId.objIdFromByteBuffer(byteBuffer)).isEqualTo(h);
     soft.assertThat(h.toString()).isEqualTo(s.toLowerCase(Locale.US));
     soft.assertThat(h).isEqualTo(deserializeObjId(fromHex(s, true)));
+    soft.assertThat(h.heapSize()).isGreaterThan(h.size());
+    for (int i = 0; i < byteArray.length / 8; i++) {
+      long l = h.longAt(i);
+      soft.assertThat(l).isEqualTo(byteBuffer.getLong(i * 8));
+    }
+    for (int i = 0; i < byteArray.length; i++) {
+      soft.assertThat(h.byteAt(i)).isEqualTo(byteArray[i]);
+    }
   }
 
   static Stream<Arguments> hashCodes() {
@@ -195,6 +286,28 @@ public class TestObjId {
         "ef",
         "0123456789abcdef",
         "0011223344556677" + "1213141516171819" + "2123242526272829" + "3132343536373839",
+        "0123456789abcdef" + "42",
+        "0123456789abcdef" + "4213",
+        "0123456789abcdef" + "421399",
+        "0123456789abcdef" + "42139987",
+        "0123456789abcdef" + "4213998738",
+        "0123456789abcdef" + "421399873891",
+        "0123456789abcdef" + "421399873891cd",
+        "0123456789abcdef" + "421399873891cdde",
+        "0011223344556677" + "1213141516171819" + "21",
+        "0011223344556677" + "1213141516171819" + "2123",
+        "0011223344556677" + "1213141516171819" + "212324",
+        "0011223344556677" + "1213141516171819" + "21232425",
+        "0011223344556677" + "1213141516171819" + "2123242526",
+        "0011223344556677" + "1213141516171819" + "212324252627",
+        "0011223344556677" + "1213141516171819" + "21232425262728",
+        "0011223344556677" + "1213141516171819" + "2123242526272829",
+        "ffddbbaa88665544" + "9192939495969798" + "80776699deadbeef" + "ca",
+        "ffddbbaa88665544" + "9192939495969798" + "80776699deadbeef" + "cafe",
+        "ffddbbaa88665544" + "9192939495969798" + "80776699deadbeef" + "cafeba",
+        "ffddbbaa88665544" + "9192939495969798" + "80776699deadbeef" + "cafebabe",
+        "ffddbbaa88665544" + "9192939495969798" + "80776699deadbeef" + "cafebabe12",
+        "ffddbbaa88665544" + "9192939495969798" + "80776699deadbeef" + "cafebabe1234",
         "ffddbbaa88665544" + "9192939495969798" + "80776699deadbeef" + "cafebabe12345688"
       })
   void nibbles(String s) {

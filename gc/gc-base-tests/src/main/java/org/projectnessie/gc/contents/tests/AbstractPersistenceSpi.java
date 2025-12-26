@@ -18,8 +18,10 @@ package org.projectnessie.gc.contents.tests;
 import static java.util.Arrays.asList;
 import static java.util.Collections.singletonList;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.projectnessie.gc.contents.ContentReference.icebergContent;
+import static org.projectnessie.model.Content.Type.ICEBERG_TABLE;
+import static org.projectnessie.model.Content.Type.ICEBERG_VIEW;
 
-import java.net.URI;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.HashSet;
@@ -41,6 +43,7 @@ import org.projectnessie.gc.contents.LiveContentSetNotFoundException;
 import org.projectnessie.gc.contents.spi.PersistenceSpi;
 import org.projectnessie.gc.files.FileReference;
 import org.projectnessie.model.ContentKey;
+import org.projectnessie.storage.uri.StorageUri;
 
 /** Tests for all {@link PersistenceSpi} implementations. */
 @ExtendWith(SoftAssertionsExtension.class)
@@ -79,7 +82,8 @@ public abstract class AbstractPersistenceSpi {
           IntStream.range(0, numRefs)
               .mapToObj(
                   i ->
-                      ContentReference.icebergTable(
+                      icebergContent(
+                          (i & 1) == 1 ? ICEBERG_VIEW : ICEBERG_TABLE,
                           "cid-" + i,
                           "123456780" + i,
                           ContentKey.of("a", "b-" + id, "c-" + i),
@@ -89,7 +93,7 @@ public abstract class AbstractPersistenceSpi {
     }
 
     Set<String> contentIds() {
-      return refs.stream().map(ContentReference::contentId).distinct().collect(Collectors.toSet());
+      return refs.stream().map(ContentReference::contentId).collect(Collectors.toSet());
     }
 
     List<ContentReference> refsForCid(String contentId) {
@@ -391,6 +395,20 @@ public abstract class AbstractPersistenceSpi {
   }
 
   @Test
+  void identifyDuplicateContentReferences() throws Exception {
+    LiveSetVals vals1 = new LiveSetVals();
+    vals1.startIdentify();
+    soft.assertThat(persistenceSpi.addIdentifiedLiveContent(vals1.id, vals1.refs.stream()))
+        .isEqualTo(vals1.refs.size());
+    for (ContentReference ref : vals1.refs) {
+      soft.assertThat(persistenceSpi.addIdentifiedLiveContent(vals1.id, Stream.of(ref)))
+          .isEqualTo(0L);
+    }
+    soft.assertThat(persistenceSpi.addIdentifiedLiveContent(vals1.id, vals1.refs.stream()))
+        .isEqualTo(0L);
+  }
+
+  @Test
   void identifiedContents() throws Exception {
     LiveSetVals vals1 = new LiveSetVals();
     vals1.startIdentify();
@@ -463,51 +481,51 @@ public abstract class AbstractPersistenceSpi {
     lcs.associateBaseLocations(
         "cid",
         asList(
-            URI.create("file:///foo/bar"),
-            URI.create("file:///foo/bar"),
-            URI.create("file:///foo/bar")));
+            StorageUri.of("file:///foo/bar"),
+            StorageUri.of("file:///foo/bar"),
+            StorageUri.of("file:///foo/bar")));
     lcs.associateBaseLocations(
         "cid",
         asList(
-            URI.create("file:///foo/bar1"),
-            URI.create("file:///foo/bar2"),
-            URI.create("file:///foo/bar3")));
-    lcs.associateBaseLocations("cid", singletonList(URI.create("file:///foo/bar1")));
-    lcs.associateBaseLocations("cid", singletonList(URI.create("file:///foo/bar2")));
-    lcs.associateBaseLocations("cid", singletonList(URI.create("file:///foo/bar3")));
+            StorageUri.of("file:///foo/bar1"),
+            StorageUri.of("file:///foo/bar2"),
+            StorageUri.of("file:///foo/bar3")));
+    lcs.associateBaseLocations("cid", singletonList(StorageUri.of("file:///foo/bar1")));
+    lcs.associateBaseLocations("cid", singletonList(StorageUri.of("file:///foo/bar2")));
+    lcs.associateBaseLocations("cid", singletonList(StorageUri.of("file:///foo/bar3")));
     lcs.associateBaseLocations(
         "cid2",
         asList(
-            URI.create("file:///meep/foo/bar1"),
-            URI.create("file:///meep/foo/bar2"),
-            URI.create("file:///meep/foo/bar3")));
+            StorageUri.of("file:///meep/foo/bar1"),
+            StorageUri.of("file:///meep/foo/bar2"),
+            StorageUri.of("file:///meep/foo/bar3")));
 
-    try (Stream<URI> locations = lcs.fetchBaseLocations("cid")) {
+    try (Stream<StorageUri> locations = lcs.fetchBaseLocations("cid")) {
       soft.assertThat(locations)
           .containsExactlyInAnyOrder(
-              URI.create("file:///foo/bar"),
-              URI.create("file:///foo/bar1"),
-              URI.create("file:///foo/bar2"),
-              URI.create("file:///foo/bar3"));
+              StorageUri.of("file:///foo/bar"),
+              StorageUri.of("file:///foo/bar1"),
+              StorageUri.of("file:///foo/bar2"),
+              StorageUri.of("file:///foo/bar3"));
     }
-    try (Stream<URI> locations = lcs.fetchBaseLocations("cid2")) {
+    try (Stream<StorageUri> locations = lcs.fetchBaseLocations("cid2")) {
       soft.assertThat(locations)
           .containsExactlyInAnyOrder(
-              URI.create("file:///meep/foo/bar1"),
-              URI.create("file:///meep/foo/bar2"),
-              URI.create("file:///meep/foo/bar3"));
+              StorageUri.of("file:///meep/foo/bar1"),
+              StorageUri.of("file:///meep/foo/bar2"),
+              StorageUri.of("file:///meep/foo/bar3"));
     }
 
-    try (Stream<URI> locations = lcs.fetchAllBaseLocations()) {
+    try (Stream<StorageUri> locations = lcs.fetchAllBaseLocations()) {
       soft.assertThat(locations)
           .containsExactlyInAnyOrder(
-              URI.create("file:///foo/bar"),
-              URI.create("file:///foo/bar1"),
-              URI.create("file:///foo/bar2"),
-              URI.create("file:///foo/bar3"),
-              URI.create("file:///meep/foo/bar1"),
-              URI.create("file:///meep/foo/bar2"),
-              URI.create("file:///meep/foo/bar3"));
+              StorageUri.of("file:///foo/bar"),
+              StorageUri.of("file:///foo/bar1"),
+              StorageUri.of("file:///foo/bar2"),
+              StorageUri.of("file:///foo/bar3"),
+              StorageUri.of("file:///meep/foo/bar1"),
+              StorageUri.of("file:///meep/foo/bar2"),
+              StorageUri.of("file:///meep/foo/bar3"));
     }
   }
 
@@ -520,11 +538,11 @@ public abstract class AbstractPersistenceSpi {
 
     List<FileReference> files =
         asList(
-            FileReference.of(URI.create("file1"), URI.create("foo://bar/baz/"), 42L),
+            FileReference.of(StorageUri.of("file1"), StorageUri.of("foo://bar/baz/"), 42L),
             // duplicate!
-            FileReference.of(URI.create("file1"), URI.create("foo://bar/baz/"), 42L),
-            FileReference.of(URI.create("file2"), URI.create("foo://bar/baz/"), 42L),
-            FileReference.of(URI.create("file3"), URI.create("foo://meep/blah/"), 88L));
+            FileReference.of(StorageUri.of("file1"), StorageUri.of("foo://bar/baz/"), 42L),
+            FileReference.of(StorageUri.of("file2"), StorageUri.of("foo://bar/baz/"), 42L),
+            FileReference.of(StorageUri.of("file3"), StorageUri.of("foo://meep/blah/"), 88L));
 
     Set<FileReference> expected = new HashSet<>(files);
 

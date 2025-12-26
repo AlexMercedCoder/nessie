@@ -16,8 +16,10 @@
 package org.projectnessie.gc.iceberg.inttest;
 
 import static java.util.Collections.emptySet;
+import static org.projectnessie.gc.contents.ContentReference.icebergContent;
+import static org.projectnessie.model.Content.Type.ICEBERG_TABLE;
 
-import java.net.URI;
+import jakarta.annotation.Nonnull;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collection;
@@ -26,7 +28,6 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-import javax.annotation.Nonnull;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.iceberg.hadoop.HadoopFileIO;
 import org.assertj.core.api.SoftAssertions;
@@ -46,6 +47,7 @@ import org.projectnessie.model.IcebergTable;
 import org.projectnessie.model.LogResponse.LogEntry;
 import org.projectnessie.model.Operation.Put;
 import org.projectnessie.spark.extensions.SparkSqlTestBase;
+import org.projectnessie.storage.uri.StorageUri;
 
 /**
  * Verifies that {@link IcebergContentToFiles} against data ingested via "real" Iceberg yields the
@@ -142,7 +144,7 @@ public class ITContentToFilesCrossCheck extends SparkSqlTestBase {
     try (Stream<FileReference> extracted = contentToFiles.extractFiles(contentReference)) {
       return extracted
           .map(FileReference::absolutePath)
-          .map(URI::toString)
+          .map(StorageUri::location)
           .collect(Collectors.toSet());
     }
   }
@@ -169,7 +171,6 @@ public class ITContentToFilesCrossCheck extends SparkSqlTestBase {
   }
 
   @Nonnull
-  @jakarta.validation.constraints.NotNull
   private List<ContentReference> contentReferencesFromCommitLog() throws NessieNotFoundException {
     return api.getCommitLog().refName(defaultBranch()).fetch(FetchOption.ALL).stream()
         .map(LogEntry::getOperations)
@@ -180,7 +181,8 @@ public class ITContentToFilesCrossCheck extends SparkSqlTestBase {
         .map(IcebergTable.class::cast)
         .map(
             table ->
-                ContentReference.icebergTable(
+                icebergContent(
+                    ICEBERG_TABLE,
                     table.getId(),
                     "12345678",
                     ContentKey.of("foo"),

@@ -19,13 +19,11 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.Optional;
 import java.util.function.Function;
 import org.immutables.value.Value;
-import org.projectnessie.versioned.storage.common.objtypes.CommitObj;
-import org.projectnessie.versioned.storage.common.objtypes.IndexObj;
-import org.projectnessie.versioned.storage.common.objtypes.IndexSegmentsObj;
-import org.projectnessie.versioned.storage.common.persist.Persist;
 
 public interface StoreConfig {
 
@@ -65,28 +63,48 @@ public interface StoreConfig {
   String CONFIG_NAMESPACE_VALIDATION = "namespace-validation";
   boolean DEFAULT_NAMESPACE_VALIDATION = true;
 
+  String CONFIG_PREVIOUS_HEAD_COUNT = "ref-previous-head-count";
+  int DEFAULT_PREVIOUS_HEAD_COUNT = 20;
+
+  String CONFIG_PREVIOUS_HEAD_TIME_SPAN_SECONDS = "ref-previous-head-time-span-seconds";
+  long DEFAULT_PREVIOUS_HEAD_TIME_SPAN_SECONDS = 5 * 60;
+
+  String CONFIG_REFERENCE_CACHE_TTL = "reference-cache-ttl";
+
+  String CONFIG_REFERENCE_NEGATIVE_CACHE_TTL = "reference-cache-negative-ttl";
+
+  boolean DEFAULT_CONFIG_CACHE_ENABLE_SOFT_REFERENCES = false;
+  int DEFAULT_CACHE_CAPACITY_FRACTION_MIN_SIZE_MB = 64;
+  int DEFAULT_CACHE_CAPACITY_FRACTION_ADJUST_MB = 256;
+  double DEFAULT_CACHE_CAPACITY_FRACTION_OF_HEAP = 0.6d;
+  double DEFAULT_CONFIG_CAPACITY_OVERSHOOT = 0.1d;
+
   /**
-   * Committing operations by default enforce that all (parent) namespaces exist.
+   * Whether namespace validation is enabled, changing this to false will break the Nessie
+   * specification.
+   *
+   * <p>Committing operations by default enforce that all (parent) namespaces exist.
    *
    * <p>This configuration setting is only present for a few Nessie releases to work around
    * potential migration issues and is subject to removal.
    *
    * @since 0.52.0
+   * @deprecated This setting will be removed.
+   * @hidden
    */
+  @Deprecated(forRemoval = true)
+  @SuppressWarnings({"DeprecatedIsStillUsed"})
   @Value.Default
   default boolean validateNamespaces() {
     return DEFAULT_NAMESPACE_VALIDATION;
   }
 
   /**
-   * A free-form string that identifies a particular Nessie storage repository.
+   * Nessie repository ID (optional) that identifies a particular Nessie storage repository.
    *
-   * <p>When remote (shared) storage is used, multiple Nessie repositories may co-exist in the same
+   * <p>When remote (shared) database is used, multiple Nessie repositories may co-exist in the same
    * database (and in the same schema). In that case this configuration parameter can be used to
    * distinguish those repositories.
-   *
-   * <p>All {@link org.projectnessie.versioned.storage.common.persist.Persist} implementations must
-   * respect this parameter.
    */
   @Value.Default
   default String repositoryId() {
@@ -94,9 +112,9 @@ public interface StoreConfig {
   }
 
   /**
-   * Used when committing to Nessie, when the HEAD (or tip) of a branch changed during the commit,
-   * this value defines the maximum number of retries. Default is {@value #DEFAULT_COMMIT_RETRIES},
-   * which means unlimited.
+   * maximum retries for CAS-like operations. Used when committing to Nessie, when the HEAD (or tip)
+   * of a branch changed during the commit, this value defines the maximum number of retries.
+   * Default means unlimited.
    *
    * @see #commitTimeoutMillis()
    * @see #retryInitialSleepMillisLower()
@@ -109,8 +127,7 @@ public interface StoreConfig {
   }
 
   /**
-   * Timeout for CAS-like operations in milliseconds. Default is {@value
-   * #DEFAULT_COMMIT_TIMEOUT_MILLIS} milliseconds.
+   * Timeout for CAS-like operations in milliseconds.
    *
    * @see #commitRetries()
    * @see #retryInitialSleepMillisLower()
@@ -125,8 +142,7 @@ public interface StoreConfig {
   /**
    * When the commit logic has to retry an operation due to a concurrent, conflicting update to the
    * database state, usually a concurrent change to a branch HEAD, this parameter defines the
-   * <em>initial</em> lower bound of the sleep time. Default is {@value
-   * #DEFAULT_RETRY_INITIAL_SLEEP_MILLIS_LOWER} ms.
+   * <em>initial</em> <em>lower</em> bound of the exponential backoff.
    *
    * @see #commitRetries()
    * @see #commitTimeoutMillis()
@@ -141,8 +157,7 @@ public interface StoreConfig {
   /**
    * When the commit logic has to retry an operation due to a concurrent, conflicting update to the
    * database state, usually a concurrent change to a branch HEAD, this parameter defines the
-   * <em>initial</em> upper bound of the sleep time. Default is {@value
-   * #DEFAULT_RETRY_INITIAL_SLEEP_MILLIS_UPPER} ms.
+   * <em>initial</em> <em>upper</em> bound of the exponential backoff.
    *
    * @see #commitRetries()
    * @see #commitTimeoutMillis()
@@ -157,10 +172,8 @@ public interface StoreConfig {
   /**
    * When the commit logic has to retry an operation due to a concurrent, conflicting update to the
    * database state, usually a concurrent change to a branch HEAD, this parameter defines the
-   * <em>maximum</em> sleep time. Each retry doubles the {@link #retryInitialSleepMillisLower()
-   * lower} and {@link #retryInitialSleepMillisUpper() upper} bounds of the random sleep time,
-   * unless the doubled upper bound would exceed the value of this configuration property. Default
-   * is {@value #DEFAULT_RETRY_MAX_SLEEP_MILLIS} ms.
+   * <em>maximum</em> sleep time. Each retry doubles the lower and upper bounds of the random sleep
+   * time, unless the doubled upper bound would exceed the value of this configuration property.
    *
    * @see #commitRetries()
    * @see #commitTimeoutMillis()
@@ -173,8 +186,8 @@ public interface StoreConfig {
   }
 
   /**
-   * The number of parent-commit-hashes stored in {@link CommitObj#tail()}. Defaults to {@value
-   * #DEFAULT_PARENTS_PER_COMMIT}.
+   * Number of parent-commit-hashes stored in each commit. This is used to allow bulk-fetches when
+   * accessing the commit log.
    */
   @Value.Default
   default int parentsPerCommit() {
@@ -182,29 +195,13 @@ public interface StoreConfig {
   }
 
   /**
-   * The maximum allowed serialized size of a {@link
-   * org.projectnessie.versioned.storage.common.indexes.StoreIndex store index}. This value is used
-   * to determine, when elements in a {@link IndexObj#index() reference index segment} need to be
-   * split, defaults to {@value #DEFAULT_MAX_SERIALIZED_INDEX_SIZE}.
+   * The maximum allowed serialized size of the content index structure in a <em>Nessie commit</em>,
+   * called <em>incremental index</em>. This value is used to determine, when elements in an
+   * incremental index, which were kept from previous commits, need to be pushed to a new or updated
+   * <em>reference index</em>.
    *
-   * <p>Note: this value <em>must</em> be smaller than a database's {@link
-   * Persist#hardObjectSizeLimit() hard item/row size limit}.
-   */
-  @Value.Default
-  default int maxSerializedIndexSize() {
-    return DEFAULT_MAX_SERIALIZED_INDEX_SIZE;
-  }
-
-  /**
-   * The maximum allowed serialized size of a {@link
-   * org.projectnessie.versioned.storage.common.indexes.StoreIndex store index}. This value is used
-   * to determine, when elements in a {@link CommitObj#incrementalIndex() commit's incremental
-   * index}, which were kept from previous commits, need to be pushed to a new or updated {@link
-   * CommitObj#referenceIndex() reference index}, defaults to {@value
-   * #DEFAULT_MAX_SERIALIZED_INDEX_SIZE}.
-   *
-   * <p>Note: this value <em>must</em> be smaller than a database's {@link
-   * Persist#hardObjectSizeLimit() hard item/row size limit}.
+   * <p>Note: this value <em>must</em> be smaller than a database's <em>hard item/row size
+   * limit</em>.
    */
   @Value.Default
   default int maxIncrementalIndexSize() {
@@ -212,20 +209,31 @@ public interface StoreConfig {
   }
 
   /**
-   * If the external reference index for this commit consists of up to this amount of stripes, the
-   * references to the stripes will be stored {@link CommitObj#referenceIndexStripes() inside} the
-   * commit object, if there are more than this amount of stripes, an external {@link
-   * IndexSegmentsObj} will be created instead, referenced via {@link CommitObj#referenceIndex()}.
+   * The maximum allowed serialized size of the content index structure in a <em>reference
+   * index</em> segment. This value is used to determine, when elements in a reference index segment
+   * need to be split.
+   *
+   * <p>Note: this value <em>must</em> be smaller than a database's <em>hard item/row size
+   * limit</em>.
+   */
+  @Value.Default
+  default int maxSerializedIndexSize() {
+    return DEFAULT_MAX_SERIALIZED_INDEX_SIZE;
+  }
+
+  /**
+   * Maximum number of referenced index objects stored inside commit objects.
+   *
+   * <p>If the external reference index for this commit consists of up to this amount of stripes,
+   * the references to the stripes will be stored inside the commit object. If there are more than
+   * this amount of stripes, an external <em>index segment</em> will be created instead.
    */
   @Value.Default
   default int maxReferenceStripesPerCommit() {
     return DEFAULT_MAX_REFERENCE_STRIPES_PER_COMMIT;
   }
 
-  /**
-   * The assumed wall-clock drift between multiple Nessie instances in microseconds, defaults to
-   * {@value #DEFAULT_ASSUMED_WALL_CLOCK_DRIFT_MICROS}.
-   */
+  /** Assumed wall-clock drift between multiple Nessie instances in microseconds. */
   @Value.Default
   default long assumedWallClockDriftMicros() {
     return DEFAULT_ASSUMED_WALL_CLOCK_DRIFT_MICROS;
@@ -236,6 +244,57 @@ public interface StoreConfig {
   default Clock clock() {
     return Clock.systemUTC();
   }
+
+  /**
+   * Named references keep a history of up to this amount of previous HEAD pointers, and up to the
+   * configured age.
+   */
+  @Value.Default
+  default int referencePreviousHeadCount() {
+    return DEFAULT_PREVIOUS_HEAD_COUNT;
+  }
+
+  /**
+   * Named references keep a history of previous HEAD pointers with this age in seconds, and up to
+   * the configured amount.
+   */
+  @Value.Default
+  default long referencePreviousHeadTimeSpanSeconds() {
+    return DEFAULT_PREVIOUS_HEAD_TIME_SPAN_SECONDS;
+  }
+
+  /**
+   * Defines the duration how long references shall be kept in the cache. Defaults to not cache
+   * references. If reference caching is enabled, it is highly recommended to also enable negative
+   * reference caching.
+   *
+   * <p>It is safe to enable this for single node Nessie deployments.
+   *
+   * <p>Recommended value is currently {@code PT5M} for distributed and high values like {@code
+   * PT1H} for single node Nessie deployments.
+   *
+   * <p><em>This feature is experimental except for single Nessie node deployments! If in doubt,
+   * leave this un-configured!</em>
+   */
+  Optional<Duration> referenceCacheTtl();
+
+  /**
+   * Defines the duration how long sentinels for non-existing references shall be kept in the cache
+   * (negative reference caching).
+   *
+   * <p>Defaults to {@code reference-cache-ttl}. Has no effect, if {@code reference-cache-ttl} is
+   * not configured. Default is not enabled. If reference caching is enabled, it is highly
+   * recommended to also enable negative reference caching.
+   *
+   * <p>It is safe to enable this for single node Nessie deployments.
+   *
+   * <p>Recommended value is currently {@code PT5M} for distributed and high values like {@code
+   * PT1H} for single node Nessie deployments.
+   *
+   * <p><em>This feature is experimental except for single Nessie node deployments! If in doubt,
+   * leave this un-configured!</em>
+   */
+  Optional<Duration> referenceCacheNegativeTtl();
 
   /**
    * Retrieves the current timestamp in microseconds since epoch, using the configured {@link
@@ -313,6 +372,22 @@ public interface StoreConfig {
       if (v != null) {
         a = a.withValidateNamespaces(Boolean.parseBoolean(v.trim()));
       }
+      v = configFunction.apply(CONFIG_PREVIOUS_HEAD_COUNT);
+      if (v != null) {
+        a = a.withReferencePreviousHeadCount(Integer.parseInt(v.trim()));
+      }
+      v = configFunction.apply(CONFIG_PREVIOUS_HEAD_TIME_SPAN_SECONDS);
+      if (v != null) {
+        a = a.withReferencePreviousHeadTimeSpanSeconds(Long.parseLong(v.trim()));
+      }
+      v = configFunction.apply(CONFIG_REFERENCE_CACHE_TTL);
+      if (v != null) {
+        a = a.withReferenceCacheTtl(Duration.parse(v.trim()));
+      }
+      v = configFunction.apply(CONFIG_REFERENCE_NEGATIVE_CACHE_TTL);
+      if (v != null) {
+        a = a.withReferenceCacheNegativeTtl(Duration.parse(v.trim()));
+      }
       return a;
     }
 
@@ -354,5 +429,15 @@ public interface StoreConfig {
 
     /** See {@link StoreConfig#clock()}. */
     Adjustable withClock(Clock clock);
+
+    Adjustable withReferencePreviousHeadCount(int referencePreviousHeadCount);
+
+    Adjustable withReferencePreviousHeadTimeSpanSeconds(long referencePreviousHeadTimeSpanSeconds);
+
+    /** See {@link StoreConfig#referenceCacheTtl()}. */
+    Adjustable withReferenceCacheTtl(Duration referenceCacheTtl);
+
+    /** See {@link StoreConfig#referenceCacheNegativeTtl()}. */
+    Adjustable withReferenceCacheNegativeTtl(Duration referencecacheNegativeTtl);
   }
 }

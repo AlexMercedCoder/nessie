@@ -16,10 +16,8 @@
 package org.projectnessie.versioned.storage.common.logic;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.Maps.newHashMapWithExpectedSize;
 import static com.google.common.collect.Sets.newHashSetWithExpectedSize;
-import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Collections.emptyIterator;
 import static java.util.Collections.emptyList;
 import static java.util.Collections.singletonList;
@@ -35,8 +33,6 @@ import static org.projectnessie.versioned.storage.common.logic.CommitConflict.Co
 import static org.projectnessie.versioned.storage.common.logic.CommitConflict.ConflictType.PAYLOAD_DIFFERS;
 import static org.projectnessie.versioned.storage.common.logic.CommitConflict.ConflictType.VALUE_DIFFERS;
 import static org.projectnessie.versioned.storage.common.logic.CommitConflict.commitConflict;
-import static org.projectnessie.versioned.storage.common.logic.CommitLogic.ValueReplacement.NO_VALUE_REPLACEMENT;
-import static org.projectnessie.versioned.storage.common.logic.ConflictHandler.ConflictResolution.CONFLICT;
 import static org.projectnessie.versioned.storage.common.logic.CreateCommit.Add.commitAdd;
 import static org.projectnessie.versioned.storage.common.logic.CreateCommit.Remove.commitRemove;
 import static org.projectnessie.versioned.storage.common.logic.DiffEntry.diffEntry;
@@ -48,17 +44,18 @@ import static org.projectnessie.versioned.storage.common.objtypes.CommitOp.Actio
 import static org.projectnessie.versioned.storage.common.objtypes.CommitOp.Action.REMOVE;
 import static org.projectnessie.versioned.storage.common.objtypes.CommitOp.COMMIT_OP_SERIALIZER;
 import static org.projectnessie.versioned.storage.common.objtypes.CommitOp.commitOp;
-import static org.projectnessie.versioned.storage.common.objtypes.Hashes.hashAsObjId;
-import static org.projectnessie.versioned.storage.common.objtypes.Hashes.hashCommitHeaders;
-import static org.projectnessie.versioned.storage.common.objtypes.Hashes.newHasher;
+import static org.projectnessie.versioned.storage.common.objtypes.StandardObjType.COMMIT;
 import static org.projectnessie.versioned.storage.common.persist.ObjId.EMPTY_OBJ_ID;
-import static org.projectnessie.versioned.storage.common.persist.ObjType.COMMIT;
+import static org.projectnessie.versioned.storage.common.persist.ObjIdHasher.objIdHasher;
+import static org.projectnessie.versioned.storage.common.persist.StoredObjResult.storedObjResult;
 
 import com.google.common.collect.AbstractIterator;
-import com.google.common.hash.Hasher;
+import jakarta.annotation.Nonnull;
+import jakarta.annotation.Nullable;
+import jakarta.validation.constraints.NotNull;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.EnumSet;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
@@ -71,8 +68,6 @@ import java.util.UUID;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
-import javax.annotation.Nonnull;
-import javax.annotation.Nullable;
 import org.projectnessie.versioned.storage.common.config.StoreConfig;
 import org.projectnessie.versioned.storage.common.exceptions.CommitConflictException;
 import org.projectnessie.versioned.storage.common.exceptions.ObjNotFoundException;
@@ -92,8 +87,10 @@ import org.projectnessie.versioned.storage.common.objtypes.IndexStripe;
 import org.projectnessie.versioned.storage.common.persist.CloseableIterator;
 import org.projectnessie.versioned.storage.common.persist.Obj;
 import org.projectnessie.versioned.storage.common.persist.ObjId;
+import org.projectnessie.versioned.storage.common.persist.ObjIdHasher;
 import org.projectnessie.versioned.storage.common.persist.Persist;
 import org.projectnessie.versioned.storage.common.persist.Reference;
+import org.projectnessie.versioned.storage.common.persist.StoredObjResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -111,9 +108,7 @@ final class CommitLogicImpl implements CommitLogic {
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public PagedResult<CommitObj, ObjId> commitLog(
-      @Nonnull @jakarta.annotation.Nonnull CommitLogQuery commitLogQuery) {
+  public PagedResult<CommitObj, ObjId> commitLog(@Nonnull CommitLogQuery commitLogQuery) {
     ObjId startCommitId =
         commitLogQuery
             .pagingToken()
@@ -189,7 +184,6 @@ final class CommitLogicImpl implements CommitLogic {
     }
 
     @Nonnull
-    @jakarta.annotation.Nonnull
     @Override
     public PagingToken tokenForKey(ObjId key) {
       return key != null ? pagingToken(key.asBytes()) : emptyPagingToken();
@@ -198,9 +192,7 @@ final class CommitLogicImpl implements CommitLogic {
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public PagedResult<ObjId, ObjId> commitIdLog(
-      @Nonnull @jakarta.annotation.Nonnull CommitLogQuery commitLogQuery) {
+  public PagedResult<ObjId, ObjId> commitIdLog(@Nonnull CommitLogQuery commitLogQuery) {
     ObjId startCommitId =
         commitLogQuery
             .pagingToken()
@@ -271,7 +263,6 @@ final class CommitLogicImpl implements CommitLogic {
     }
 
     @Nonnull
-    @jakarta.annotation.Nonnull
     @Override
     public PagingToken tokenForKey(ObjId key) {
       return key != null ? pagingToken(key.asBytes()) : emptyPagingToken();
@@ -279,29 +270,25 @@ final class CommitLogicImpl implements CommitLogic {
   }
 
   @Nullable
-  @jakarta.annotation.Nullable
   @Override
   public CommitObj doCommit(
-      @Nonnull @jakarta.annotation.Nonnull CreateCommit createCommit,
-      @Nonnull @jakarta.annotation.Nonnull List<Obj> additionalObjects)
+      @Nonnull CreateCommit createCommit, @Nonnull List<Obj> additionalObjects)
       throws CommitConflictException, ObjNotFoundException {
-    CommitObj commit =
-        buildCommitObj(
-            createCommit, c -> CONFLICT, (k, v) -> {}, NO_VALUE_REPLACEMENT, NO_VALUE_REPLACEMENT);
-    return storeCommit(commit, additionalObjects) ? commit : null;
+    CommitObj commit = buildCommitObj(createCommit);
+    return storeCommit(commit, additionalObjects).obj().orElse(null);
   }
 
+  @NotNull
   @Override
-  public boolean storeCommit(
-      @Nonnull @jakarta.annotation.Nonnull CommitObj commit,
-      @Nonnull @jakarta.annotation.Nonnull List<Obj> additionalObjects) {
+  public StoredObjResult<CommitObj> storeCommit(
+      @Nonnull CommitObj commit, @Nonnull List<Obj> additionalObjects) {
     int numAdditional = additionalObjects.size();
     try {
       Obj[] allObjs = additionalObjects.toArray(new Obj[numAdditional + 1]);
       allObjs[numAdditional] = commit;
 
       boolean[] stored = persist.storeObjs(allObjs);
-      return stored[numAdditional];
+      return mitigateHashCollision(stored[numAdditional], commit);
     } catch (ObjTooLargeException e) {
       // The incremental index became too big - need to spill out the INCREMENTAL_* operations to
       // the reference index.
@@ -315,7 +302,7 @@ final class CommitLogicImpl implements CommitLogic {
       commit = indexTooBigStoreUpdate(commit);
 
       try {
-        return persist.storeObj(commit, true);
+        return mitigateHashCollision(persist.storeObj(commit, true), commit);
       } catch (ObjTooLargeException ex) {
         // Hit the "Hard database object size limit"
         throw new RuntimeException(ex);
@@ -323,8 +310,34 @@ final class CommitLogicImpl implements CommitLogic {
     }
   }
 
+  /**
+   * Called from the above {@link #storeCommit(CommitObj, List)}, handles the case when it could not
+   * persist the {@link CommitObj} (duplicate object-id). Checks whether the persisted object is
+   * actually the object that's expected to be persisted - and yields "OK" in that case. This
+   * mitigates the risk of false-positive hash-collision errors in case the backend database runs
+   * into timeout situations with an undefined outcome.
+   */
+  @NotNull
+  private StoredObjResult<CommitObj> mitigateHashCollision(boolean storeResult, CommitObj commit) {
+    if (storeResult) {
+      return storedObjResult(commit, true);
+    }
+
+    // Check whether the existing object is the same commit (w/o considering the internal "created"
+    // timestamp of the commit-obj).
+    try {
+      CommitObj existing = persist.fetchTypedObj(commit.id(), COMMIT, CommitObj.class);
+      CommitObj commitWithNewCreatedTimestamp =
+          CommitObj.commitBuilder().from(commit).created(existing.created()).build();
+      return storedObjResult(
+          commitWithNewCreatedTimestamp.equals(existing) ? existing : null, false);
+    } catch (ObjNotFoundException e) {
+      return null;
+    }
+  }
+
   @Override
-  public CommitObj updateCommit(@Nonnull @jakarta.annotation.Nonnull CommitObj commit) {
+  public CommitObj updateCommit(@Nonnull CommitObj commit) {
     try {
       persist.upsertObj(commit);
     } catch (ObjTooLargeException e) {
@@ -527,16 +540,14 @@ final class CommitLogicImpl implements CommitLogic {
     return stripes;
   }
 
-  @SuppressWarnings("UnstableApiUsage")
   @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
   public CommitObj buildCommitObj(
-      @Nonnull @jakarta.annotation.Nonnull CreateCommit createCommit,
-      @Nonnull @jakarta.annotation.Nonnull ConflictHandler conflictHandler,
-      @Nonnull @jakarta.annotation.Nonnull CommitOpHandler commitOpHandler,
-      @Nonnull @jakarta.annotation.Nonnull ValueReplacement expectedValueReplacement,
-      @Nonnull @jakarta.annotation.Nonnull ValueReplacement committedValueReplacement)
+      @Nonnull CreateCommit createCommit,
+      @Nonnull ConflictHandler conflictHandler,
+      @Nonnull CommitOpHandler commitOpHandler,
+      @Nonnull ValueReplacement expectedValueReplacement,
+      @Nonnull ValueReplacement committedValueReplacement)
       throws CommitConflictException, ObjNotFoundException {
     StoreConfig config = persist.config();
 
@@ -550,12 +561,11 @@ final class CommitLogicImpl implements CommitLogic {
             .headers(createCommit.headers())
             .commitType(createCommit.commitType());
 
-    Hasher hasher =
-        newHasher()
-            .putString(COMMIT.name(), UTF_8)
-            .putBytes(parentCommitId.asByteBuffer())
-            .putString(createCommit.message(), UTF_8);
-    hashCommitHeaders(hasher, createCommit.headers());
+    ObjIdHasher hasher =
+        objIdHasher(COMMIT)
+            .hash(parentCommitId)
+            .hash(createCommit.message())
+            .hash(createCommit.headers());
 
     CommitObj parent = fetchCommit(parentCommitId);
     StoreIndex<CommitOp> index;
@@ -624,12 +634,7 @@ final class CommitLogicImpl implements CommitLogic {
       }
 
       // No conflict, add "remove action" to index
-      hasher.putInt(2).putInt(payload).putString(key.rawString(), UTF_8);
-      if (contentId != null) {
-        hasher
-            .putLong(contentId.getMostSignificantBits())
-            .putLong(contentId.getLeastSignificantBits());
-      }
+      hasher.hash(2).hash(payload).hash(key.rawString()).hash(contentId);
       index.add(indexElement(key, op));
     }
 
@@ -644,7 +649,8 @@ final class CommitLogicImpl implements CommitLogic {
       ObjId expectedValue =
           expectedValueReplacement.maybeReplaceValue(false, key, unchanged.expectedValue());
       CommitConflict conflict =
-          checkForConflict(key, contentId, payload, null, existingContent, expectedValue);
+          checkForConflict(
+              key, contentId, payload, null, existingContent, reAdded ? null : expectedValue);
 
       if (conflict != null) {
         handleConflict(conflictHandler, conflicts, conflict);
@@ -682,7 +688,9 @@ final class CommitLogicImpl implements CommitLogic {
       ObjId expectedValue =
           expectedValueReplacement.maybeReplaceValue(true, key, add.expectedValue());
       if (conflict == null) {
-        conflict = checkForConflict(key, contentId, payload, op, existingContent, expectedValue);
+        conflict =
+            checkForConflict(
+                key, contentId, payload, op, existingContent, reAdded ? null : expectedValue);
       }
 
       if (conflict != null) {
@@ -695,15 +703,11 @@ final class CommitLogicImpl implements CommitLogic {
 
       // No conflict, add "add action" to index
       hasher
-          .putInt(1)
-          .putString(key.rawString(), UTF_8)
-          .putInt(payload)
-          .putBytes(add.value().asByteBuffer());
-      if (contentId != null) {
-        hasher
-            .putLong(contentId.getMostSignificantBits())
-            .putLong(contentId.getLeastSignificantBits());
-      }
+          .hash(1)
+          .hash(key.rawString())
+          .hash(payload)
+          .hash(add.value().asByteBuffer())
+          .hash(contentId);
       index.add(indexElement(key, op));
     }
 
@@ -711,7 +715,7 @@ final class CommitLogicImpl implements CommitLogic {
       throw new CommitConflictException(conflicts);
     }
 
-    return c.incrementalIndex(index.serialize()).id(hashAsObjId(hasher)).build();
+    return c.incrementalIndex(index.serialize()).id(hasher.generate()).build();
   }
 
   private static void preprocessCommitActions(
@@ -795,9 +799,9 @@ final class CommitLogicImpl implements CommitLogic {
   }
 
   private static boolean handleConflict(
-      @Nonnull @jakarta.annotation.Nonnull ConflictHandler conflictHandler,
-      @Nonnull @jakarta.annotation.Nonnull List<CommitConflict> conflicts,
-      @Nonnull @jakarta.annotation.Nonnull CommitConflict conflict) {
+      @Nonnull ConflictHandler conflictHandler,
+      @Nonnull List<CommitConflict> conflicts,
+      @Nonnull CommitConflict conflict) {
     ConflictResolution resolution = conflictHandler.onConflict(conflict);
     switch (resolution) {
       case CONFLICT:
@@ -822,21 +826,15 @@ final class CommitLogicImpl implements CommitLogic {
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
-  public ObjId findCommonAncestor(
-      @Nonnull @jakarta.annotation.Nonnull ObjId targetId,
-      @Nonnull @jakarta.annotation.Nonnull ObjId sourceId)
+  public ObjId findCommonAncestor(@Nonnull ObjId targetId, @Nonnull ObjId sourceId)
       throws NoSuchElementException {
     return identifyMergeBase(targetId, sourceId, false);
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
-  public ObjId findMergeBase(
-      @Nonnull @jakarta.annotation.Nonnull ObjId targetId,
-      @Nonnull @jakarta.annotation.Nonnull ObjId sourceId)
+  public ObjId findMergeBase(@Nonnull ObjId targetId, @Nonnull ObjId sourceId)
       throws NoSuchElementException {
     return identifyMergeBase(targetId, sourceId, true);
   }
@@ -859,10 +857,8 @@ final class CommitLogicImpl implements CommitLogic {
   }
 
   @Nullable
-  @jakarta.annotation.Nullable
   @Override
-  public CommitObj fetchCommit(@Nonnull @jakarta.annotation.Nonnull ObjId commitId)
-      throws ObjNotFoundException {
+  public CommitObj fetchCommit(@Nonnull ObjId commitId) throws ObjNotFoundException {
     if (EMPTY_OBJ_ID.equals(commitId)) {
       return null;
     }
@@ -870,11 +866,8 @@ final class CommitLogicImpl implements CommitLogic {
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
-  public CommitObj[] fetchCommits(
-      @Nonnull @jakarta.annotation.Nonnull ObjId startCommitId,
-      @Nonnull @jakarta.annotation.Nonnull ObjId endCommitId)
+  public CommitObj[] fetchCommits(@Nonnull ObjId startCommitId, @Nonnull ObjId endCommitId)
       throws ObjNotFoundException {
     CommitObj[] commitObjs = new CommitObj[2];
     if (startCommitId.equals(endCommitId)) {
@@ -891,24 +884,14 @@ final class CommitLogicImpl implements CommitLogic {
 
     CommitObj[] r = new CommitObj[2];
     if (startCommitId != null || endCommitId != null) {
-      Obj[] objs = persist.fetchObjs(new ObjId[] {startCommitId, endCommitId});
-      r[0] = castToCommitObj(objs[0]);
-      r[1] = castToCommitObj(objs[1]);
+      r = persist.fetchTypedObjs(new ObjId[] {startCommitId, endCommitId}, COMMIT, CommitObj.class);
     }
     return r;
   }
 
-  private static CommitObj castToCommitObj(Obj obj) {
-    checkState(
-        obj == null || obj instanceof CommitObj, "Expected a Commit object, but got %s", obj);
-    return (CommitObj) obj;
-  }
-
   @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
-  public DiffPagedResult<DiffEntry, StoreKey> diff(
-      @Nonnull @jakarta.annotation.Nonnull DiffQuery diffQuery) {
+  public DiffPagedResult<DiffEntry, StoreKey> diff(@Nonnull DiffQuery diffQuery) {
     IndexesLogic indexesLogic = indexesLogic(persist);
 
     StoreKey start =
@@ -1054,7 +1037,6 @@ final class CommitLogicImpl implements CommitLogic {
     }
 
     @Nonnull
-    @jakarta.annotation.Nonnull
     @Override
     public PagingToken tokenForKey(StoreKey key) {
       return key != null ? pagingToken(copyFromUtf8(key.rawString())) : emptyPagingToken();
@@ -1062,11 +1044,9 @@ final class CommitLogicImpl implements CommitLogic {
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
   public CreateCommit.Builder diffToCreateCommit(
-      @Nonnull @jakarta.annotation.Nonnull PagedResult<DiffEntry, StoreKey> diff,
-      @Nonnull @jakarta.annotation.Nonnull CreateCommit.Builder createCommit) {
+      @Nonnull PagedResult<DiffEntry, StoreKey> diff, @Nonnull CreateCommit.Builder createCommit) {
     while (diff.hasNext()) {
       DiffEntry d = diff.next();
       if (d.fromId() == null) {
@@ -1077,11 +1057,22 @@ final class CommitLogicImpl implements CommitLogic {
         // key removed
         createCommit.addRemoves(
             commitRemove(d.key(), d.fromPayload(), requireNonNull(d.fromId()), d.fromContentId()));
-      } else {
+      } else if (Objects.equals(d.fromContentId(), d.toContentId())) {
         // key updated
         createCommit.addAdds(
             commitAdd(
-                d.key(), d.toPayload(), requireNonNull(d.toId()), d.fromId(), d.fromContentId()));
+                d.key(), d.toPayload(), requireNonNull(d.toId()), d.fromId(), d.toContentId()));
+      } else {
+        // key re-added
+        createCommit.addRemoves(
+            commitRemove(d.key(), d.fromPayload(), requireNonNull(d.fromId()), d.fromContentId()));
+        createCommit.addAdds(
+            commitAdd(
+                d.key(),
+                d.toPayload(),
+                requireNonNull(d.toId()),
+                requireNonNull(d.fromId()),
+                d.toContentId()));
       }
     }
     return createCommit;
@@ -1089,9 +1080,7 @@ final class CommitLogicImpl implements CommitLogic {
 
   @Override
   @Nullable
-  @jakarta.annotation.Nullable
-  public CommitObj headCommit(@Nonnull @jakarta.annotation.Nonnull Reference reference)
-      throws ObjNotFoundException {
+  public CommitObj headCommit(@Nonnull Reference reference) throws ObjNotFoundException {
     return fetchCommit(reference.pointer());
   }
 
@@ -1115,7 +1104,7 @@ final class CommitLogicImpl implements CommitLogic {
 
     // scanAllCommitLogEntries() returns all commits in no specific order, parents may be scanned
     // before or after their children.
-    try (CloseableIterator<Obj> scan = persist.scanAllObjects(EnumSet.of(COMMIT))) {
+    try (CloseableIterator<Obj> scan = persist.scanAllObjects(Collections.singleton(COMMIT))) {
       while (scan.hasNext()) {
         CommitObj commit = (CommitObj) scan.next();
 
@@ -1126,6 +1115,7 @@ final class CommitLogicImpl implements CommitLogic {
 
         if (identify.handleCommit(commit)) {
           commitHandler.accept(commit);
+          // no need to bother with secondary parents, we are scanning everything anyway
         }
       }
     }

@@ -15,21 +15,24 @@
  */
 
 plugins {
-  id("nessie-conventions-iceberg")
-  id("nessie-jacoco")
+  id("nessie-conventions-unpublished-tool")
   alias(libs.plugins.nessie.run)
 }
 
-extra["maven.name"] = "Nessie - GC - CLI integration test"
+tasks.withType<JavaCompile>().configureEach { options.release = 11 }
 
-val sparkScala = useSparkScalaVersionsForProject("3.3", "2.12")
+publishingHelper { mavenName = "Nessie - GC - CLI integration test" }
+
+val sparkScala = useSparkScalaVersionsForProject("3.4", "2.12")
+
+dnsjavaDowngrade()
 
 dependencies {
   implementation(nessieProject("nessie-gc-tool", "shadow"))
 
   compileOnly(libs.errorprone.annotations)
-  compileOnly(libs.immutables.value.annotations)
-  annotationProcessor(libs.immutables.value.processor)
+  compileOnly(nessieProject("nessie-immutables-std"))
+  annotationProcessor(nessieProject("nessie-immutables-std", configuration = "processor"))
 
   // hadoop-common brings Jackson in ancient versions, pulling in the Jackson BOM to avoid that
   implementation(platform(libs.jackson.bom))
@@ -56,7 +59,7 @@ dependencies {
   intTestImplementation(
     nessieProject("nessie-spark-extensions-basetests_${sparkScala.scalaMajorVersion}")
   )
-  intTestImplementation(nessieProject("nessie-s3minio"))
+  intTestImplementation(nessieProject("nessie-minio-testcontainer"))
 
   intTestImplementation("org.apache.spark:spark-sql_${sparkScala.scalaMajorVersion}") {
     forSpark(sparkScala.sparkVersion)
@@ -68,16 +71,19 @@ dependencies {
     forSpark(sparkScala.sparkVersion)
   }
 
-  intTestImplementation(libs.iceberg.core)
-  intTestRuntimeOnly(libs.iceberg.hive.metastore)
-  intTestRuntimeOnly(libs.iceberg.aws)
-  intTestRuntimeOnly(libs.iceberg.nessie)
-  intTestRuntimeOnly(libs.iceberg.core)
+  intTestImplementation(platform(libs.iceberg.bom))
+  intTestImplementation("org.apache.iceberg:iceberg-core")
+  intTestRuntimeOnly("org.apache.iceberg:iceberg-hive-metastore")
+  intTestRuntimeOnly("org.apache.iceberg:iceberg-aws")
+  intTestRuntimeOnly("org.apache.iceberg:iceberg-gcp")
+  intTestRuntimeOnly("org.apache.iceberg:iceberg-azure")
+  intTestRuntimeOnly("org.apache.iceberg:iceberg-nessie")
+  intTestRuntimeOnly("org.apache.iceberg:iceberg-core")
+  // Reference the exact Iceberg version here, because the iceberg-bom might not contain all
+  // Spark/Flink deps :(
   intTestRuntimeOnly(
     "org.apache.iceberg:iceberg-spark-${sparkScala.sparkMajorVersion}_${sparkScala.scalaMajorVersion}:${libs.versions.iceberg.get()}"
   )
-  intTestRuntimeOnly(libs.iceberg.hive.metastore)
-  intTestRuntimeOnly(libs.iceberg.aws)
 
   intTestRuntimeOnly(libs.hadoop.client)
   intTestRuntimeOnly(libs.hadoop.aws)
@@ -91,6 +97,21 @@ dependencies {
   intTestRuntimeOnly("software.amazon.awssdk:glue")
   intTestRuntimeOnly("software.amazon.awssdk:kms")
 
+  intTestRuntimeOnly(platform(libs.google.cloud.storage.bom))
+  intTestRuntimeOnly(platform(libs.google.cloud.libraries.bom))
+  intTestRuntimeOnly("com.google.cloud:google-cloud-storage")
+  intTestRuntimeOnly("com.google.cloud:google-cloud-nio")
+  intTestRuntimeOnly(libs.google.cloud.bigdataoss.gcs.connector)
+  intTestRuntimeOnly(libs.google.cloud.bigdataoss.gcsio) {
+    // brings junit:junit + hamcrest :(
+    exclude("io.grpc", "grpc-testing")
+  }
+
+  intTestRuntimeOnly(platform(libs.azuresdk.bom))
+  intTestRuntimeOnly("com.azure:azure-storage-file-datalake")
+  intTestRuntimeOnly("com.azure:azure-identity")
+  intTestRuntimeOnly(libs.hadoop.azure)
+
   intTestCompileOnly("com.fasterxml.jackson.core:jackson-annotations")
   intTestCompileOnly(libs.microprofile.openapi)
 
@@ -102,7 +123,11 @@ dependencies {
 
 val intTest = tasks.named<Test>("intTest")
 
-intTest.configure { systemProperty("aws.region", "us-east-1") }
+intTest.configure {
+  systemProperty("aws.region", "us-east-1")
+  // Java 23 & Hadoop
+  systemProperty("java.security.manager", "allow")
+}
 
 nessieQuarkusApp {
   includeTask(intTest)
@@ -111,4 +136,4 @@ nessieQuarkusApp {
   systemProperties.put("nessie.server.send-stacktrace-to-client", "true")
 }
 
-forceJava11ForTests()
+forceJavaVersionForTests(sparkScala.runtimeJavaVersion)

@@ -17,7 +17,6 @@ package org.projectnessie.versioned.storage.rocksdb;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static java.util.Collections.singleton;
-import static org.projectnessie.versioned.storage.common.persist.Reference.reference;
 import static org.projectnessie.versioned.storage.rocksdb.RocksDBBackend.keyPrefix;
 import static org.projectnessie.versioned.storage.rocksdb.RocksDBBackend.rocksDbException;
 import static org.projectnessie.versioned.storage.serialize.ProtoSerialization.deserializeObj;
@@ -27,13 +26,14 @@ import static org.projectnessie.versioned.storage.serialize.ProtoSerialization.s
 import static org.projectnessie.versioned.storage.serialize.ProtoSerialization.serializeReference;
 
 import com.google.common.collect.AbstractIterator;
+import jakarta.annotation.Nonnull;
+import java.lang.reflect.Array;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.locks.Lock;
 import java.util.function.Predicate;
-import javax.annotation.Nonnull;
 import org.projectnessie.nessie.relocated.protobuf.ByteString;
 import org.projectnessie.versioned.storage.common.config.StoreConfig;
 import org.projectnessie.versioned.storage.common.exceptions.ObjNotFoundException;
@@ -41,6 +41,7 @@ import org.projectnessie.versioned.storage.common.exceptions.ObjTooLargeExceptio
 import org.projectnessie.versioned.storage.common.exceptions.RefAlreadyExistsException;
 import org.projectnessie.versioned.storage.common.exceptions.RefConditionFailedException;
 import org.projectnessie.versioned.storage.common.exceptions.RefNotFoundException;
+import org.projectnessie.versioned.storage.common.objtypes.UpdateableObj;
 import org.projectnessie.versioned.storage.common.persist.CloseableIterator;
 import org.projectnessie.versioned.storage.common.persist.Obj;
 import org.projectnessie.versioned.storage.common.persist.ObjId;
@@ -80,7 +81,6 @@ class RocksDBPersist implements Persist {
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
   public String name() {
     return RocksDBBackendFactory.NAME;
@@ -88,13 +88,12 @@ class RocksDBPersist implements Persist {
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
   public StoreConfig config() {
     return config;
   }
 
   @Override
-  public Reference fetchReference(@Nonnull @jakarta.annotation.Nonnull String name) {
+  public Reference fetchReference(@Nonnull String name) {
     try {
       RocksDBBackend v = backend;
       TransactionDB db = v.db();
@@ -110,8 +109,7 @@ class RocksDBPersist implements Persist {
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public Reference[] fetchReferences(@Nonnull @jakarta.annotation.Nonnull String[] names) {
+  public Reference[] fetchReferences(@Nonnull String[] names) {
     try {
       RocksDBBackend v = backend;
       TransactionDB db = v.db();
@@ -148,9 +146,7 @@ class RocksDBPersist implements Persist {
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public Reference addReference(@Nonnull @jakarta.annotation.Nonnull Reference reference)
-      throws RefAlreadyExistsException {
+  public Reference addReference(@Nonnull Reference reference) throws RefAlreadyExistsException {
     checkArgument(!reference.deleted(), "Deleted references must not be added");
 
     Lock l = repo.referencesLock(reference.name());
@@ -177,8 +173,7 @@ class RocksDBPersist implements Persist {
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public Reference markReferenceAsDeleted(@Nonnull @jakarta.annotation.Nonnull Reference reference)
+  public Reference markReferenceAsDeleted(@Nonnull Reference reference)
       throws RefNotFoundException, RefConditionFailedException {
     Lock l = repo.referencesLock(reference.name());
     try {
@@ -218,7 +213,7 @@ class RocksDBPersist implements Persist {
   }
 
   @Override
-  public void purgeReference(@Nonnull @jakarta.annotation.Nonnull Reference reference)
+  public void purgeReference(@Nonnull Reference reference)
       throws RefNotFoundException, RefConditionFailedException {
     Lock l = repo.referencesLock(reference.name());
     try {
@@ -239,10 +234,7 @@ class RocksDBPersist implements Persist {
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public Reference updateReferencePointer(
-      @Nonnull @jakarta.annotation.Nonnull Reference reference,
-      @Nonnull @jakarta.annotation.Nonnull ObjId newPointer)
+  public Reference updateReferencePointer(@Nonnull Reference reference, @Nonnull ObjId newPointer)
       throws RefNotFoundException, RefConditionFailedException {
     Lock l = repo.referencesLock(reference.name());
     try {
@@ -253,7 +245,7 @@ class RocksDBPersist implements Persist {
 
       checkReference(reference, db, cf, key, false);
 
-      Reference updated = reference.forNewPointer(newPointer);
+      Reference updated = reference.forNewPointer(newPointer, config);
 
       db.put(cf, key, serializeReference(updated));
       return updated;
@@ -266,8 +258,9 @@ class RocksDBPersist implements Persist {
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public Obj fetchObj(@Nonnull @jakarta.annotation.Nonnull ObjId id) throws ObjNotFoundException {
+  public <T extends Obj> T fetchTypedObj(
+      @Nonnull ObjId id, ObjType type, @Nonnull Class<T> typeClass) throws ObjNotFoundException {
+
     try {
       RocksDBBackend b = backend;
       TransactionDB db = b.db();
@@ -278,47 +271,29 @@ class RocksDBPersist implements Persist {
       if (obj == null) {
         throw new ObjNotFoundException(id);
       }
-      return deserializeObj(id, obj);
+      Obj o = deserializeObj(id, 0L, obj, null);
+      if (o == null || (type != null && !type.equals(o.type()))) {
+        throw new ObjNotFoundException(id);
+      }
+      @SuppressWarnings("unchecked")
+      T typed = (T) o;
+      return typed;
     } catch (RocksDBException e) {
       throw rocksDbException(e);
     }
   }
 
   @Override
-  @Nonnull
-  @jakarta.annotation.Nonnull
-  public <T extends Obj> T fetchTypedObj(
-      @Nonnull @jakarta.annotation.Nonnull ObjId id, ObjType type, Class<T> typeClass)
-      throws ObjNotFoundException {
-    Obj obj = fetchObj(id);
-    if (obj.type() != type) {
-      throw new ObjNotFoundException(id);
-    }
-    @SuppressWarnings("unchecked")
-    T r = (T) obj;
-    return r;
-  }
-
-  @Override
-  @Nonnull
-  @jakarta.annotation.Nonnull
-  public ObjType fetchObjType(@Nonnull @jakarta.annotation.Nonnull ObjId id)
-      throws ObjNotFoundException {
-    return fetchObj(id).type();
-  }
-
-  @Override
-  @Nonnull
-  @jakarta.annotation.Nonnull
-  public Obj[] fetchObjs(@Nonnull @jakarta.annotation.Nonnull ObjId[] ids)
-      throws ObjNotFoundException {
+  public <T extends Obj> T[] fetchTypedObjsIfExist(
+      @Nonnull ObjId[] ids, ObjType type, @Nonnull Class<T> typeClass) {
     try {
       RocksDBBackend b = backend;
       TransactionDB db = b.db();
       ColumnFamilyHandle cf = b.objs();
 
       int num = ids.length;
-      Obj[] r = new Obj[num];
+      @SuppressWarnings("unchecked")
+      T[] r = (T[]) Array.newInstance(typeClass, num);
       List<ColumnFamilyHandle> handles = new ArrayList<>(num);
       List<byte[]> keys = new ArrayList<>(num);
       for (ObjId id : ids) {
@@ -329,24 +304,21 @@ class RocksDBPersist implements Persist {
       }
 
       if (!keys.isEmpty()) {
-        List<ObjId> notFound = null;
         List<byte[]> dbResult = db.multiGetAsList(handles, keys);
         for (int i = 0, ri = 0; i < num; i++) {
           ObjId id = ids[i];
           if (id != null) {
             byte[] obj = dbResult.get(ri++);
-            if (obj == null) {
-              if (notFound == null) {
-                notFound = new ArrayList<>();
+            if (obj != null) {
+              Obj o = deserializeObj(id, 0L, obj, null);
+              if (type != null && !type.equals(o.type())) {
+                o = null;
               }
-              notFound.add(id);
-            } else {
-              r[i] = deserializeObj(id, obj);
+              @SuppressWarnings("unchecked")
+              T typed = (T) o;
+              r[i] = typed;
             }
           }
-        }
-        if (notFound != null) {
-          throw new ObjNotFoundException(notFound);
         }
       }
 
@@ -357,8 +329,7 @@ class RocksDBPersist implements Persist {
   }
 
   @Override
-  public boolean storeObj(
-      @Nonnull @jakarta.annotation.Nonnull Obj obj, boolean ignoreSoftSizeRestrictions)
+  public boolean storeObj(@Nonnull Obj obj, boolean ignoreSoftSizeRestrictions)
       throws ObjTooLargeException {
     checkArgument(obj.id() != null, "Obj to store must have a non-null ID");
 
@@ -369,19 +340,29 @@ class RocksDBPersist implements Persist {
       ColumnFamilyHandle cf = b.objs();
       byte[] key = dbKey(obj.id());
 
+      long referenced = config.currentTimeMicros();
+      boolean r;
+
       byte[] existing = db.get(cf, key);
       if (existing != null) {
-        return false;
+        obj = deserializeObj(obj.id(), referenced, existing, null);
+        ignoreSoftSizeRestrictions = true;
+        r = false;
+      } else {
+        var objReferenced = obj.referenced();
+        // -1 is a sentinel for AbstractBasePersistTests.deleteWithReferenced()
+        obj = obj.withReferenced(objReferenced != -1L ? referenced : -1L);
+        r = true;
       }
 
       int incrementalIndexSizeLimit =
           ignoreSoftSizeRestrictions ? Integer.MAX_VALUE : effectiveIncrementalIndexSizeLimit();
       int indexSizeLimit =
           ignoreSoftSizeRestrictions ? Integer.MAX_VALUE : effectiveIndexSegmentSizeLimit();
-      byte[] serialized = serializeObj(obj, incrementalIndexSizeLimit, indexSizeLimit);
+      byte[] serialized = serializeObj(obj, incrementalIndexSizeLimit, indexSizeLimit, true);
 
       db.put(cf, key, serialized);
-      return true;
+      return r;
     } catch (RocksDBException e) {
       throw rocksDbException(e);
     } finally {
@@ -391,9 +372,7 @@ class RocksDBPersist implements Persist {
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public boolean[] storeObjs(@Nonnull @jakarta.annotation.Nonnull Obj[] objs)
-      throws ObjTooLargeException {
+  public boolean[] storeObjs(@Nonnull Obj[] objs) throws ObjTooLargeException {
     boolean[] r = new boolean[objs.length];
     for (int i = 0; i < objs.length; i++) {
       Obj o = objs[i];
@@ -405,7 +384,7 @@ class RocksDBPersist implements Persist {
   }
 
   @Override
-  public void deleteObj(@Nonnull @jakarta.annotation.Nonnull ObjId id) {
+  public void deleteObj(@Nonnull ObjId id) {
     Lock l = repo.objLock(id);
     try {
       RocksDBBackend b = backend;
@@ -422,14 +401,16 @@ class RocksDBPersist implements Persist {
   }
 
   @Override
-  public void deleteObjs(@Nonnull @jakarta.annotation.Nonnull ObjId[] ids) {
+  public void deleteObjs(@Nonnull ObjId[] ids) {
     for (ObjId id : ids) {
-      deleteObj(id);
+      if (id != null) {
+        deleteObj(id);
+      }
     }
   }
 
   @Override
-  public void upsertObj(@Nonnull @jakarta.annotation.Nonnull Obj obj) throws ObjTooLargeException {
+  public void upsertObj(@Nonnull Obj obj) throws ObjTooLargeException {
     ObjId id = obj.id();
     checkArgument(id != null, "Obj to store must have a non-null ID");
 
@@ -440,8 +421,12 @@ class RocksDBPersist implements Persist {
       ColumnFamilyHandle cf = b.objs();
       byte[] key = dbKey(id);
 
+      long referenced = config.currentTimeMicros();
+      obj = obj.withReferenced(referenced);
+
       byte[] serialized =
-          serializeObj(obj, effectiveIncrementalIndexSizeLimit(), effectiveIndexSegmentSizeLimit());
+          serializeObj(
+              obj, effectiveIncrementalIndexSizeLimit(), effectiveIndexSegmentSizeLimit(), true);
 
       db.put(cf, key, serialized);
     } catch (RocksDBException e) {
@@ -452,10 +437,122 @@ class RocksDBPersist implements Persist {
   }
 
   @Override
-  public void upsertObjs(@Nonnull @jakarta.annotation.Nonnull Obj[] objs)
-      throws ObjTooLargeException {
+  public void upsertObjs(@Nonnull Obj[] objs) throws ObjTooLargeException {
     for (Obj obj : objs) {
-      upsertObj(obj);
+      if (obj != null) {
+        upsertObj(obj);
+      }
+    }
+  }
+
+  @Override
+  public boolean deleteWithReferenced(@Nonnull Obj obj) {
+    ObjId id = obj.id();
+    Lock l = repo.objLock(id);
+    try {
+      RocksDBBackend b = backend;
+      TransactionDB db = b.db();
+      ColumnFamilyHandle cf = b.objs();
+      byte[] key = dbKey(id);
+
+      byte[] bytes = db.get(cf, key);
+      if (bytes == null) {
+        return false;
+      }
+      Obj existing = deserializeObj(id, 0L, bytes, null);
+      if (!existing.type().equals(obj.type())) {
+        return false;
+      }
+      var referenced = obj.referenced();
+      if (existing.referenced() != referenced && referenced != -1L) {
+        // -1 is a sentinel for AbstractBasePersistTests.deleteWithReferenced()
+        return false;
+      }
+
+      db.delete(cf, key);
+      return true;
+    } catch (RocksDBException e) {
+      throw rocksDbException(e);
+    } finally {
+      l.unlock();
+    }
+  }
+
+  @Override
+  public boolean deleteConditional(@Nonnull UpdateableObj obj) {
+    ObjId id = obj.id();
+    Lock l = repo.objLock(id);
+    try {
+      RocksDBBackend b = backend;
+      TransactionDB db = b.db();
+      ColumnFamilyHandle cf = b.objs();
+      byte[] key = dbKey(id);
+
+      byte[] bytes = db.get(cf, key);
+      if (bytes == null) {
+        return false;
+      }
+      Obj existing = deserializeObj(id, 0L, bytes, null);
+      if (!existing.type().equals(obj.type())) {
+        return false;
+      }
+      UpdateableObj ex = (UpdateableObj) existing;
+      if (!ex.versionToken().equals(obj.versionToken())) {
+        return false;
+      }
+
+      db.delete(cf, key);
+      return true;
+    } catch (RocksDBException e) {
+      throw rocksDbException(e);
+    } finally {
+      l.unlock();
+    }
+  }
+
+  @Override
+  public boolean updateConditional(@Nonnull UpdateableObj expected, @Nonnull UpdateableObj newValue)
+      throws ObjTooLargeException {
+    ObjId id = expected.id();
+    checkArgument(id != null && id.equals(newValue.id()));
+    checkArgument(expected.type().equals(newValue.type()));
+    checkArgument(!expected.versionToken().equals(newValue.versionToken()));
+
+    Lock l = repo.objLock(id);
+    try {
+      RocksDBBackend b = backend;
+      TransactionDB db = b.db();
+      ColumnFamilyHandle cf = b.objs();
+      byte[] key = dbKey(id);
+
+      byte[] obj = db.get(cf, key);
+      if (obj == null) {
+        return false;
+      }
+      Obj existing = deserializeObj(id, 0L, obj, null);
+      if (!existing.type().equals(expected.type())) {
+        return false;
+      }
+      UpdateableObj ex = (UpdateableObj) existing;
+      if (!ex.versionToken().equals(expected.versionToken())) {
+        return false;
+      }
+
+      long referenced = config.currentTimeMicros();
+      byte[] serialized =
+          serializeObj(
+              newValue.withReferenced(referenced),
+              effectiveIncrementalIndexSizeLimit(),
+              effectiveIndexSegmentSizeLimit(),
+              true);
+
+      db.put(cf, key, serialized);
+
+      return true;
+    } catch (RocksDBException e) {
+      throw rocksDbException(e);
+    } finally {
+      l.unlock();
     }
   }
 
@@ -465,11 +562,10 @@ class RocksDBPersist implements Persist {
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
-  public CloseableIterator<Obj> scanAllObjects(
-      @Nonnull @jakarta.annotation.Nonnull Set<ObjType> returnedObjTypes) {
-    return new ScanAllObjectsIterator(returnedObjTypes::contains);
+  public CloseableIterator<Obj> scanAllObjects(@Nonnull Set<ObjType> returnedObjTypes) {
+    return new ScanAllObjectsIterator(
+        returnedObjTypes.isEmpty() ? x -> true : returnedObjTypes::contains);
   }
 
   private class ScanAllObjectsIterator extends AbstractIterator<Obj>
@@ -529,7 +625,7 @@ class RocksDBPersist implements Persist {
         }
 
         ObjId id = deserializeObjId(key.substring(keyPrefix.size()));
-        Obj o = deserializeObj(id, obj);
+        Obj o = deserializeObj(id, 0L, obj, null);
 
         if (filter.test(o.type())) {
           return o;

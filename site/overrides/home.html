@@ -18,6 +18,10 @@
   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
   FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
   IN THE SOFTWARE.
+
+
+Marker for Nessie LICENSE file - keep it
+CODE_COPIED_TO_NESSIE
 -->
 
 {% extends "main.html" %}
@@ -148,14 +152,14 @@
           <h1>Transactional Catalog for Data Lakes</h1>
           {{ page.content }}
           <a
-            href="{{ page.next_page.url | url }}"
+            href="guides/"
             title="{{ page.next_page.title | striptags }}"
             class="md-button md-button--primary"
           >
             Learn More
           </a>
           <a
-            href="try"
+            href="guides/try-nessie/"
             title="{{ lang.t('source.link.title') }}"
             class="md-button"
           >

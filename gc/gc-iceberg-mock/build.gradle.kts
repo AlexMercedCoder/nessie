@@ -14,16 +14,17 @@
  * limitations under the License.
  */
 
-plugins { id("nessie-conventions-iceberg") }
+plugins { id("nessie-conventions-java11") }
 
-extra["maven.name"] = "Nessie - GC - Mocked Iceberg data for tests"
+publishingHelper { mavenName = "Nessie - GC - Mocked Iceberg data for tests" }
 
 dependencies {
-  compileOnly(libs.iceberg.core)
+  compileOnly(platform(libs.iceberg.bom))
+  compileOnly("org.apache.iceberg:iceberg-core")
 
   compileOnly(libs.errorprone.annotations)
-  compileOnly(libs.immutables.value.annotations)
-  annotationProcessor(libs.immutables.value.processor)
+  compileOnly(nessieProject("nessie-immutables-std"))
+  annotationProcessor(nessieProject("nessie-immutables-std", configuration = "processor"))
 
   implementation(libs.guava)
   implementation(platform(libs.jackson.bom))
@@ -35,18 +36,16 @@ dependencies {
 
   compileOnly(libs.microprofile.openapi)
 
-  // javax/jakarta
   compileOnly(libs.jakarta.validation.api)
-  compileOnly(libs.javax.validation.api)
   compileOnly(libs.jakarta.annotation.api)
-  compileOnly(libs.findbugs.jsr305)
 
   testRuntimeOnly(libs.logback.classic)
 
-  testImplementation(libs.iceberg.core)
+  testImplementation(platform(libs.iceberg.bom))
+  testImplementation("org.apache.iceberg:iceberg-core")
 
-  testCompileOnly(libs.immutables.value.annotations)
-  testAnnotationProcessor(libs.immutables.value.processor)
+  testCompileOnly(nessieProject("nessie-immutables-std"))
+  testAnnotationProcessor(nessieProject("nessie-immutables-std", configuration = "processor"))
 
   testCompileOnly(libs.microprofile.openapi)
 

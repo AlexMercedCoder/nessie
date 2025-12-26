@@ -15,15 +15,17 @@
  */
 package org.projectnessie.events.quarkus.config;
 
+import io.opentelemetry.api.trace.Tracer;
 import io.quarkus.runtime.StartupEvent;
 import io.quarkus.vertx.LocalEventBusCodec;
 import io.vertx.core.eventbus.DeliveryOptions;
 import io.vertx.core.eventbus.EventBus;
 import io.vertx.core.tracing.TracingPolicy;
-import javax.enterprise.context.ApplicationScoped;
-import javax.enterprise.event.Observes;
-import javax.enterprise.inject.Produces;
-import javax.inject.Named;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.event.Observes;
+import jakarta.enterprise.inject.Instance;
+import jakarta.enterprise.inject.Produces;
+import jakarta.inject.Named;
 
 public class EventBusConfigurer {
 
@@ -36,7 +38,7 @@ public class EventBusConfigurer {
   @Produces
   @ApplicationScoped
   @Named(EVENTS_DELIVERY_OPTIONS_BEAN_NAME)
-  public DeliveryOptions configureDeliveryOptions(QuarkusEventConfig config) {
+  public DeliveryOptions configureDeliveryOptions(Instance<Tracer> tracers) {
     // FIXME: currently, tracing policy is ignored by Quarkus, see
     // https://github.com/quarkusio/quarkus/issues/25417
     // Concretely, this means that Vertx always creates send and receive spans,
@@ -44,7 +46,7 @@ public class EventBusConfigurer {
     return new DeliveryOptions()
         .setLocalOnly(true)
         .setCodecName(LOCAL_CODEC_NAME)
-        .setTracingPolicy(config.isTracingEnabled() ? TracingPolicy.ALWAYS : TracingPolicy.IGNORE);
+        .setTracingPolicy(tracers.isResolvable() ? TracingPolicy.ALWAYS : TracingPolicy.IGNORE);
   }
 
   void configureEventBus(@Observes StartupEvent ev, EventBus eventBus) {

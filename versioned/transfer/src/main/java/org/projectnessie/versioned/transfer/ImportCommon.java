@@ -39,6 +39,10 @@ abstract class ImportCommon {
     prepareRepository();
     importer.progressListener().progress(ProgressEvent.END_PREPARE);
 
+    importer.progressListener().progress(ProgressEvent.START_GENERIC);
+    long genericCount = importGeneric();
+    importer.progressListener().progress(ProgressEvent.END_GENERIC);
+
     importer.progressListener().progress(ProgressEvent.START_COMMITS);
     long commitCount = importCommits();
     importer.progressListener().progress(ProgressEvent.END_COMMITS);
@@ -51,12 +55,14 @@ abstract class ImportCommon {
     importFinalize(headsAndForks);
     importer.progressListener().progress(ProgressEvent.END_FINALIZE);
 
+    markRepositoryImported();
     importer.progressListener().progress(ProgressEvent.FINISHED);
 
     return ImmutableImportResult.builder()
         .exportMeta(exportMeta)
         .headsAndForks(headsAndForks)
         .importedCommitCount(commitCount)
+        .importedGenericCount(genericCount)
         .importedReferenceCount(namedReferenceCount)
         .build();
   }
@@ -67,5 +73,9 @@ abstract class ImportCommon {
 
   abstract long importCommits() throws IOException;
 
+  abstract long importGeneric() throws IOException;
+
   abstract void importFinalize(HeadsAndForks headsAndForks);
+
+  abstract void markRepositoryImported();
 }

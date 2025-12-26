@@ -19,6 +19,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.projectnessie.tools.compatibility.api.Version.NEW_STORAGE_MODEL_WITH_COMPAT_TESTING;
+import static org.projectnessie.tools.compatibility.internal.Helper.CLOSE_RESOURCES;
 
 import com.google.common.collect.ImmutableMap;
 import java.lang.reflect.Proxy;
@@ -28,10 +30,10 @@ import org.assertj.core.api.junit.jupiter.SoftAssertionsExtension;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.extension.ExtensionContext;
-import org.junit.jupiter.api.extension.ExtensionContext.Namespace;
 import org.junit.jupiter.api.extension.ExtensionContext.Store;
-import org.junit.jupiter.engine.execution.ExtensionValuesStore;
 import org.junit.jupiter.engine.execution.NamespaceAwareStore;
+import org.junit.platform.engine.support.store.Namespace;
+import org.junit.platform.engine.support.store.NamespacedHierarchicalStore;
 import org.projectnessie.client.api.NessieApiV1;
 import org.projectnessie.tools.compatibility.api.Version;
 
@@ -41,52 +43,47 @@ class TestNessieApiHolder {
 
   @Test
   void currentVersionServer() {
-    ExtensionValuesStore valuesStore = new ExtensionValuesStore(null);
-    try {
+    try (NamespacedHierarchicalStore<Namespace> valuesStore =
+        new NamespacedHierarchicalStore<>(null, CLOSE_RESOURCES)) {
       Store store = new NamespaceAwareStore(valuesStore, Util.NAMESPACE);
 
       ExtensionContext ctx = mock(ExtensionContext.class);
       when(ctx.getRoot()).thenReturn(ctx);
-      when(ctx.getStore(any(Namespace.class))).thenReturn(store);
+      when(ctx.getStore(any(ExtensionContext.Namespace.class))).thenReturn(store);
 
-      CurrentNessieApiHolder apiHolder =
+      try (CurrentNessieApiHolder apiHolder =
           new CurrentNessieApiHolder(
               new ClientKey(
                   Version.CURRENT,
-                  "org.projectnessie.client.http.HttpClientBuilder",
+                  "org.projectnessie.client.http.NessieHttpClientBuilderImpl",
                   NessieApiV1.class,
                   ImmutableMap.of(
                       "nessie.uri", "http://127.42.42.42:19120",
-                      "nessie.enable-api-compatibility-check", "false")));
-      try {
+                      "nessie.enable-api-compatibility-check", "false")))) {
         soft.assertThat(apiHolder)
             .extracting(AbstractNessieApiHolder::getApiInstance)
             .extracting(Object::getClass)
             .extracting(Class::getClassLoader)
             .isSameAs(Thread.currentThread().getContextClassLoader());
-      } finally {
-        apiHolder.close();
       }
-    } finally {
-      valuesStore.closeAllStoredCloseableValues();
     }
   }
 
   @Test
   void oldVersionServer() {
-    ExtensionValuesStore valuesStore = new ExtensionValuesStore(null);
-    try {
+    try (NamespacedHierarchicalStore<Namespace> valuesStore =
+        new NamespacedHierarchicalStore<>(null, CLOSE_RESOURCES)) {
       Store store = new NamespaceAwareStore(valuesStore, Util.NAMESPACE);
 
       ExtensionContext ctx = mock(ExtensionContext.class);
       when(ctx.getRoot()).thenReturn(ctx);
-      when(ctx.getStore(any(Namespace.class))).thenReturn(store);
+      when(ctx.getStore(any(ExtensionContext.Namespace.class))).thenReturn(store);
 
       OldNessieApiHolder apiHolder =
           new OldNessieApiHolder(
               ctx,
               new ClientKey(
-                  Version.parseVersion("0.42.0"),
+                  NEW_STORAGE_MODEL_WITH_COMPAT_TESTING,
                   "org.projectnessie.client.http.HttpClientBuilder",
                   NessieApiV1.class,
                   ImmutableMap.of(
@@ -104,8 +101,6 @@ class TestNessieApiHolder {
       } finally {
         apiHolder.close();
       }
-    } finally {
-      valuesStore.closeAllStoredCloseableValues();
     }
   }
 }

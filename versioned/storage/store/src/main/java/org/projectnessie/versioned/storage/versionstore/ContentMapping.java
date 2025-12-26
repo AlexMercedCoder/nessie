@@ -20,26 +20,31 @@ import static com.google.common.collect.Maps.newHashMapWithExpectedSize;
 import static java.util.Objects.requireNonNull;
 import static org.projectnessie.versioned.storage.common.logic.Logics.indexesLogic;
 import static org.projectnessie.versioned.storage.common.objtypes.ContentValueObj.contentValue;
-import static org.projectnessie.versioned.storage.common.persist.ObjType.VALUE;
+import static org.projectnessie.versioned.storage.common.objtypes.StandardObjType.VALUE;
+import static org.projectnessie.versioned.storage.versionstore.TypeMapping.keyToStoreKey;
 import static org.projectnessie.versioned.storage.versionstore.TypeMapping.objIdToHash;
 import static org.projectnessie.versioned.storage.versionstore.TypeMapping.storeKeyToKey;
 import static org.projectnessie.versioned.storage.versionstore.TypeMapping.toCommitMeta;
 
+import jakarta.annotation.Nonnull;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
-import javax.annotation.Nonnull;
+import java.util.stream.Collectors;
 import org.projectnessie.model.CommitMeta;
 import org.projectnessie.model.Content;
 import org.projectnessie.model.ContentKey;
+import org.projectnessie.model.Operation.Delete;
+import org.projectnessie.model.Operation.Put;
 import org.projectnessie.nessie.relocated.protobuf.ByteString;
 import org.projectnessie.versioned.Commit;
-import org.projectnessie.versioned.Delete;
 import org.projectnessie.versioned.ImmutableCommit;
-import org.projectnessie.versioned.Put;
 import org.projectnessie.versioned.StoreWorker;
 import org.projectnessie.versioned.storage.common.exceptions.ObjNotFoundException;
+import org.projectnessie.versioned.storage.common.indexes.StoreIndex;
 import org.projectnessie.versioned.storage.common.indexes.StoreIndexElement;
+import org.projectnessie.versioned.storage.common.indexes.StoreKey;
 import org.projectnessie.versioned.storage.common.logic.IndexesLogic;
 import org.projectnessie.versioned.storage.common.objtypes.CommitObj;
 import org.projectnessie.versioned.storage.common.objtypes.CommitOp;
@@ -59,18 +64,33 @@ public final class ContentMapping {
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public Content fetchContent(@Nonnull @jakarta.annotation.Nonnull ObjId objId)
-      throws ObjNotFoundException {
+  public Content fetchContent(@Nonnull ObjId objId) throws ObjNotFoundException {
     ContentValueObj contentValue = persist.fetchTypedObj(objId, VALUE, ContentValueObj.class);
     return valueToContent(contentValue);
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   public Map<ContentKey, Content> fetchContents(
-      @Nonnull @jakarta.annotation.Nonnull Map<ObjId, ContentKey> idsToKeys)
+      @Nonnull StoreIndex<CommitOp> index, @Nonnull Collection<ContentKey> keys)
       throws ObjNotFoundException {
+
+    // Eagerly bulk-(pre)fetch the requested keys
+    index.loadIfNecessary(
+        keys.stream().map(TypeMapping::keyToStoreKey).collect(Collectors.toSet()));
+
+    Map<ObjId, ContentKey> idsToKeys = newHashMapWithExpectedSize(keys.size());
+    for (ContentKey key : keys) {
+      ObjId valueObjId = valueObjIdByKey(key, index);
+      if (valueObjId != null && idsToKeys.putIfAbsent(valueObjId, key) != null) {
+        // There is a *very* low chance (only for old, migrated repositories) that the exact same
+        // content object is used for multiple content-keys. If that situation happens, restart with
+        // a special, slower and more expensive implementation.
+        // It could have only happened before the enforcement of new content-IDs for Put-operations
+        // was in place _and_ if the content-ID was explicitly specified by a client.
+        return fetchContentsDuplicateObjIds(index, keys);
+      }
+    }
+
     ObjId[] ids = idsToKeys.keySet().toArray(new ObjId[0]);
     Obj[] objs = persist.fetchObjs(ids);
     Map<ContentKey, Content> r = newHashMapWithExpectedSize(ids.length);
@@ -78,12 +98,48 @@ public final class ContentMapping {
       Obj obj = objs[i];
       if (obj instanceof ContentValueObj) {
         ContentValueObj contentValue = (ContentValueObj) obj;
-        ContentKey key = idsToKeys.get(obj.id());
+        ContentKey contentKey = idsToKeys.get(obj.id());
         Content content = valueToContent(contentValue);
-        r.put(key, content);
+        r.put(contentKey, content);
       }
     }
     return r;
+  }
+
+  private Map<ContentKey, Content> fetchContentsDuplicateObjIds(
+      StoreIndex<CommitOp> index, Collection<ContentKey> keys) throws ObjNotFoundException {
+    Map<ObjId, List<ContentKey>> idsToKeys = newHashMapWithExpectedSize(keys.size());
+    for (ContentKey key : keys) {
+      ObjId valueObjId = valueObjIdByKey(key, index);
+      if (valueObjId != null) {
+        idsToKeys.computeIfAbsent(valueObjId, x -> new ArrayList<>()).add(key);
+      }
+    }
+
+    ObjId[] ids = idsToKeys.keySet().toArray(new ObjId[0]);
+    Obj[] objs = persist.fetchObjs(ids);
+    Map<ContentKey, Content> r = newHashMapWithExpectedSize(ids.length);
+    for (int i = 0; i < ids.length; i++) {
+      Obj obj = objs[i];
+      if (obj instanceof ContentValueObj) {
+        ContentValueObj contentValue = (ContentValueObj) obj;
+        Content content = valueToContent(contentValue);
+        for (ContentKey key : idsToKeys.get(obj.id())) {
+          r.put(key, content);
+        }
+      }
+    }
+    return r;
+  }
+
+  private static ObjId valueObjIdByKey(ContentKey key, StoreIndex<CommitOp> index) {
+    StoreKey storeKey = keyToStoreKey(key);
+    StoreIndexElement<CommitOp> indexElement = index.get(storeKey);
+    if (indexElement == null || !indexElement.content().action().exists()) {
+      return null;
+    }
+
+    return requireNonNull(indexElement.content().value(), "Required value pointer is null");
   }
 
   private static Content valueToContent(ContentValueObj contentValue) {
@@ -91,9 +147,7 @@ public final class ContentMapping {
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public ContentValueObj buildContent(
-      @Nonnull @jakarta.annotation.Nonnull Content putValue, int payload) {
+  public ContentValueObj buildContent(@Nonnull Content putValue, int payload) {
     checkArgument(payload > 0 && payload <= 127, "payload must be > 0 and <= 127");
     String contentId = putValue.getId();
     checkArgument(contentId != null, "Content to store must have a non-null content ID");
@@ -104,19 +158,14 @@ public final class ContentMapping {
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public Commit commitObjToCommit(
-      boolean fetchAdditionalInfo, @Nonnull @jakarta.annotation.Nonnull CommitObj commitObj)
+  public Commit commitObjToCommit(boolean fetchAdditionalInfo, @Nonnull CommitObj commitObj)
       throws ObjNotFoundException {
     return commitObjToCommit(fetchAdditionalInfo, commitObj, commitObj.id());
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   public Commit commitObjToCommit(
-      boolean fetchAdditionalInfo,
-      @Nonnull @jakarta.annotation.Nonnull CommitObj commitObj,
-      @Nonnull @jakarta.annotation.Nonnull ObjId commitId)
+      boolean fetchAdditionalInfo, @Nonnull CommitObj commitObj, @Nonnull ObjId commitId)
       throws ObjNotFoundException {
     ImmutableCommit.Builder commit =
         Commit.builder()
@@ -150,7 +199,11 @@ public final class ContentMapping {
           ContentKey key = keys.get(i);
           assert obj instanceof ContentValueObj;
           ContentValueObj contentValue = (ContentValueObj) obj;
-          commit.addOperations(Put.ofLazy(key, contentValue.payload(), contentValue.data()));
+          commit.addOperations(
+              Put.of(
+                  key,
+                  DefaultStoreWorker.instance()
+                      .valueFromStore(contentValue.payload(), contentValue.data())));
         }
       }
     }

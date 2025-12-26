@@ -14,42 +14,73 @@
  * limitations under the License.
  */
 
+import java.net.URI
 import java.util.Properties
 
 includeBuild("build-logic") { name = "nessie-build-logic" }
 
-if (!JavaVersion.current().isCompatibleWith(JavaVersion.VERSION_11)) {
-  throw GradleException("Build requires Java 11")
+if (!JavaVersion.current().isCompatibleWith(JavaVersion.VERSION_21)) {
+  throw GradleException("Build requires Java 21")
 }
 
 val baseVersion = file("version.txt").readText().trim()
 
 pluginManagement {
   repositories {
-    mavenCentral() // prefer Maven Central, in case Gradle's repo has issues
-    gradlePluginPortal()
     if (System.getProperty("withMavenLocal").toBoolean()) {
       mavenLocal()
+    }
+    mavenCentral() // prefer Maven Central, in case Gradle's repo has issues
+    gradlePluginPortal()
+  }
+}
+
+dependencyResolutionManagement {
+  repositoriesMode = RepositoriesMode.FAIL_ON_PROJECT_REPOS
+  repositories {
+    if (System.getProperty("withMavenLocal", "false").toBoolean()) {
+      mavenLocal()
+    }
+    mavenCentral()
+    gradlePluginPortal()
+    if (System.getProperty("withApacheSnapshots", "false").toBoolean()) {
+      maven {
+        name = "Apache Snapshots"
+        url = URI("https://repository.apache.org/content/repositories/snapshots/")
+        mavenContent { snapshotsOnly() }
+        metadataSources {
+          // Workaround for
+          // https://youtrack.jetbrains.com/issue/IDEA-327421/IJ-fails-to-import-Gradle-project-with-dependency-with-classifier
+          ignoreGradleMetadataRedirection()
+          mavenPom()
+        }
+      }
+    }
+    // Only used for nessie-events-ri
+    maven {
+      name = "Confluent"
+      url = URI("https://packages.confluent.io/maven/")
+      mavenContent { releasesOnly() }
     }
   }
 }
 
 plugins {
-  id("com.gradle.enterprise") version ("3.13.4")
+  id("com.gradle.develocity") version ("4.3")
   if (System.getenv("CI") != null || System.getProperty("allow-java-download").toBoolean()) {
     // Enable automatic Java toolchain download in CI or when explicitly requested by the user.
     // If in doubt, install the required Java toolchain manually, preferably using a "proper"
     // package manager. The downside of letting Gradle automatically download toolchains is that
     // these will only get downloaded once, but not automatically updated.
-    id("org.gradle.toolchains.foojay-resolver-convention") version ("0.5.0")
+    id("org.gradle.toolchains.foojay-resolver-convention") version ("1.0.0")
   }
 }
 
-gradleEnterprise {
+develocity {
   if (System.getenv("CI") != null) {
     buildScan {
-      termsOfServiceUrl = "https://gradle.com/terms-of-service"
-      termsOfServiceAgree = "yes"
+      termsOfUseUrl = "https://gradle.com/terms-of-service"
+      termsOfUseAgree = "yes"
       // Add some potentially interesting information from the environment
       listOf(
           "GITHUB_ACTION_REPOSITORY",
@@ -62,7 +93,7 @@ gradleEnterprise {
           "GITHUB_RUN_ID",
           "GITHUB_RUN_NUMBER",
           "GITHUB_SHA",
-          "GITHUB_WORKFLOW"
+          "GITHUB_WORKFLOW",
         )
         .forEach { e ->
           val v = System.getenv(e)
@@ -77,7 +108,11 @@ gradleEnterprise {
         link("Summary", "$ghUrl/$ghRepo/actions/runs/$ghRunId")
         link("PRs", "$ghUrl/$ghRepo/pulls")
       }
+      buildScan { publishing { onlyIf { true } } }
     }
+  } else {
+    val isBuildScan = gradle.startParameter.isBuildScan
+    buildScan { publishing { onlyIf { isBuildScan } } }
   }
 }
 
@@ -120,6 +155,7 @@ loadProjects("gradle/projects.main.properties", groupIdMain)
 
 val ideSyncActive =
   System.getProperty("idea.sync.active").toBoolean() ||
+    System.getProperty("idea.active").toBoolean() ||
     System.getProperty("eclipse.product") != null ||
     gradle.startParameter.taskNames.any { it.startsWith("eclipse") }
 
@@ -134,9 +170,10 @@ if (gradle.parent != null && ideSyncActive) {
   }
 }
 
-// Cannot use isIntegrationsTestingEnabled() in build-logic/src/main/kotlin/Utilities.kt, because
-// settings.gradle is evaluated before build-logic.
-if (!System.getProperty("nessie.integrationsTesting.enable").toBoolean()) {
+// Cannot use isIncludedInNesQuEIT() in build-logic/src/main/kotlin/Utilities.kt, because
+// settings.gradle is evaluated before build-logic, also the the parent's rootProject is not
+// available here.
+if (gradle.parent == null) {
   loadProjects("gradle/projects.iceberg.properties", groupIdIntegrations)
 
   val sparkScala = loadProperties(file("integrations/spark-scala.properties"))
@@ -157,7 +194,7 @@ if (!System.getProperty("nessie.integrationsTesting.enable").toBoolean()) {
       nessieProject(
           artifactId,
           groupIdIntegrations,
-          file("integrations/spark-extensions/v${sparkVersion}")
+          file("integrations/spark-extensions/v${sparkVersion}"),
         )
         .buildFileName = "../build.gradle.kts"
       if (first) {

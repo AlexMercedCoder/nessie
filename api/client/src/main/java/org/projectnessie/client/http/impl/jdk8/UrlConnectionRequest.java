@@ -19,115 +19,41 @@ import static org.projectnessie.client.http.impl.HttpUtils.applyHeaders;
 
 import java.io.IOException;
 import java.net.HttpURLConnection;
-import java.net.MalformedURLException;
-import java.net.ProtocolException;
-import java.net.SocketTimeoutException;
 import java.net.URI;
-import java.util.List;
-import java.util.function.BiConsumer;
 import javax.net.ssl.HttpsURLConnection;
 import org.projectnessie.client.http.HttpClient.Method;
-import org.projectnessie.client.http.HttpClientException;
-import org.projectnessie.client.http.HttpClientReadTimeoutException;
-import org.projectnessie.client.http.HttpRequest;
-import org.projectnessie.client.http.HttpResponse;
 import org.projectnessie.client.http.RequestContext;
 import org.projectnessie.client.http.ResponseContext;
+import org.projectnessie.client.http.Status;
 import org.projectnessie.client.http.impl.BaseHttpRequest;
 import org.projectnessie.client.http.impl.HttpRuntimeConfig;
-import org.projectnessie.client.http.impl.RequestContextImpl;
 
 /** Class to hold an ongoing HTTP request and its parameters/filters. */
 final class UrlConnectionRequest extends BaseHttpRequest {
 
-  UrlConnectionRequest(HttpRuntimeConfig config) {
-    super(config);
+  UrlConnectionRequest(HttpRuntimeConfig config, URI baseUri) {
+    super(config, baseUri);
   }
 
   @Override
-  public HttpResponse executeRequest(Method method, Object body) throws HttpClientException {
-    URI uri = uriBuilder.build();
-    try {
-      HttpURLConnection con = (HttpURLConnection) uri.toURL().openConnection();
-      con.setReadTimeout(config.getReadTimeoutMillis());
-      con.setConnectTimeout(config.getConnectionTimeoutMillis());
-      if (con instanceof HttpsURLConnection) {
-        ((HttpsURLConnection) con).setSSLSocketFactory(config.getSslContext().getSocketFactory());
-      }
-      RequestContext context = new RequestContextImpl(headers, uri, method, body);
-      ResponseContext responseContext = new UrlConnectionResponseContext(con, uri);
-      try {
-
-        boolean doesOutput = prepareRequest(context);
-
-        applyHeaders(headers, con);
-        con.setRequestMethod(method.name());
-
-        if (doesOutput) {
-          con.setDoOutput(true);
-
-          writeToOutputStream(context, con.getOutputStream());
-        }
-        con.connect();
-        con.getResponseCode(); // call to ensure http request is complete
-
-        List<BiConsumer<ResponseContext, Exception>> callbacks = context.getResponseCallbacks();
-        if (callbacks != null) {
-          callbacks.forEach(callback -> callback.accept(responseContext, null));
-        }
-      } catch (IOException e) {
-        List<BiConsumer<ResponseContext, Exception>> callbacks = context.getResponseCallbacks();
-        if (callbacks != null) {
-          callbacks.forEach(callback -> callback.accept(null, e));
-        }
-        throw e;
-      }
-
-      config.getResponseFilters().forEach(responseFilter -> responseFilter.filter(responseContext));
-
-      return config.responseFactory().make(responseContext, config.getMapper());
-    } catch (ProtocolException e) {
-      throw new HttpClientException(
-          String.format("Cannot perform request against '%s'. Invalid protocol %s", uri, method),
-          e);
-    } catch (MalformedURLException e) {
-      throw new HttpClientException(
-          String.format("Cannot perform %s request. Malformed Url for %s", method, uri), e);
-    } catch (SocketTimeoutException e) {
-      throw new HttpClientReadTimeoutException(
-          String.format(
-              "Cannot finish %s request against '%s'. Timeout while waiting for response with a timeout of %ds",
-              method, uri, config.getReadTimeoutMillis() / 1000),
-          e);
-    } catch (IOException e) {
-      throw new HttpClientException(
-          String.format("Failed to execute %s request against '%s'.", method, uri), e);
+  protected ResponseContext sendAndReceive(
+      URI uri, Method method, Object body, RequestContext requestContext) throws IOException {
+    HttpURLConnection con = (HttpURLConnection) uri.toURL().openConnection();
+    con.setReadTimeout(config.getReadTimeoutMillis());
+    con.setConnectTimeout(config.getConnectionTimeoutMillis());
+    if (con instanceof HttpsURLConnection) {
+      ((HttpsURLConnection) con).setSSLSocketFactory(config.getSslContext().getSocketFactory());
     }
-  }
 
-  @Override
-  public HttpResponse get() throws HttpClientException {
-    return executeRequest(Method.GET, null);
-  }
+    applyHeaders(headers, con);
+    con.setRequestMethod(method.name());
 
-  @Override
-  public HttpResponse delete() throws HttpClientException {
-    return executeRequest(Method.DELETE, null);
-  }
-
-  @Override
-  public HttpResponse post(Object obj) throws HttpClientException {
-    return executeRequest(Method.POST, obj);
-  }
-
-  @Override
-  public HttpResponse put(Object obj) throws HttpClientException {
-    return executeRequest(Method.PUT, obj);
-  }
-
-  @Override
-  public HttpRequest resolveTemplate(String name, String value) {
-    uriBuilder.resolveTemplate(name, value);
-    return this;
+    if (requestContext.doesOutput()) {
+      con.setDoOutput(true);
+      writeToOutputStream(requestContext, con.getOutputStream());
+    }
+    con.connect();
+    Status status = Status.fromCode(con.getResponseCode());
+    return new UrlConnectionResponseContext(con, uri, status);
   }
 }

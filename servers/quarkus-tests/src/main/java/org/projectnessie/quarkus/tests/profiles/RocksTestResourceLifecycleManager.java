@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 Dremio
+ * Copyright (C) 2024 Dremio
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,8 +15,35 @@
  */
 package org.projectnessie.quarkus.tests.profiles;
 
-public class RocksTestResourceLifecycleManager extends AbstractRocksTestResourceLifecycleManager {
-  public RocksTestResourceLifecycleManager() {
-    super("nessie.version.store.rocks.db-path");
+import io.quarkus.test.common.QuarkusTestResourceLifecycleManager;
+import java.util.Map;
+import org.projectnessie.versioned.storage.rocksdbtests.RocksDBBackendTestFactory;
+
+public class RocksTestResourceLifecycleManager implements QuarkusTestResourceLifecycleManager {
+
+  private RocksDBBackendTestFactory rocksdb;
+
+  @Override
+  public Map<String, String> start() {
+    rocksdb = new RocksDBBackendTestFactory();
+
+    try {
+      rocksdb.start();
+    } catch (Exception e) {
+      throw new RuntimeException(e);
+    }
+
+    return rocksdb.getQuarkusConfig();
+  }
+
+  @Override
+  public void stop() {
+    if (rocksdb != null) {
+      try {
+        rocksdb.stop();
+      } catch (Exception e) {
+        throw new RuntimeException(e);
+      }
+    }
   }
 }

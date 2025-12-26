@@ -16,16 +16,15 @@
 package org.projectnessie.jaxrs.ext;
 
 import static org.jboss.weld.environment.se.Weld.SHUTDOWN_HOOK_SYSTEM_PROPERTY;
-import static org.projectnessie.services.config.ServerConfigExtension.SERVER_CONFIG;
 import static org.projectnessie.versioned.storage.common.logic.Logics.repositoryLogic;
 
+import jakarta.enterprise.inject.spi.Extension;
+import jakarta.ws.rs.core.Application;
+import jakarta.ws.rs.core.SecurityContext;
 import java.net.URI;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
-import javax.enterprise.inject.spi.Extension;
-import javax.ws.rs.core.Application;
-import javax.ws.rs.core.SecurityContext;
 import org.glassfish.jersey.message.DeflateEncoder;
 import org.glassfish.jersey.message.GZipEncoder;
 import org.glassfish.jersey.server.ResourceConfig;
@@ -38,37 +37,33 @@ import org.junit.jupiter.api.extension.AfterTestExecutionCallback;
 import org.junit.jupiter.api.extension.BeforeAllCallback;
 import org.junit.jupiter.api.extension.BeforeEachCallback;
 import org.junit.jupiter.api.extension.ExtensionContext;
-import org.junit.jupiter.api.extension.ExtensionContext.Store.CloseableResource;
 import org.junit.jupiter.api.extension.ParameterContext;
 import org.junit.jupiter.api.extension.ParameterResolutionException;
 import org.junit.jupiter.api.extension.ParameterResolver;
 import org.projectnessie.client.ext.NessieClientResolver;
 import org.projectnessie.services.authz.AbstractBatchAccessChecker;
 import org.projectnessie.services.authz.AccessContext;
-import org.projectnessie.services.authz.AuthorizerExtension;
 import org.projectnessie.services.authz.BatchAccessChecker;
-import org.projectnessie.services.config.ServerConfigExtension;
 import org.projectnessie.services.impl.ConfigApiImpl;
 import org.projectnessie.services.impl.TreeApiImpl;
+import org.projectnessie.services.rest.AccessCheckExceptionMapper;
+import org.projectnessie.services.rest.BackendLimitExceededExceptionMapper;
 import org.projectnessie.services.rest.RestConfigResource;
 import org.projectnessie.services.rest.RestContentResource;
 import org.projectnessie.services.rest.RestDiffResource;
 import org.projectnessie.services.rest.RestNamespaceResource;
-import org.projectnessie.services.rest.RestRefLogResource;
 import org.projectnessie.services.rest.RestTreeResource;
 import org.projectnessie.services.rest.RestV2ConfigResource;
 import org.projectnessie.services.rest.RestV2TreeResource;
-import org.projectnessie.services.restjavax.ConstraintViolationExceptionMapper;
-import org.projectnessie.services.restjavax.ContentKeyParamConverterProvider;
-import org.projectnessie.services.restjavax.NamespaceParamConverterProvider;
-import org.projectnessie.services.restjavax.NessieExceptionMapper;
-import org.projectnessie.services.restjavax.NessieJaxRsJsonMappingExceptionMapper;
-import org.projectnessie.services.restjavax.NessieJaxRsJsonParseExceptionMapper;
-import org.projectnessie.services.restjavax.ReferenceTypeParamConverterProvider;
-import org.projectnessie.services.restjavax.ValidationExceptionMapper;
-import org.projectnessie.versioned.PersistVersionStoreExtension;
-import org.projectnessie.versioned.VersionStoreImplExtension;
-import org.projectnessie.versioned.persist.adapter.DatabaseAdapter;
+import org.projectnessie.services.rest.converters.ContentKeyParamConverterProvider;
+import org.projectnessie.services.rest.converters.NamespaceParamConverterProvider;
+import org.projectnessie.services.rest.converters.ReferenceTypeParamConverterProvider;
+import org.projectnessie.services.rest.exceptions.ConstraintViolationExceptionMapper;
+import org.projectnessie.services.rest.exceptions.NessieExceptionMapper;
+import org.projectnessie.services.rest.exceptions.NessieJaxRsJsonMappingExceptionMapper;
+import org.projectnessie.services.rest.exceptions.NessieJaxRsJsonParseExceptionMapper;
+import org.projectnessie.services.rest.exceptions.NotSupportedExceptionMapper;
+import org.projectnessie.services.rest.exceptions.ValidationExceptionMapper;
 import org.projectnessie.versioned.storage.common.logic.RepositoryLogic;
 import org.projectnessie.versioned.storage.common.persist.Persist;
 
@@ -82,31 +77,18 @@ public class NessieJaxRsExtension extends NessieClientResolver
   private static final ExtensionContext.Namespace NAMESPACE =
       ExtensionContext.Namespace.create(NessieJaxRsExtension.class);
 
-  private final Supplier<DatabaseAdapter> databaseAdapterSupplier;
   private final Supplier<Persist> persistSupplier;
 
   public NessieJaxRsExtension() {
     throw new UnsupportedOperationException();
   }
 
-  @Deprecated
-  public NessieJaxRsExtension(Supplier<DatabaseAdapter> databaseAdapterSupplier) {
-    this(databaseAdapterSupplier, null);
-  }
-
-  private NessieJaxRsExtension(
-      Supplier<DatabaseAdapter> databaseAdapterSupplier, Supplier<Persist> persistSupplier) {
-    this.databaseAdapterSupplier = databaseAdapterSupplier;
+  public NessieJaxRsExtension(Supplier<Persist> persistSupplier) {
     this.persistSupplier = persistSupplier;
   }
 
-  public static NessieJaxRsExtension jaxRsExtensionForDatabaseAdapter(
-      Supplier<DatabaseAdapter> databaseAdapterSupplier) {
-    return new NessieJaxRsExtension(databaseAdapterSupplier, null);
-  }
-
   public static NessieJaxRsExtension jaxRsExtension(Supplier<Persist> persistSupplier) {
-    return new NessieJaxRsExtension(null, persistSupplier);
+    return new NessieJaxRsExtension(persistSupplier);
   }
 
   private EnvHolder getEnv(ExtensionContext extensionContext) {
@@ -131,22 +113,14 @@ public class NessieJaxRsExtension extends NessieClientResolver
             key -> {
               try {
                 Extension versionStoreExtension =
-                    databaseAdapterSupplier != null
-                        ? PersistVersionStoreExtension.forDatabaseAdapter(
-                            () -> {
-                              DatabaseAdapter databaseAdapter = databaseAdapterSupplier.get();
-                              databaseAdapter.eraseRepo();
-                              databaseAdapter.initializeRepo(SERVER_CONFIG.getDefaultBranch());
-                              return databaseAdapter;
-                            })
-                        : VersionStoreImplExtension.forPersist(
-                            () -> {
-                              Persist persist = persistSupplier.get();
-                              persist.erase();
-                              RepositoryLogic repositoryLogic = repositoryLogic(persist);
-                              repositoryLogic.initialize("main");
-                              return persist;
-                            });
+                    VersionStoreImplExtension.forPersist(
+                        () -> {
+                          Persist persist = persistSupplier.get();
+                          persist.erase();
+                          RepositoryLogic repositoryLogic = repositoryLogic(persist);
+                          repositoryLogic.initialize("main");
+                          return persist;
+                        });
 
                 return new EnvHolder(versionStoreExtension);
               } catch (Exception e) {
@@ -209,7 +183,7 @@ public class NessieJaxRsExtension extends NessieClientResolver
     return getEnv(extensionContext).jerseyTest.target().getUri();
   }
 
-  private static class EnvHolder implements CloseableResource {
+  private static class EnvHolder implements AutoCloseable {
     private final Weld weld;
     private final JerseyTest jerseyTest;
     private SecurityContext securityContext;
@@ -254,15 +228,15 @@ public class NessieJaxRsExtension extends NessieClientResolver
               config.register(RestContentResource.class);
               config.register(RestDiffResource.class);
               config.register(RestNamespaceResource.class);
-              @SuppressWarnings("deprecation")
-              Class<?> refLogResource = RestRefLogResource.class;
-              config.register(refLogResource);
               config.register(ConfigApiImpl.class);
               config.register(ContentKeyParamConverterProvider.class);
               config.register(NamespaceParamConverterProvider.class);
               config.register(ReferenceTypeParamConverterProvider.class);
               config.register(ValidationExceptionMapper.class, 10);
+              config.register(AccessCheckExceptionMapper.class, 10);
               config.register(ConstraintViolationExceptionMapper.class, 10);
+              config.register(BackendLimitExceededExceptionMapper.class, 10);
+              config.register(NotSupportedExceptionMapper.class, 10);
               config.register(NessieExceptionMapper.class);
               config.register(NessieJaxRsJsonParseExceptionMapper.class, 10);
               config.register(NessieJaxRsJsonMappingExceptionMapper.class, 10);
@@ -289,7 +263,7 @@ public class NessieJaxRsExtension extends NessieClientResolver
     }
 
     @Override
-    public void close() throws Throwable {
+    public void close() throws Exception {
       jerseyTest.tearDown();
       weld.shutdown();
     }

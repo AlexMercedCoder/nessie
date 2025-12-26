@@ -18,23 +18,26 @@ package org.projectnessie.versioned.storage.versionstore;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.Maps.newHashMapWithExpectedSize;
 import static java.util.Collections.emptyList;
-import static java.util.Collections.emptyMap;
 import static java.util.Collections.singleton;
 import static java.util.Objects.requireNonNull;
 import static org.projectnessie.model.IdentifiedContentKey.identifiedContentKeyFromContent;
 import static org.projectnessie.nessie.relocated.protobuf.ByteString.copyFromUtf8;
 import static org.projectnessie.versioned.ContentResult.contentResult;
+import static org.projectnessie.versioned.ReferenceHistory.ReferenceHistoryElement.referenceHistoryElement;
+import static org.projectnessie.versioned.storage.common.indexes.StoreIndexes.emptyImmutableIndex;
 import static org.projectnessie.versioned.storage.common.logic.CommitLogQuery.commitLogQuery;
 import static org.projectnessie.versioned.storage.common.logic.DiffQuery.diffQuery;
 import static org.projectnessie.versioned.storage.common.logic.Logics.commitLogic;
+import static org.projectnessie.versioned.storage.common.logic.Logics.consistencyLogic;
 import static org.projectnessie.versioned.storage.common.logic.Logics.indexesLogic;
 import static org.projectnessie.versioned.storage.common.logic.Logics.referenceLogic;
 import static org.projectnessie.versioned.storage.common.logic.Logics.repositoryLogic;
 import static org.projectnessie.versioned.storage.common.logic.PagingToken.fromString;
 import static org.projectnessie.versioned.storage.common.logic.PagingToken.pagingToken;
 import static org.projectnessie.versioned.storage.common.logic.ReferencesQuery.referencesQuery;
+import static org.projectnessie.versioned.storage.common.objtypes.CommitOp.COMMIT_OP_SERIALIZER;
+import static org.projectnessie.versioned.storage.common.objtypes.StandardObjType.COMMIT;
 import static org.projectnessie.versioned.storage.common.persist.ObjId.EMPTY_OBJ_ID;
-import static org.projectnessie.versioned.storage.common.persist.ObjType.COMMIT;
 import static org.projectnessie.versioned.storage.common.persist.Reference.reference;
 import static org.projectnessie.versioned.storage.versionstore.BaseCommitHelper.committingOperation;
 import static org.projectnessie.versioned.storage.versionstore.BaseCommitHelper.dryRunCommitterSupplier;
@@ -59,6 +62,9 @@ import static org.projectnessie.versioned.storage.versionstore.TypeMapping.store
 import static org.projectnessie.versioned.storage.versionstore.TypeMapping.toCommitMeta;
 import static org.projectnessie.versioned.store.DefaultStoreWorker.contentTypeForPayload;
 
+import com.google.common.collect.AbstractIterator;
+import jakarta.annotation.Nonnull;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
@@ -66,17 +72,24 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
+import java.util.function.BiPredicate;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
-import javax.annotation.Nonnull;
+import javax.annotation.CheckForNull;
+import org.projectnessie.model.CommitConsistency;
 import org.projectnessie.model.CommitMeta;
 import org.projectnessie.model.Content;
 import org.projectnessie.model.ContentKey;
 import org.projectnessie.model.IdentifiedContentKey;
+import org.projectnessie.model.Operation;
+import org.projectnessie.model.RepositoryConfig;
 import org.projectnessie.versioned.BranchName;
 import org.projectnessie.versioned.Commit;
 import org.projectnessie.versioned.CommitResult;
@@ -89,26 +102,28 @@ import org.projectnessie.versioned.Hash;
 import org.projectnessie.versioned.ImmutableReferenceAssignedResult;
 import org.projectnessie.versioned.ImmutableReferenceCreatedResult;
 import org.projectnessie.versioned.ImmutableReferenceDeletedResult;
+import org.projectnessie.versioned.ImmutableReferenceHistory;
 import org.projectnessie.versioned.ImmutableReferenceInfo;
 import org.projectnessie.versioned.ImmutableRepositoryInformation;
 import org.projectnessie.versioned.KeyEntry;
 import org.projectnessie.versioned.MergeConflictException;
 import org.projectnessie.versioned.MergeResult;
+import org.projectnessie.versioned.MergeTransplantResultBase;
 import org.projectnessie.versioned.NamedRef;
-import org.projectnessie.versioned.Operation;
 import org.projectnessie.versioned.Ref;
-import org.projectnessie.versioned.RefLogDetails;
 import org.projectnessie.versioned.ReferenceAlreadyExistsException;
 import org.projectnessie.versioned.ReferenceAssignedResult;
 import org.projectnessie.versioned.ReferenceConflictException;
 import org.projectnessie.versioned.ReferenceCreatedResult;
 import org.projectnessie.versioned.ReferenceDeletedResult;
+import org.projectnessie.versioned.ReferenceHistory;
 import org.projectnessie.versioned.ReferenceInfo;
 import org.projectnessie.versioned.ReferenceInfo.CommitsAheadBehind;
 import org.projectnessie.versioned.ReferenceNotFoundException;
 import org.projectnessie.versioned.RelativeCommitSpec;
 import org.projectnessie.versioned.RepositoryInformation;
 import org.projectnessie.versioned.TagName;
+import org.projectnessie.versioned.TransplantResult;
 import org.projectnessie.versioned.VersionStore;
 import org.projectnessie.versioned.paging.FilteringPaginationIterator;
 import org.projectnessie.versioned.paging.PaginationIterator;
@@ -121,6 +136,7 @@ import org.projectnessie.versioned.storage.common.indexes.StoreIndex;
 import org.projectnessie.versioned.storage.common.indexes.StoreIndexElement;
 import org.projectnessie.versioned.storage.common.indexes.StoreKey;
 import org.projectnessie.versioned.storage.common.logic.CommitLogic;
+import org.projectnessie.versioned.storage.common.logic.ConsistencyLogic;
 import org.projectnessie.versioned.storage.common.logic.DiffEntry;
 import org.projectnessie.versioned.storage.common.logic.DiffPagedResult;
 import org.projectnessie.versioned.storage.common.logic.IndexesLogic;
@@ -137,6 +153,7 @@ import org.projectnessie.versioned.storage.versionstore.BaseCommitHelper.Committ
 
 public class VersionStoreImpl implements VersionStore {
 
+  public static final int GET_KEYS_CONTENT_BATCH_SIZE = 50;
   private final Persist persist;
 
   @SuppressWarnings("unused")
@@ -149,7 +166,6 @@ public class VersionStoreImpl implements VersionStore {
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
   public RepositoryInformation getRepositoryInformation() {
     ImmutableRepositoryInformation.Builder repoInfo =
@@ -165,7 +181,6 @@ public class VersionStoreImpl implements VersionStore {
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
   public Hash noAncestorHash() {
     return RefMapping.NO_ANCESTOR;
@@ -213,7 +228,7 @@ public class VersionStoreImpl implements VersionStore {
               ? asBranchName(namedRef.getName())
               : asTagName(namedRef.getName());
       try {
-        referenceLogic.getReference(mustNotExist);
+        referenceLogic.getReferenceForUpdate(mustNotExist);
         // A tag with the same name as the branch being created (or a branch with the same name
         // as the tag being created) already exists.
         throw referenceAlreadyExists(namedRef);
@@ -235,31 +250,41 @@ public class VersionStoreImpl implements VersionStore {
   }
 
   @Override
-  public ReferenceAssignedResult assign(
-      NamedRef namedRef, Optional<Hash> expectedHash, Hash targetHash)
+  public ReferenceAssignedResult assign(NamedRef namedRef, Hash expectedHash, Hash targetHash)
       throws ReferenceNotFoundException, ReferenceConflictException {
     String refName = namedRefToRefName(namedRef);
     ReferenceLogic referenceLogic = referenceLogic(persist);
     Reference expected;
     try {
-      expected = referenceLogic.getReference(refName);
+      expected = referenceLogic.getReferenceForUpdate(refName);
     } catch (RefNotFoundException e) {
       throw referenceNotFound(namedRef);
     }
 
     try {
-      if (expectedHash.isPresent()) {
+      Hash currentCommitId;
+      try {
         CommitObj head = commitLogic(persist).headCommit(expected);
-        Hash currentCommitId = head != null ? objIdToHash(head.id()) : NO_ANCESTOR;
-        verifyExpectedHash(currentCommitId, namedRef, expectedHash);
-        expected =
-            reference(
-                refName,
-                hashToObjId(expectedHash.get()),
-                false,
-                expected.createdAtMicros(),
-                expected.extendedInfoObj());
+        currentCommitId = head != null ? objIdToHash(head.id()) : NO_ANCESTOR;
+      } catch (ObjNotFoundException e) {
+        // Special case, when the commit object does not exist. This situation can happen in a
+        // multi-zone/multi-region database setup, when the "primary write target cluster" fails and
+        // the replica cluster(s) had no chance to receive the commit object but the change to the
+        // reference. In case the zone/region is permanently switched (think: data center flooded /
+        // burned down), this code path allows to assign the branch to another commit object, even
+        // if the current HEAD's commit object does not exist.
+        currentCommitId = expectedHash;
       }
+
+      verifyExpectedHash(currentCommitId, namedRef, expectedHash);
+      expected =
+          reference(
+              refName,
+              hashToObjId(expectedHash),
+              false,
+              expected.createdAtMicros(),
+              expected.extendedInfoObj(),
+              expected.previousPointers());
 
       ObjId newPointer = hashToObjId(targetHash);
       if (!EMPTY_OBJ_ID.equals(newPointer) && persist.fetchObjType(newPointer) != COMMIT) {
@@ -284,17 +309,14 @@ public class VersionStoreImpl implements VersionStore {
   }
 
   @Override
-  public ReferenceDeletedResult delete(NamedRef namedRef, Optional<Hash> hash)
+  public ReferenceDeletedResult delete(NamedRef namedRef, Hash hash)
       throws ReferenceNotFoundException, ReferenceConflictException {
     String refName = namedRefToRefName(namedRef);
     ReferenceLogic referenceLogic = referenceLogic(persist);
 
     ObjId expected = EMPTY_OBJ_ID;
     try {
-      expected =
-          hash.isPresent()
-              ? hashToObjId(hash.get())
-              : referenceLogic.getReference(refName).pointer();
+      expected = hashToObjId(hash);
       referenceLogic.deleteReference(refName, expected);
       return ImmutableReferenceDeletedResult.builder()
           .namedRef(namedRef)
@@ -305,12 +327,153 @@ public class VersionStoreImpl implements VersionStore {
       throw referenceNotFound(namedRef);
     } catch (RefConditionFailedException e) {
       RefMapping refMapping = new RefMapping(persist);
-      CommitObj headCommit = refMapping.resolveRefHead(namedRef);
+      CommitObj headCommit = refMapping.resolveRefHeadForUpdate(namedRef);
       throw referenceConflictException(
           namedRef, objIdToHash(expected), headCommit != null ? headCommit.id() : EMPTY_OBJ_ID);
     } catch (RetryTimeoutException e) {
       throw new RuntimeException(e);
     }
+  }
+
+  @Override
+  public ReferenceHistory getReferenceHistory(String refName, Integer headCommitsToScan)
+      throws ReferenceNotFoundException {
+    RefMapping refMapping = new RefMapping(persist);
+    Reference reference = refMapping.resolveNamedRef(refName);
+
+    ImmutableReferenceHistory.Builder history = ImmutableReferenceHistory.builder();
+
+    ConsistencyLogic consistencyLogic = consistencyLogic(persist);
+
+    AtomicBoolean referenceHead = new AtomicBoolean();
+    AtomicReference<CommitObj> headCommit = new AtomicReference<>();
+    ReferenceHistory.ReferenceHistoryElement headCommitStatus =
+        consistencyLogic.checkReference(
+            reference,
+            commitStatus -> {
+              CommitObj commit = commitStatus.commit();
+              ReferenceHistory.ReferenceHistoryElement elem =
+                  referenceHistoryElement(
+                      objIdToHash(commitStatus.id()),
+                      statusToCommitConsistency(commitStatus),
+                      commit != null ? toCommitMeta(commit) : null);
+              if (referenceHead.compareAndSet(false, true)) {
+                history.current(elem);
+                headCommit.set(commit);
+              } else {
+                history.addPrevious(elem);
+              }
+              return elem;
+            });
+
+    history.commitLogConsistency(
+        checkCommitLog(consistencyLogic, headCommit.get(), headCommitsToScan, headCommitStatus));
+
+    return history.build();
+  }
+
+  private static CommitConsistency statusToCommitConsistency(
+      ConsistencyLogic.CommitStatus commitStatus) {
+    if (commitStatus.commit() == null) {
+      if (EMPTY_OBJ_ID.equals(commitStatus.id())) {
+        return CommitConsistency.COMMIT_CONSISTENT;
+      }
+      return CommitConsistency.COMMIT_INCONSISTENT;
+    }
+    if (!commitStatus.indexObjectsAvailable()) {
+      return CommitConsistency.COMMIT_INCONSISTENT;
+    }
+    if (!commitStatus.contentObjectsAvailable()) {
+      return CommitConsistency.COMMIT_CONTENT_INCONSISTENT;
+    }
+    return CommitConsistency.COMMIT_CONSISTENT;
+  }
+
+  /**
+   * Evaluates the state of the commit log for {@link #getReferenceHistory(String, Integer)}, if
+   * requested. This function returns a result that represents the consistency of the commit log
+   * including <em>direct</em> secondary parent commits, the consistency of the "worst" commit.
+   */
+  private CommitConsistency checkCommitLog(
+      ConsistencyLogic consistencyLogic,
+      CommitObj headCommit,
+      Integer headCommitsToScan,
+      ReferenceHistory.ReferenceHistoryElement current) {
+    if (headCommitsToScan == null || headCommitsToScan <= 0) {
+      return CommitConsistency.NOT_CHECKED;
+    }
+    if (current.commitConsistency() == CommitConsistency.COMMIT_INCONSISTENT) {
+      // The HEAD commit is inconsistent - do not check the log (it can't be more consistent)
+      return CommitConsistency.COMMIT_INCONSISTENT;
+    }
+    if (headCommit == null) {
+      // "no commit" - empty reference (EMPTY_OBJ_ID)
+      return CommitConsistency.COMMIT_CONSISTENT;
+    }
+
+    // This function will check at max 1000 commits in the commit log, or until the configured
+    // recorded reference-history interval.
+    int toScan = Math.min(headCommitsToScan, 1000);
+    long nowMicros = persist.config().currentTimeMicros();
+    long inconsistencyWindow =
+        TimeUnit.SECONDS.toMicros(persist.config().referencePreviousHeadTimeSpanSeconds());
+
+    // Start with the HEAD's direct parent, the HEAD itself is checked elsewhere.
+    ObjId commitId = headCommit.directParent();
+
+    // The "initial" result of the commit log cannot be better than the state of the HEAD, so start
+    // with the HEAD's state.
+    CommitConsistency result = current.commitConsistency();
+
+    ConsistencyLogic.CommitStatusCallback<ReferenceHistory.ReferenceHistoryElement> checkCallback =
+        commitStatus -> {
+          CommitObj commit = commitStatus.commit();
+          return referenceHistoryElement(
+              objIdToHash(commitStatus.id()),
+              statusToCommitConsistency(commitStatus),
+              commit != null ? toCommitMeta(commit) : null);
+        };
+
+    while (toScan-- > 0) {
+      if (commitId.equals(EMPTY_OBJ_ID)) {
+        break;
+      }
+
+      CommitObj currentCommit;
+
+      try {
+        currentCommit = persist.fetchTypedObj(commitId, COMMIT, CommitObj.class);
+      } catch (ObjNotFoundException e) {
+        return CommitConsistency.COMMIT_INCONSISTENT;
+      }
+
+      if (nowMicros - currentCommit.created() > inconsistencyWindow) {
+        break;
+      }
+
+      ReferenceHistory.ReferenceHistoryElement elem =
+          consistencyLogic.checkCommit(commitId, checkCallback);
+      if (elem.commitConsistency().ordinal() > result.ordinal()) {
+        // State of the checked commit is worse than the current state.
+        result = elem.commitConsistency();
+      }
+      for (ObjId secondaryParent : currentCommit.secondaryParents()) {
+        elem = consistencyLogic.checkCommit(secondaryParent, checkCallback);
+        if (elem.commitConsistency().ordinal() > result.ordinal()) {
+          // State of the checked commit is worse than the current state.
+          result = elem.commitConsistency();
+        }
+      }
+
+      if (result == CommitConsistency.COMMIT_INCONSISTENT) {
+        // This is the worst state, can return immediately.
+        return result;
+      }
+
+      commitId = currentCommit.directParent();
+    }
+
+    return result;
   }
 
   @Override
@@ -380,7 +543,7 @@ public class VersionStoreImpl implements VersionStore {
             NamedRef namedRef = referenceToNamedRef(reference);
             CommitObj head = commitLogic(persist).headCommit(reference);
             return buildReferenceInfo(params, baseRefHead, commitLogic, namedRef, head);
-          } catch (ReferenceNotFoundException | ObjNotFoundException e) {
+          } catch (ObjNotFoundException e) {
             throw new RuntimeException("Could not resolve reference " + reference, e);
           }
         }) {
@@ -408,7 +571,7 @@ public class VersionStoreImpl implements VersionStore {
       CommitLogic commitLogic,
       NamedRef namedRef,
       CommitObj head)
-      throws ObjNotFoundException, ReferenceNotFoundException {
+      throws ObjNotFoundException {
     ImmutableReferenceInfo.Builder<CommitMeta> refInfo =
         ReferenceInfo.<CommitMeta>builder().namedRef(namedRef);
 
@@ -523,7 +686,7 @@ public class VersionStoreImpl implements VersionStore {
             key -> {
               StoreKey storeKey = keyToStoreKey(key);
               StoreIndexElement<CommitOp> indexElement = index.get(storeKey);
-              if (indexElement == null || !indexElement.content().action().exists()) {
+              if (indexElement == null) {
                 return null;
               }
               CommitOp content = indexElement.content();
@@ -558,20 +721,8 @@ public class VersionStoreImpl implements VersionStore {
         index.iterator(keyRanges.beginStoreKey(), keyRanges.endStoreKey(), false);
     ContentMapping contentMapping = new ContentMapping(persist);
 
-    Predicate<StoreIndexElement<CommitOp>> keyPredicate =
-        indexElement ->
-            indexElement.content().action().exists()
-                && indexElement.key().endsWithElement(CONTENT_DISCRIMINATOR);
-    Predicate<ContentKey> contentKeyPredicate = keyRestrictions.contentKeyPredicate();
-    if (contentKeyPredicate != null) {
-      keyPredicate =
-          keyPredicate.and(
-              indexElement -> {
-                ContentKey key = storeKeyToKey(indexElement.key());
-                // Note: key==null, if not the "main universe" or not a "content" discriminator
-                return key != null && contentKeyPredicate.test(key);
-              });
-    }
+    BiPredicate<ContentKey, Content.Type> contentKeyPredicate =
+        keyRestrictions.contentKeyPredicate();
 
     Predicate<StoreIndexElement<CommitOp>> stopPredicate;
     ContentKey prefixKey = keyRestrictions.prefixKey();
@@ -582,37 +733,99 @@ public class VersionStoreImpl implements VersionStore {
       stopPredicate = x -> false;
     }
 
-    return new FilteringPaginationIterator<>(
-        result,
-        indexElement -> {
-          try {
-            ContentKey key = storeKeyToKey(indexElement.key());
-            CommitOp commitOp = indexElement.content();
-            Content.Type contentType = contentTypeForPayload(commitOp.payload());
+    // "Base" iterator, which maps StoreIndexElement objects to ContentKey and CommitOp and also
+    // filters out non-content keys and non-live CommitOps.
+    Iterator<ContentKeyWithCommitOp> keyAndOp =
+        new AbstractIterator<>() {
+          @CheckForNull
+          @Override
+          protected ContentKeyWithCommitOp computeNext() {
+            while (true) {
+              if (!result.hasNext()) {
+                return endOfData();
+              }
 
-            if (withContent) {
-              Content c =
-                  contentMapping.fetchContent(
-                      requireNonNull(
-                          indexElement.content().value(), "Required value pointer is null"));
-              return KeyEntry.of(buildIdentifiedKey(key, index, c, x -> null), c);
+              StoreIndexElement<CommitOp> indexElement = result.next();
+
+              if (stopPredicate.test(indexElement)) {
+                return endOfData();
+              }
+
+              StoreKey storeKey = indexElement.key();
+
+              if (!indexElement.content().action().exists()
+                  || !indexElement.key().endsWithElement(CONTENT_DISCRIMINATOR)) {
+                continue;
+              }
+
+              ContentKey key = storeKeyToKey(storeKey);
+
+              if (contentKeyPredicate != null
+                  && !contentKeyPredicate.test(
+                      key, contentTypeForPayload(indexElement.content().payload()))) {
+                continue;
+              }
+
+              return new ContentKeyWithCommitOp(storeKey, key, indexElement.content());
             }
-
-            UUID contentId = commitOp.contentId();
-            String contentIdString =
-                contentId != null ? contentId.toString() : contentIdFromContent(commitOp);
-            return KeyEntry.of(
-                buildIdentifiedKey(key, index, contentType, contentIdString, x -> null));
-          } catch (ObjNotFoundException e) {
-            throw new RuntimeException("Could not fetch or map content", e);
           }
-        },
-        keyPredicate,
-        stopPredicate) {
+        };
+
+    // "Fetch content" iterator - same as the "base" iterator when not fetching the content,
+    // fetches contents in batches if 'withContent == true'.
+    Iterator<ContentKeyWithCommitOp> fetchContent =
+        withContent
+            ? new AbstractIterator<>() {
+              final List<ContentKeyWithCommitOp> batch =
+                  new ArrayList<>(GET_KEYS_CONTENT_BATCH_SIZE);
+
+              Iterator<ContentKeyWithCommitOp> current;
+
+              @CheckForNull
+              @Override
+              protected ContentKeyWithCommitOp computeNext() {
+                Iterator<ContentKeyWithCommitOp> c = current;
+                if (c != null && c.hasNext()) {
+                  return c.next();
+                }
+
+                for (int i = 0; i < GET_KEYS_CONTENT_BATCH_SIZE; i++) {
+                  if (!keyAndOp.hasNext()) {
+                    break;
+                  }
+                  batch.add(keyAndOp.next());
+                }
+
+                if (batch.isEmpty()) {
+                  current = null;
+                  return endOfData();
+                }
+
+                try {
+                  Map<ContentKey, Content> contents =
+                      contentMapping.fetchContents(
+                          index, batch.stream().map(op -> op.key).collect(Collectors.toList()));
+                  for (ContentKeyWithCommitOp op : batch) {
+                    op.content = contents.get(op.key);
+                  }
+                } catch (ObjNotFoundException e) {
+                  throw new RuntimeException("Could not fetch or map content", e);
+                }
+                current = new ArrayList<>(batch).iterator();
+                batch.clear();
+                return current.next();
+              }
+            }
+            : keyAndOp;
+
+    // "Final" iterator, adding functionality for paging. Needs to be a separate instance, because
+    // we cannot use the "base" iterator to provide the token for the "current" entry.
+    return new PaginationIterator<>() {
+      ContentKeyWithCommitOp current;
+
       @Override
-      protected String computeTokenForCurrent() {
-        StoreIndexElement<CommitOp> c = current();
-        return c != null ? token(c.key()) : null;
+      public String tokenForCurrent() {
+        return token(current.storeKey);
       }
 
       @Override
@@ -623,21 +836,67 @@ public class VersionStoreImpl implements VersionStore {
       private String token(StoreKey storeKey) {
         return pagingToken(copyFromUtf8(storeKey.rawString())).asString();
       }
+
+      @Override
+      public boolean hasNext() {
+        return fetchContent.hasNext();
+      }
+
+      @Override
+      public KeyEntry next() {
+        ContentKeyWithCommitOp c = current = fetchContent.next();
+
+        if (c.content != null) {
+          return KeyEntry.of(buildIdentifiedKey(c.key, index, c.content, x -> null), c.content);
+        }
+
+        try {
+          UUID contentId = c.commitOp.contentId();
+          String contentIdString;
+          if (contentId == null) {
+            // this should only be hit by imported legacy nessie repos
+            if (c.content == null) {
+              c.content =
+                  contentMapping.fetchContent(
+                      requireNonNull(c.commitOp.value(), "Required value pointer is null"));
+            }
+            contentIdString = c.content.getId();
+          } else {
+            contentIdString = contentId.toString();
+          }
+          Content.Type contentType = contentTypeForPayload(c.commitOp.payload());
+          return KeyEntry.of(
+              buildIdentifiedKey(c.key, index, contentType, contentIdString, x -> null));
+        } catch (ObjNotFoundException e) {
+          throw new RuntimeException("Could not fetch or map content", e);
+        }
+      }
+
+      @Override
+      public void close() {}
     };
   }
 
-  private String contentIdFromContent(CommitOp commitOp) throws ObjNotFoundException {
-    return new ContentMapping(persist)
-        .fetchContent(requireNonNull(commitOp.value(), "Required value pointer is null"))
-        .getId();
+  static final class ContentKeyWithCommitOp {
+    final StoreKey storeKey;
+    final ContentKey key;
+    final CommitOp commitOp;
+    Content content;
+
+    ContentKeyWithCommitOp(StoreKey storeKey, ContentKey key, CommitOp commitOp) {
+      this.storeKey = storeKey;
+      this.key = key;
+      this.commitOp = commitOp;
+    }
   }
 
   @Override
-  public ContentResult getValue(Ref ref, ContentKey key) throws ReferenceNotFoundException {
+  public ContentResult getValue(Ref ref, ContentKey key, boolean returnNotFound)
+      throws ReferenceNotFoundException {
     RefMapping refMapping = new RefMapping(persist);
     CommitObj head = refMapping.resolveRefHead(ref);
     if (head == null) {
-      return emptyOrNotFound(ref, null);
+      return getValueNotFound(key, returnNotFound, emptyImmutableIndex(COMMIT_OP_SERIALIZER));
     }
     try {
 
@@ -649,7 +908,7 @@ public class VersionStoreImpl implements VersionStore {
 
       StoreIndexElement<CommitOp> indexElement = index.get(storeKey);
       if (indexElement == null || !indexElement.content().action().exists()) {
-        return null;
+        return getValueNotFound(key, returnNotFound, index);
       }
 
       ContentMapping contentMapping = new ContentMapping(persist);
@@ -663,6 +922,15 @@ public class VersionStoreImpl implements VersionStore {
     } catch (ObjNotFoundException e) {
       throw objectNotFound(e);
     }
+  }
+
+  private static ContentResult getValueNotFound(
+      ContentKey key, boolean returnNotFound, StoreIndex<CommitOp> index) {
+    if (returnNotFound) {
+      IdentifiedContentKey identifiedKey = buildIdentifiedKey(key, index, null, null, x -> null);
+      return contentResult(identifiedKey, null, null);
+    }
+    return null;
   }
 
   static IdentifiedContentKey buildIdentifiedKey(
@@ -708,57 +976,50 @@ public class VersionStoreImpl implements VersionStore {
   }
 
   @Override
-  public Map<ContentKey, ContentResult> getValues(Ref ref, Collection<ContentKey> keys)
+  public Map<ContentKey, ContentResult> getValues(
+      Ref ref, Collection<ContentKey> keys, boolean returnNotFound)
       throws ReferenceNotFoundException {
     RefMapping refMapping = new RefMapping(persist);
     CommitObj head = refMapping.resolveRefHead(ref);
-    if (head == null) {
-      return emptyOrNotFound(ref, emptyMap());
-    }
 
     try {
       IndexesLogic indexesLogic = indexesLogic(persist);
-      StoreIndex<CommitOp> index = indexesLogic.buildCompleteIndex(head, Optional.empty());
-
-      // Eagerly bulk-(pre)fetch the requested keys
-      index.loadIfNecessary(
-          keys.stream().map(TypeMapping::keyToStoreKey).collect(Collectors.toSet()));
-
-      Map<ObjId, ContentKey> idsToKeys = newHashMapWithExpectedSize(keys.size());
-      for (ContentKey key : keys) {
-        StoreKey storeKey = keyToStoreKey(key);
-        StoreIndexElement<CommitOp> indexElement = index.get(storeKey);
-        if (indexElement == null || !indexElement.content().action().exists()) {
-          continue;
-        }
-
-        idsToKeys.put(
-            requireNonNull(indexElement.content().value(), "Required value pointer is null"), key);
-      }
+      StoreIndex<CommitOp> index =
+          head != null
+              ? indexesLogic.buildCompleteIndex(head, Optional.empty())
+              : emptyImmutableIndex(COMMIT_OP_SERIALIZER);
 
       ContentMapping contentMapping = new ContentMapping(persist);
-      return contentMapping.fetchContents(idsToKeys).entrySet().stream()
-          .collect(
-              Collectors.toMap(
-                  Map.Entry::getKey,
-                  e ->
-                      contentResult(
-                          buildIdentifiedKey(e.getKey(), index, e.getValue(), x -> null),
-                          e.getValue(),
-                          null)));
+      Map<ContentKey, Content> fetched = contentMapping.fetchContents(index, keys);
+      Map<ContentKey, ContentResult> result = newHashMapWithExpectedSize(keys.size());
+
+      for (ContentKey key : keys) {
+        Content content = fetched.get(key);
+        if (content != null) {
+          result.put(
+              key,
+              contentResult(buildIdentifiedKey(key, index, content, x -> null), content, null));
+        } else if (returnNotFound) {
+          IdentifiedContentKey identifiedKey =
+              buildIdentifiedKey(key, index, null, null, x -> null);
+          result.put(key, contentResult(identifiedKey, null, null));
+        }
+      }
+
+      return result;
     } catch (ObjNotFoundException e) {
       throw objectNotFound(e);
     }
   }
 
   @Override
-  public CommitResult<Commit> commit(
-      @Nonnull @jakarta.annotation.Nonnull BranchName branch,
-      @Nonnull @jakarta.annotation.Nonnull Optional<Hash> referenceHash,
-      @Nonnull @jakarta.annotation.Nonnull CommitMeta metadata,
-      @Nonnull @jakarta.annotation.Nonnull List<Operation> operations,
-      @Nonnull @jakarta.annotation.Nonnull CommitValidator validator,
-      @Nonnull @jakarta.annotation.Nonnull BiConsumer<ContentKey, String> addedContents)
+  public CommitResult commit(
+      @Nonnull BranchName branch,
+      @Nonnull Optional<Hash> referenceHash,
+      @Nonnull CommitMeta metadata,
+      @Nonnull List<Operation> operations,
+      @Nonnull CommitValidator validator,
+      @Nonnull BiConsumer<ContentKey, String> addedContents)
       throws ReferenceNotFoundException, ReferenceConflictException {
     return committingOperation(
         "commit",
@@ -771,7 +1032,7 @@ public class VersionStoreImpl implements VersionStore {
   }
 
   @Override
-  public MergeResult<Commit> merge(MergeOp mergeOp)
+  public MergeResult merge(MergeOp mergeOp)
       throws ReferenceNotFoundException, ReferenceConflictException {
     CommitterSupplier<Merge> supplier = MergeSquashImpl::new;
 
@@ -779,7 +1040,7 @@ public class VersionStoreImpl implements VersionStore {
       supplier = dryRunCommitterSupplier(supplier);
     }
 
-    MergeResult<Commit> mergeResult =
+    MergeResult mergeResult =
         committingOperation(
             "merge",
             mergeOp.toBranch(),
@@ -792,7 +1053,7 @@ public class VersionStoreImpl implements VersionStore {
   }
 
   @Override
-  public MergeResult<Commit> transplant(TransplantOp transplantOp)
+  public TransplantResult transplant(TransplantOp transplantOp)
       throws ReferenceNotFoundException, ReferenceConflictException {
 
     CommitterSupplier<Transplant> supplier = TransplantIndividualImpl::new;
@@ -801,7 +1062,7 @@ public class VersionStoreImpl implements VersionStore {
       supplier = dryRunCommitterSupplier(supplier);
     }
 
-    MergeResult<Commit> mergeResult =
+    TransplantResult mergeResult =
         committingOperation(
             "transplant",
             transplantOp.toBranch(),
@@ -813,7 +1074,7 @@ public class VersionStoreImpl implements VersionStore {
     return mergeTransplantResponse(mergeResult);
   }
 
-  private MergeResult<Commit> mergeTransplantResponse(MergeResult<Commit> mergeResult)
+  private <R extends MergeTransplantResultBase> R mergeTransplantResponse(R mergeResult)
       throws MergeConflictException {
     if (!mergeResult.wasSuccessful()) {
       throw new MergeConflictException(
@@ -863,12 +1124,15 @@ public class VersionStoreImpl implements VersionStore {
 
     ContentMapping contentMapping = new ContentMapping(persist);
 
-    Predicate<ContentKey> contentKeyPredicate = keyRestrictions.contentKeyPredicate();
+    BiPredicate<ContentKey, Content.Type> contentKeyPredicate =
+        keyRestrictions.contentKeyPredicate();
     Predicate<DiffEntry> keyPred =
         contentKeyPredicate != null
             ? d -> {
               ContentKey key = storeKeyToKey(d.key());
-              return key != null && contentKeyPredicate.test(key);
+              return key != null
+                  && (contentKeyPredicate.test(key, contentTypeForPayload(d.fromPayload()))
+                      || contentKeyPredicate.test(key, contentTypeForPayload(d.toPayload())));
             }
             : x -> true;
 
@@ -946,8 +1210,14 @@ public class VersionStoreImpl implements VersionStore {
   }
 
   @Override
-  @Deprecated
-  public Stream<RefLogDetails> getRefLog(Hash refLogId) {
-    throw new UnsupportedOperationException();
+  public List<RepositoryConfig> getRepositoryConfig(
+      Set<RepositoryConfig.Type> repositoryConfigTypes) {
+    return new RepositoryConfigBackend(persist).getConfigs(repositoryConfigTypes);
+  }
+
+  @Override
+  public RepositoryConfig updateRepositoryConfig(RepositoryConfig repositoryConfig)
+      throws ReferenceConflictException {
+    return new RepositoryConfigBackend(persist).updateConfig(repositoryConfig);
   }
 }

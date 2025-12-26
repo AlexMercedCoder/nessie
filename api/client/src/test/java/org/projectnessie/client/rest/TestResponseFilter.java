@@ -15,8 +15,6 @@
  */
 package org.projectnessie.client.rest;
 
-import static com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_INVALID_SUBTYPE;
-import static com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES;
 import static java.util.Collections.emptyList;
 import static java.util.Collections.singletonList;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -25,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
 import static org.projectnessie.error.ReferenceConflicts.referenceConflicts;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -40,7 +39,6 @@ import java.util.stream.Stream;
 import org.assertj.core.api.SoftAssertions;
 import org.assertj.core.api.junit.jupiter.InjectSoftAssertions;
 import org.assertj.core.api.junit.jupiter.SoftAssertionsExtension;
-import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -59,6 +57,7 @@ import org.projectnessie.error.NessieError;
 import org.projectnessie.error.NessieForbiddenException;
 import org.projectnessie.error.NessieReferenceConflictException;
 import org.projectnessie.error.NessieReferenceNotFoundException;
+import org.projectnessie.error.NessieUnavailableException;
 import org.projectnessie.error.NessieUnsupportedMediaTypeException;
 import org.projectnessie.error.ReferenceConflicts;
 import org.projectnessie.model.Conflict;
@@ -69,8 +68,7 @@ import software.amazon.awssdk.utils.StringInputStream;
 @ExtendWith(SoftAssertionsExtension.class)
 public class TestResponseFilter {
 
-  private static final ObjectMapper MAPPER =
-      new ObjectMapper().disable(FAIL_ON_UNKNOWN_PROPERTIES).disable(FAIL_ON_INVALID_SUBTYPE);
+  private static final ObjectMapper MAPPER = new ObjectMapper();
 
   @InjectSoftAssertions protected SoftAssertions soft;
 
@@ -234,18 +232,12 @@ public class TestResponseFilter {
                 ResponseCheckFilter.checkResponse(
                     new ResponseContext() {
                       @Override
-                      public Status getResponseCode() {
+                      public Status getStatus() {
                         return Status.UNAUTHORIZED;
                       }
 
                       @Override
                       public InputStream getInputStream() {
-                        Assertions.fail();
-                        return null;
-                      }
-
-                      @Override
-                      public InputStream getErrorStream() {
                         return new StringInputStream("this will fail");
                       }
 
@@ -277,18 +269,12 @@ public class TestResponseFilter {
                 ResponseCheckFilter.checkResponse(
                     new ResponseContext() {
                       @Override
-                      public Status getResponseCode() {
+                      public Status getStatus() {
                         return Status.NOT_IMPLEMENTED;
                       }
 
                       @Override
                       public InputStream getInputStream() {
-                        Assertions.fail();
-                        return null;
-                      }
-
-                      @Override
-                      public InputStream getErrorStream() {
                         // Quarkus may sometimes produce JSON error responses like this
                         return new StringInputStream(
                             "{\"details\":\"Error id ee7f7293-67ad-42bd-8973-179801e7120e-1\",\"stack\":\"\"}");
@@ -338,6 +324,11 @@ public class TestResponseFilter {
         arguments(Status.UNAUTHORIZED, ErrorCode.UNKNOWN, NessieNotAuthorizedException.class),
         arguments(Status.FORBIDDEN, ErrorCode.FORBIDDEN, NessieForbiddenException.class),
         arguments(Status.FORBIDDEN, ErrorCode.UNKNOWN, NessieServiceException.class),
+        arguments(Status.SERVICE_UNAVAILABLE, ErrorCode.UNKNOWN, NessieUnavailableException.class),
+        arguments(
+            Status.SERVICE_UNAVAILABLE,
+            ErrorCode.SERVICE_UNAVAILABLE,
+            NessieUnavailableException.class),
         arguments(Status.TOO_MANY_REQUESTS, ErrorCode.UNKNOWN, NessieServiceException.class),
         arguments(
             Status.TOO_MANY_REQUESTS,
@@ -387,18 +378,12 @@ public class TestResponseFilter {
     }
 
     @Override
-    public Status getResponseCode() {
+    public Status getStatus() {
       return code;
     }
 
     @Override
-    public InputStream getInputStream() {
-      Assertions.fail();
-      return null;
-    }
-
-    @Override
-    public InputStream getErrorStream() throws IOException {
+    public InputStream getInputStream() throws JsonProcessingException {
       if (error == null) {
         return null;
       }

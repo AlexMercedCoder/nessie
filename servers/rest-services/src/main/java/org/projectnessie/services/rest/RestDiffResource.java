@@ -16,10 +16,12 @@
 package org.projectnessie.services.rest;
 
 import static org.projectnessie.services.impl.RefUtil.toReference;
+import static org.projectnessie.services.rest.RestApiContext.NESSIE_V1;
 
 import com.fasterxml.jackson.annotation.JsonView;
-import javax.enterprise.context.RequestScoped;
-import javax.inject.Inject;
+import jakarta.enterprise.context.RequestScoped;
+import jakarta.inject.Inject;
+import jakarta.ws.rs.Path;
 import org.projectnessie.api.v1.http.HttpDiffApi;
 import org.projectnessie.api.v1.params.DiffParams;
 import org.projectnessie.error.NessieNotFoundException;
@@ -27,12 +29,17 @@ import org.projectnessie.model.DiffResponse;
 import org.projectnessie.model.DiffResponse.DiffEntry;
 import org.projectnessie.model.ImmutableDiffResponse;
 import org.projectnessie.model.ser.Views;
+import org.projectnessie.services.authz.AccessContext;
+import org.projectnessie.services.authz.Authorizer;
+import org.projectnessie.services.config.ServerConfig;
+import org.projectnessie.services.impl.DiffApiImpl;
 import org.projectnessie.services.spi.DiffService;
 import org.projectnessie.services.spi.PagedResponseHandler;
+import org.projectnessie.versioned.VersionStore;
 
 /** REST endpoint for the diff-API. */
 @RequestScoped
-@jakarta.enterprise.context.RequestScoped
+@Path("api/v1/diffs")
 public class RestDiffResource implements HttpDiffApi {
   // Cannot extend the DiffApiImplWithAuthz class, because then CDI gets confused
   // about which interface to use - either HttpContentApi or the plain ContentApi. This can lead
@@ -43,13 +50,13 @@ public class RestDiffResource implements HttpDiffApi {
 
   // Mandated by CDI 2.0
   public RestDiffResource() {
-    this(null);
+    this(null, null, null, null);
   }
 
   @Inject
-  @jakarta.inject.Inject
-  public RestDiffResource(DiffService diffService) {
-    this.diffService = diffService;
+  public RestDiffResource(
+      ServerConfig config, VersionStore store, Authorizer authorizer, AccessContext accessContext) {
+    this.diffService = new DiffApiImpl(config, store, authorizer, accessContext, NESSIE_V1);
   }
 
   private DiffService resource() {
@@ -67,7 +74,7 @@ public class RestDiffResource implements HttpDiffApi {
             params.getToRef(),
             params.getToHashOnRef(),
             null,
-            new PagedResponseHandler<DiffResponse, DiffEntry>() {
+            new PagedResponseHandler<>() {
 
               @Override
               public DiffResponse build() {

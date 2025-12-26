@@ -16,10 +16,12 @@
 package org.projectnessie.versioned.storage.commontests;
 
 import static org.projectnessie.versioned.storage.common.logic.Logics.repositoryLogic;
+import static org.projectnessie.versioned.storage.common.objtypes.StringObj.stringData;
+import static org.projectnessie.versioned.storage.versionstore.RefMapping.REFS_HEADS;
 
 import java.util.Collections;
-import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -32,15 +34,18 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.projectnessie.nessie.relocated.protobuf.ByteString;
 import org.projectnessie.versioned.storage.common.config.StoreConfig;
+import org.projectnessie.versioned.storage.common.exceptions.ObjTooLargeException;
+import org.projectnessie.versioned.storage.common.exceptions.RefAlreadyExistsException;
 import org.projectnessie.versioned.storage.common.logic.RepositoryLogic;
 import org.projectnessie.versioned.storage.common.objtypes.Compression;
 import org.projectnessie.versioned.storage.common.objtypes.StringObj;
 import org.projectnessie.versioned.storage.common.persist.Backend;
 import org.projectnessie.versioned.storage.common.persist.CloseableIterator;
 import org.projectnessie.versioned.storage.common.persist.Obj;
-import org.projectnessie.versioned.storage.common.persist.ObjType;
+import org.projectnessie.versioned.storage.common.persist.ObjId;
 import org.projectnessie.versioned.storage.common.persist.Persist;
 import org.projectnessie.versioned.storage.common.persist.PersistFactory;
+import org.projectnessie.versioned.storage.common.persist.Reference;
 import org.projectnessie.versioned.storage.testextension.NessiePersist;
 import org.projectnessie.versioned.storage.testextension.PersistExtension;
 
@@ -66,7 +71,7 @@ public class AbstractBackendRepositoryTests {
                 IntStream.range(0, objs)
                     .mapToObj(
                         x ->
-                            StringObj.stringData(
+                            stringData(
                                 "content-type",
                                 Compression.NONE,
                                 "file-" + x,
@@ -75,7 +80,7 @@ public class AbstractBackendRepositoryTests {
                     .toArray(Obj[]::new)))
         .hasSize(objs)
         .doesNotContain(false);
-    try (CloseableIterator<Obj> scan = repo1.scanAllObjects(EnumSet.allOf(ObjType.class))) {
+    try (CloseableIterator<Obj> scan = repo1.scanAllObjects(Set.of())) {
       soft.assertThat(scan)
           .toIterable()
           .filteredOn(
@@ -85,7 +90,7 @@ public class AbstractBackendRepositoryTests {
 
     repo1.erase();
     soft.assertThat(repositoryLogic.repositoryExists()).isFalse();
-    try (CloseableIterator<Obj> scan = repo1.scanAllObjects(EnumSet.allOf(ObjType.class))) {
+    try (CloseableIterator<Obj> scan = repo1.scanAllObjects(Set.of())) {
       soft.assertThat(scan).isExhausted();
     }
   }
@@ -104,10 +109,67 @@ public class AbstractBackendRepositoryTests {
     soft.assertThat(repos)
         .noneMatch(
             r -> {
-              try (CloseableIterator<Obj> scan = r.scanAllObjects(EnumSet.allOf(ObjType.class))) {
+              try (CloseableIterator<Obj> scan = r.scanAllObjects(Set.of())) {
                 return scan.hasNext();
               }
             });
+  }
+
+  /** Check that erasing a few repos does not affect other repos. */
+  @Test
+  public void createEraseSomeRepos() throws ObjTooLargeException, RefAlreadyExistsException {
+    List<Persist> repos =
+        IntStream.range(0, 10).mapToObj(x -> newRepo()).collect(Collectors.toList());
+    int refs = 25;
+    int objs = 250;
+    for (Persist repo : repos) {
+      repositoryLogic(repo).initialize("main");
+      for (int i = 0; i < refs; i++) {
+        Reference reference =
+            Reference.reference(
+                REFS_HEADS + "reference-" + i, ObjId.randomObjId(), false, 1234L, null);
+        repo.addReference(reference);
+      }
+      StringObj[] objects = new StringObj[objs];
+      for (int i = 0; i < objs; i++) {
+        StringObj stringObj =
+            stringData(
+                "content-type",
+                Compression.NONE,
+                "file-" + i,
+                Collections.emptyList(),
+                ByteString.copyFromUtf8("text-" + i));
+        objects[i] = stringObj;
+      }
+      repo.storeObjs(objects);
+    }
+    soft.assertThat(repos).allMatch(r -> repositoryLogic(r).repositoryExists());
+    List<Persist> toDelete = repos.subList(0, 5);
+    List<Persist> toKeep = repos.subList(5, 10);
+    backend.eraseRepositories(
+        toDelete.stream().map(r -> r.config().repositoryId()).collect(Collectors.toSet()));
+    soft.assertThat(toDelete).noneMatch(r -> repositoryLogic(r).repositoryExists());
+    soft.assertThat(toDelete)
+        .noneMatch(
+            r -> {
+              try (CloseableIterator<Obj> scan = r.scanAllObjects(Set.of())) {
+                return scan.hasNext();
+              }
+            });
+    for (Persist repo : toKeep) {
+      soft.assertThat(repositoryLogic(repo).repositoryExists()).isTrue();
+      soft.assertThat(repo.fetchReference(REFS_HEADS + "main")).isNotNull();
+      for (int i = 0; i < refs; i++) {
+        soft.assertThat(repo.fetchReference(REFS_HEADS + "reference-" + i)).isNotNull();
+      }
+      try (CloseableIterator<Obj> scan = repo.scanAllObjects(Set.of())) {
+        soft.assertThat(scan)
+            .toIterable()
+            .filteredOn(
+                o -> o instanceof StringObj && ((StringObj) o).contentType().equals("content-type"))
+            .hasSize(objs);
+      }
+    }
   }
 
   private Persist newRepo() {

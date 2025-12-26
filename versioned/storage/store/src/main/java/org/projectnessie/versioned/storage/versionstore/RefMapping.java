@@ -32,12 +32,12 @@ import static org.projectnessie.versioned.storage.versionstore.TypeMapping.objId
 import static org.projectnessie.versioned.storage.versionstore.TypeMapping.storeKeyToKey;
 
 import com.google.common.annotations.VisibleForTesting;
+import jakarta.annotation.Nonnull;
+import jakarta.annotation.Nullable;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
-import javax.annotation.Nonnull;
-import javax.annotation.Nullable;
 import org.projectnessie.model.Conflict;
 import org.projectnessie.model.Conflict.ConflictType;
 import org.projectnessie.model.ContentKey;
@@ -184,24 +184,20 @@ public class RefMapping {
   }
 
   public static void verifyExpectedHash(
-      Hash referenceCurrentHead, NamedRef reference, Optional<Hash> expectedHead)
+      Hash referenceCurrentHead, NamedRef reference, Hash expectedHead)
       throws ReferenceConflictException {
-    if (expectedHead.isPresent() && !referenceCurrentHead.equals(expectedHead.get())) {
-      throw referenceConflictException(
-          reference, expectedHead.get(), hashToObjId(referenceCurrentHead));
+    if (!referenceCurrentHead.equals(expectedHead)) {
+      throw referenceConflictException(reference, expectedHead, hashToObjId(referenceCurrentHead));
     }
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public static NamedRef referenceToNamedRef(
-      @Nonnull @jakarta.annotation.Nonnull Reference reference) {
+  public static NamedRef referenceToNamedRef(@Nonnull Reference reference) {
     return referenceToNamedRef(reference.name());
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public static NamedRef referenceToNamedRef(@Nonnull @jakarta.annotation.Nonnull String name) {
+  public static NamedRef referenceToNamedRef(@Nonnull String name) {
     if (name.startsWith(REFS_HEADS)) {
       checkArgument(name.length() > REFS_HEADS.length());
       return BranchName.of(name.substring(REFS_HEADS.length()));
@@ -232,8 +228,7 @@ public class RefMapping {
     return REFS_HEADS + name;
   }
 
-  CommitObj resolveRefHead(@Nonnull @jakarta.annotation.Nonnull Ref ref)
-      throws ReferenceNotFoundException {
+  CommitObj resolveRefHead(@Nonnull Ref ref) throws ReferenceNotFoundException {
     if (ref instanceof NamedRef) {
       NamedRef namedRef = (NamedRef) ref;
       return resolveNamedRefHead(namedRef);
@@ -251,13 +246,15 @@ public class RefMapping {
     throw new IllegalArgumentException("Unsupported ref type, got " + ref);
   }
 
-  CommitObj resolveNamedRefHead(@Nonnull @jakarta.annotation.Nonnull NamedRef namedRef)
-      throws ReferenceNotFoundException {
+  CommitObj resolveRefHeadForUpdate(@Nonnull NamedRef namedRef) throws ReferenceNotFoundException {
+    return resolveNamedRefHead(resolveNamedRefForUpdate(namedRef));
+  }
+
+  CommitObj resolveNamedRefHead(@Nonnull NamedRef namedRef) throws ReferenceNotFoundException {
     return resolveNamedRefHead(resolveNamedRef(namedRef));
   }
 
-  CommitObj resolveNamedRefHead(@Nonnull @jakarta.annotation.Nonnull Reference reference)
-      throws ReferenceNotFoundException {
+  CommitObj resolveNamedRefHead(@Nonnull Reference reference) throws ReferenceNotFoundException {
     try {
       return commitLogic(persist).headCommit(reference);
     } catch (ObjNotFoundException e) {
@@ -266,9 +263,7 @@ public class RefMapping {
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public Reference resolveNamedRef(@Nonnull @jakarta.annotation.Nonnull NamedRef namedRef)
-      throws ReferenceNotFoundException {
+  public Reference resolveNamedRef(@Nonnull NamedRef namedRef) throws ReferenceNotFoundException {
     String refName = namedRefToRefName(namedRef);
     ReferenceLogic referenceLogic = referenceLogic(persist);
     try {
@@ -278,8 +273,19 @@ public class RefMapping {
     }
   }
 
-  public Reference resolveNamedRef(@Nonnull @jakarta.annotation.Nonnull String refName)
+  @Nonnull
+  public Reference resolveNamedRefForUpdate(@Nonnull NamedRef namedRef)
       throws ReferenceNotFoundException {
+    String refName = namedRefToRefName(namedRef);
+    ReferenceLogic referenceLogic = referenceLogic(persist);
+    try {
+      return referenceLogic.getReferenceForUpdate(refName);
+    } catch (RefNotFoundException e) {
+      throw referenceNotFound(namedRef);
+    }
+  }
+
+  public Reference resolveNamedRef(@Nonnull String refName) throws ReferenceNotFoundException {
     ReferenceLogic referenceLogic = referenceLogic(persist);
     List<Reference> refs =
         referenceLogic.getReferences(asList(asBranchName(refName), asTagName(refName)));

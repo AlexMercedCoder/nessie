@@ -18,8 +18,8 @@ package org.projectnessie.server.authz;
 import com.google.common.collect.ImmutableMap;
 import io.quarkus.test.junit.QuarkusTestProfile;
 import java.util.Map;
+import org.projectnessie.quarkus.config.QuarkusNessieAuthorizationConfig;
 import org.projectnessie.server.authn.AuthenticationEnabledProfile;
-import org.projectnessie.server.config.QuarkusNessieAuthorizationConfig;
 
 /**
  * A simple {@link QuarkusTestProfile} that enables the Nessie authorization flag, which is fetched
@@ -78,6 +78,9 @@ public class NessieAuthorizationTestProfile extends AuthenticationEnabledProfile
         .putAll(super.getConfigOverrides())
         .putAll(AUTHZ_RULES)
         .put("nessie.server.authorization.enabled", "true")
+        .put("nessie.server.authorization.type", "CEL")
+        // Need a dummy URL to satisfy the Quarkus OIDC extension.
+        .put("quarkus.oidc.auth-server-url", "http://127.255.0.0:0/auth/realms/unset/")
         .build();
   }
 }

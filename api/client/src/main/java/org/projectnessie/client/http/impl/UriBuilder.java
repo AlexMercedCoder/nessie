@@ -15,12 +15,13 @@
  */
 package org.projectnessie.client.http.impl;
 
+import static java.util.Objects.requireNonNull;
+
 import java.io.UnsupportedEncodingException;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Objects;
 import java.util.regex.Pattern;
 import org.projectnessie.client.http.HttpClientException;
 
@@ -37,16 +38,16 @@ public class UriBuilder {
   private final Map<String, String> templateValues = new HashMap<>();
 
   public UriBuilder(URI baseUri) {
-    this.baseUri = Objects.requireNonNull(baseUri);
+    this.baseUri = requireNonNull(baseUri, "baseUri is null");
   }
 
   public UriBuilder path(String path) {
-    if (uri.length() > 0) {
-      uri.append('/');
-    }
     String trimmedPath = HttpUtils.checkNonNullTrim(path);
     HttpUtils.checkArgument(
         !trimmedPath.isEmpty(), "Path %s must be of length greater than 0", trimmedPath);
+    if (uri.length() > 0 && !trimmedPath.startsWith("/")) {
+      uri.append('/');
+    }
     uri.append(trimmedPath);
     return this;
   }
@@ -86,11 +87,12 @@ public class UriBuilder {
     StringBuilder uriBuilder = new StringBuilder();
     uriBuilder.append(baseUri);
 
-    if ('/' != uriBuilder.charAt(uriBuilder.length() - 1)) {
-      uriBuilder.append('/');
-    }
-
     if (uri.length() > 0) {
+
+      if ('/' != uriBuilder.charAt(uriBuilder.length() - 1)) {
+        uriBuilder.append('/');
+      }
+
       Map<String, String> templates = new HashMap<>(templateValues);
 
       StringBuilder pathElement = new StringBuilder();
@@ -99,9 +101,14 @@ public class UriBuilder {
       for (int i = 0; i < l; i++) {
         char c = uri.charAt(i);
         if (c == '/') {
-          uriBuilder.append(encode(pathElement.toString()));
-          pathElement.setLength(0);
-          uriBuilder.append('/');
+          if (pathElement.length() > 0) {
+            uriBuilder.append(encode(pathElement.toString()));
+            pathElement.setLength(0);
+            uriBuilder.append('/');
+          }
+          if ('/' != uriBuilder.charAt(uriBuilder.length() - 1)) {
+            uriBuilder.append('/');
+          }
         } else if (c == '{') {
           for (i++; i < l; i++) {
             c = uri.charAt(i);

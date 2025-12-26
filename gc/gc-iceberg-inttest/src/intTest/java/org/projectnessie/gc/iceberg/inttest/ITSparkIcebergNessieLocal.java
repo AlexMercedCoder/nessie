@@ -19,7 +19,6 @@ import static org.projectnessie.gc.iceberg.inttest.Util.expire;
 import static org.projectnessie.gc.iceberg.inttest.Util.identifyLiveContents;
 
 import java.io.File;
-import java.net.URI;
 import java.time.Instant;
 import java.util.HashSet;
 import java.util.Set;
@@ -41,8 +40,8 @@ import org.projectnessie.gc.files.NessieFileIOException;
 import org.projectnessie.gc.iceberg.files.IcebergFiles;
 import org.projectnessie.gc.identify.CutoffPolicy;
 import org.projectnessie.gc.repository.NessieRepositoryConnector;
-import org.projectnessie.spark.extensions.NessieSparkSessionExtensions;
 import org.projectnessie.spark.extensions.SparkSqlTestBase;
+import org.projectnessie.storage.uri.StorageUri;
 
 @ExtendWith(SoftAssertionsExtension.class)
 public class ITSparkIcebergNessieLocal extends SparkSqlTestBase {
@@ -53,7 +52,11 @@ public class ITSparkIcebergNessieLocal extends SparkSqlTestBase {
 
   @BeforeAll
   protected static void useNessieExtensions() {
-    conf.set("spark.sql.extensions", NessieSparkSessionExtensions.class.getCanonicalName());
+    conf.set(
+        "spark.sql.extensions",
+        "org.projectnessie.spark.extensions.NessieSparkSessionExtensions"
+            + ","
+            + "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions");
   }
 
   @Override
@@ -71,7 +74,7 @@ public class ITSparkIcebergNessieLocal extends SparkSqlTestBase {
       sql("insert into nessie.db1.t1 select 42");
       sql("insert into nessie.db1.t1 select 42");
 
-      Set<URI> filesBefore = allFiles(icebergFiles);
+      Set<StorageUri> filesBefore = allFiles(icebergFiles);
 
       Instant maxFileModificationTime = Instant.now();
 
@@ -86,7 +89,7 @@ public class ITSparkIcebergNessieLocal extends SparkSqlTestBase {
       // ... and sweep
       DeleteSummary deleteSummary = expire(icebergFiles, liveContentSet, maxFileModificationTime);
       soft.assertThat(deleteSummary.deleted()).isEqualTo(0L);
-      Set<URI> filesAfter = allFiles(icebergFiles);
+      Set<StorageUri> filesAfter = allFiles(icebergFiles);
       soft.assertThat(filesAfter).containsExactlyElementsOf(filesBefore);
 
       // Only the last commit is considered live:
@@ -101,12 +104,12 @@ public class ITSparkIcebergNessieLocal extends SparkSqlTestBase {
       deleteSummary = expire(icebergFiles, liveContentSet, maxFileModificationTime);
       soft.assertThat(deleteSummary.deleted()).isEqualTo(3L);
       filesAfter = allFiles(icebergFiles);
-      Set<URI> removedFiles = new HashSet<>(filesBefore);
+      Set<StorageUri> removedFiles = new HashSet<>(filesBefore);
       removedFiles.removeAll(filesAfter);
       // The first and second table-metadata and the manifest-list from the second table metadata
       // got cleaned up.
       soft.assertThat(removedFiles)
-          .allMatch(u -> u.getPath().endsWith(".json") || u.getPath().endsWith(".avro"));
+          .allMatch(u -> u.location().endsWith(".json") || u.location().endsWith(".avro"));
 
       // Run GC another time, but this time assuming that all commits are live. This triggers a
       // read-attempt against a previously deleted table-metadata, which is equal to "no files
@@ -124,8 +127,55 @@ public class ITSparkIcebergNessieLocal extends SparkSqlTestBase {
     }
   }
 
-  private Set<URI> allFiles(IcebergFiles icebergFiles) throws NessieFileIOException {
-    try (Stream<FileReference> list = icebergFiles.listRecursively(tempFile.toURI())) {
+  @Test
+  public void roundTripLocalWithDeleteFiles() throws Exception {
+    try (IcebergFiles icebergFiles = IcebergFiles.builder().build()) {
+
+      api.createNamespace().namespace("db2").refName(api.getConfig().getDefaultBranch()).create();
+
+      sql(
+          "create table nessie.db2.t1(id int) using iceberg tblproperties ('format-version'='2', 'write.delete.mode'='merge-on-read')");
+      // create two data files
+      sql("insert into nessie.db2.t1 VALUES (42),(43),(44),(45),(46),(47)");
+      // removes a row from one of the data file.
+      sql("delete from nessie.db2.t1 WHERE id = 42");
+      // execute compaction so that delete files become obsolete and can be garbage collected.
+      sql(
+          "CALL nessie.system.rewrite_data_files(table => 'nessie.db2.t1', options => map('min-input-files','2', 'delete-file-threshold','1'))");
+      // Compaction doesn't mark delete files as invalid.
+      // Hence, execute rewrite_position_delete_files to remove dangling deletes entry.
+      sql(
+          "CALL nessie.system.rewrite_position_delete_files(table => 'nessie.db2.t1', options => map('rewrite-all', "
+              + "'true'))");
+      // only one compacted data file will be live after this.
+
+      Set<StorageUri> filesBefore = allFiles(icebergFiles);
+      soft.assertThat(filesBefore).hasSize(18);
+
+      Instant maxFileModificationTime = Instant.now();
+
+      // Only the last commit is considered live:
+
+      // Mark...
+      LiveContentSet liveContentSet =
+          identifyLiveContents(
+              new InMemoryPersistenceSpi(),
+              ref -> CutoffPolicy.numCommits(1),
+              NessieRepositoryConnector.nessie(api));
+      // ... and sweep
+      DeleteSummary deleteSummary = expire(icebergFiles, liveContentSet, maxFileModificationTime);
+      soft.assertThat(deleteSummary.deleted()).isEqualTo(13L);
+      Set<StorageUri> filesAfter = allFiles(icebergFiles);
+      Set<StorageUri> removedFiles = new HashSet<>(filesBefore);
+      removedFiles.removeAll(filesAfter);
+      // make sure expired delete file (parquet) is also removed from GC.
+      soft.assertThat(removedFiles).anyMatch(u -> u.location().endsWith("-deletes.parquet"));
+    }
+  }
+
+  private Set<StorageUri> allFiles(IcebergFiles icebergFiles) throws NessieFileIOException {
+    try (Stream<FileReference> list =
+        icebergFiles.listRecursively(StorageUri.of(tempFile.toURI()))) {
       return list.map(FileReference::absolutePath).collect(Collectors.toCollection(TreeSet::new));
     }
   }

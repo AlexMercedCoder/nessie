@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-plugins { id("nessie-conventions-server") }
+plugins { id("nessie-conventions-java11") }
 
-extra["maven.name"] = "Nessie - REST-API Tests"
+publishingHelper { mavenName = "Nessie - REST-API Tests" }
 
 description = "Artifact for REST-API tests, includes Glassfish/Jersey/Weld implementation."
 
@@ -26,11 +26,8 @@ dependencies {
   implementation(libs.guava)
   api(libs.rest.assured)
 
-  // javax/jakarta
   compileOnly(libs.jakarta.validation.api)
-  compileOnly(libs.javax.validation.api)
   compileOnly(libs.jakarta.annotation.api)
-  compileOnly(libs.findbugs.jsr305)
 
   compileOnly(libs.microprofile.openapi)
 
@@ -43,16 +40,12 @@ dependencies {
   implementation("com.fasterxml.jackson.core:jackson-databind")
   compileOnly("com.fasterxml.jackson.core:jackson-annotations")
 
-  testImplementation(project(":nessie-versioned-persist-in-memory"))
-  testImplementation(project(":nessie-versioned-persist-in-memory-test"))
-  testImplementation(project(":nessie-versioned-persist-non-transactional"))
-  testImplementation(project(":nessie-versioned-persist-non-transactional-test"))
-  testImplementation(project(":nessie-versioned-persist-transactional"))
-  testImplementation(project(":nessie-versioned-persist-transactional-test"))
-  testImplementation(project(":nessie-versioned-storage-inmemory"))
-  testImplementation(project(":nessie-versioned-storage-jdbc"))
+  testImplementation(project(":nessie-versioned-storage-inmemory-tests"))
+  testImplementation(project(":nessie-versioned-storage-jdbc2-tests"))
+  testRuntimeOnly(libs.agroal.pool)
 
   testImplementation(project(":nessie-jaxrs-testextension"))
+
   testImplementation(libs.slf4j.jcl.over.slf4j)
   testRuntimeOnly(libs.h2)
   testRuntimeOnly(libs.logback.classic)

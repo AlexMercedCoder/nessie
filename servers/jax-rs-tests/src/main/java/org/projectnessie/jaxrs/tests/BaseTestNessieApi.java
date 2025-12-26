@@ -15,6 +15,7 @@
  */
 package org.projectnessie.jaxrs.tests;
 
+import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.Maps.immutableEntry;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Arrays.asList;
@@ -22,17 +23,18 @@ import static java.util.Collections.emptyList;
 import static java.util.Collections.singletonList;
 import static java.util.Collections.singletonMap;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.assertj.core.api.InstanceOfAssertFactories.list;
 import static org.assertj.core.api.InstanceOfAssertFactories.type;
-import static org.junit.jupiter.api.Assumptions.assumeFalse;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.projectnessie.model.CommitMeta.fromMessage;
 import static org.projectnessie.model.FetchOption.ALL;
+import static org.projectnessie.model.Namespace.Empty.EMPTY_NAMESPACE;
 
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.hash.Hashing;
+import jakarta.validation.constraints.NotNull;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -40,13 +42,11 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Optional;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
-import javax.validation.constraints.NotNull;
 import org.assertj.core.api.AbstractThrowableAssert;
 import org.assertj.core.api.ListAssert;
 import org.assertj.core.api.SoftAssertions;
@@ -55,20 +55,22 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.DisabledOnOs;
 import org.junit.jupiter.api.condition.OS;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.projectnessie.client.api.AssignReferenceBuilder;
 import org.projectnessie.client.api.CommitMultipleOperationsBuilder;
 import org.projectnessie.client.api.CreateNamespaceResult;
 import org.projectnessie.client.api.DeleteNamespaceResult;
-import org.projectnessie.client.api.GetAllReferencesBuilder;
-import org.projectnessie.client.api.GetDiffBuilder;
-import org.projectnessie.client.api.GetEntriesBuilder;
+import org.projectnessie.client.api.DeleteReferenceBuilder;
 import org.projectnessie.client.api.NessieApiV1;
-import org.projectnessie.client.api.PagingBuilder;
+import org.projectnessie.client.api.NessieApiV2;
 import org.projectnessie.client.api.UpdateNamespaceResult;
 import org.projectnessie.client.ext.NessieApiVersion;
 import org.projectnessie.client.ext.NessieApiVersions;
 import org.projectnessie.client.ext.NessieClientFactory;
 import org.projectnessie.error.BaseNessieClientServerException;
 import org.projectnessie.error.ContentKeyErrorDetails;
+import org.projectnessie.error.ErrorCode;
 import org.projectnessie.error.NessieBadRequestException;
 import org.projectnessie.error.NessieConflictException;
 import org.projectnessie.error.NessieContentNotFoundException;
@@ -78,6 +80,7 @@ import org.projectnessie.error.NessieNotFoundException;
 import org.projectnessie.error.NessieReferenceConflictException;
 import org.projectnessie.error.ReferenceConflicts;
 import org.projectnessie.model.Branch;
+import org.projectnessie.model.CommitConsistency;
 import org.projectnessie.model.CommitMeta;
 import org.projectnessie.model.CommitResponse;
 import org.projectnessie.model.CommitResponse.AddedContent;
@@ -90,6 +93,7 @@ import org.projectnessie.model.DiffResponse;
 import org.projectnessie.model.DiffResponse.DiffEntry;
 import org.projectnessie.model.EntriesResponse;
 import org.projectnessie.model.EntriesResponse.Entry;
+import org.projectnessie.model.GarbageCollectorConfig;
 import org.projectnessie.model.GetMultipleContentsResponse;
 import org.projectnessie.model.GetNamespacesResponse;
 import org.projectnessie.model.IcebergTable;
@@ -106,10 +110,19 @@ import org.projectnessie.model.Operation;
 import org.projectnessie.model.Operation.Delete;
 import org.projectnessie.model.Operation.Put;
 import org.projectnessie.model.Reference;
+import org.projectnessie.model.Reference.ReferenceType;
+import org.projectnessie.model.ReferenceHistoryResponse;
+import org.projectnessie.model.ReferenceHistoryState;
 import org.projectnessie.model.ReferencesResponse;
+import org.projectnessie.model.RepositoryConfig;
 import org.projectnessie.model.Tag;
+import org.projectnessie.model.UDF;
+import org.projectnessie.model.Validation;
+import org.projectnessie.model.types.GenericRepositoryConfig;
+import org.projectnessie.model.types.ImmutableGenericRepositoryConfig;
 
 /** Nessie-API tests. */
+@org.junit.jupiter.api.Tag("nessie-multi-env")
 @NessieApiVersions // all versions
 public abstract class BaseTestNessieApi {
 
@@ -139,9 +152,13 @@ public abstract class BaseTestNessieApi {
   }
 
   @NotNull
-  @jakarta.validation.constraints.NotNull
   public NessieApiV1 api() {
     return api;
+  }
+
+  public NessieApiV2 apiV2() {
+    checkState(api instanceof NessieApiV2, "Not using API v2");
+    return (NessieApiV2) api;
   }
 
   public boolean isV2() {
@@ -199,21 +216,6 @@ public abstract class BaseTestNessieApi {
 
   private static IcebergTable dummyTable() {
     return IcebergTable.of("foo", 1, 2, 3, 4);
-  }
-
-  protected boolean fullPagingSupport() {
-    return false;
-  }
-
-  protected boolean pagingSupported(PagingBuilder<?, ?, ?> apiRequestBuilder) {
-    if (fullPagingSupport()) {
-      return isV2() || !(apiRequestBuilder instanceof GetDiffBuilder);
-    }
-    // Note: paging API is provided for diff, entries and references API, but the server does not
-    // support that yet.
-    return !(apiRequestBuilder instanceof GetDiffBuilder)
-        && !(apiRequestBuilder instanceof GetAllReferencesBuilder)
-        && !(apiRequestBuilder instanceof GetEntriesBuilder);
   }
 
   @Test
@@ -389,8 +391,8 @@ public abstract class BaseTestNessieApi {
     soft.assertThatThrownBy(() -> createReference(Tag.of("tag2", null), main.getName()))
         .isInstanceOf(NessieBadRequestException.class);
 
-    Reference branch2 = createReference(Branch.of("branch2", null), main.getName());
-    soft.assertThat(branch2).isEqualTo(Branch.of("branch2", EMPTY));
+    soft.assertThatThrownBy(() -> createReference(Branch.of("branch2", null), main.getName()))
+        .isInstanceOf(NessieBadRequestException.class);
 
     // not exist
 
@@ -439,14 +441,131 @@ public abstract class BaseTestNessieApi {
     }
   }
 
-  @Test
-  public void referencesWithLimitInFirstPage() throws Exception {
-    assumeFalse(pagingSupported(api().getAllReferences()));
-    // Verify that result limiting produces expected errors when paging is not supported
-    api().createReference().reference(Branch.of("branch", null)).create();
-    assertThatThrownBy(() -> api().getAllReferences().maxRecords(1).get())
+  @ParameterizedTest
+  @EnumSource(ReferenceType.class)
+  @NessieApiVersions(versions = NessieApiVersion.V2)
+  public void referencesUntyped(ReferenceType referenceType) throws Exception {
+    Branch main = api().getDefaultBranch();
+    soft.assertThat(api().getAllReferences().get().getReferences()).containsExactly(main);
+
+    Branch main1 =
+        prepCommit(
+                main,
+                "commit",
+                Put.of(ContentKey.of("key"), Namespace.of("key")),
+                dummyPut("key", "foo"))
+            .commit();
+
+    Reference ref0;
+    ReferenceType anotherType;
+    switch (referenceType) {
+      case TAG:
+        ref0 = Tag.of("tag1", main.getHash());
+        anotherType = ReferenceType.BRANCH;
+        break;
+      case BRANCH:
+        ref0 = Branch.of("branch1", main.getHash());
+        anotherType = ReferenceType.TAG;
+        break;
+      default:
+        throw new IllegalStateException("Unsupported ref type: " + referenceType);
+    }
+
+    Reference ref = createReference(ref0, main.getName());
+
+    @SuppressWarnings("resource")
+    NessieApiV2 api = apiV2();
+
+    soft.assertThatThrownBy(
+            () -> api.assignReference().refName(ref0.getName()).assignTo(main1).assign())
         .isInstanceOf(NessieBadRequestException.class)
-        .hasMessageContaining("Paging not supported");
+        .hasMessageContaining("Expected hash must be provided");
+
+    soft.assertThatThrownBy(
+            () ->
+                api.assignReference()
+                    .refName(ref0.getName())
+                    .hash(ref0.getHash())
+                    .refType(anotherType)
+                    .assignTo(main1)
+                    .assign())
+        .isInstanceOf(NessieBadRequestException.class)
+        .hasMessageMatching(".*Expected reference type .+ does not match existing reference.*");
+
+    ref = api.assignReference().reference(ref).assignTo(main1).assignAndGet();
+    soft.assertThat(ref)
+        .extracting(Reference::getName, Reference::getHash)
+        .containsExactly(ref0.getName(), main1.getHash());
+
+    ref =
+        api.assignReference()
+            .refName(ref.getName())
+            .hash(ref.getHash())
+            .assignTo(main)
+            .assignAndGet();
+    soft.assertThat(ref)
+        .extracting(Reference::getName, Reference::getHash)
+        .containsExactly(ref0.getName(), main.getHash());
+
+    ref =
+        api.assignReference()
+            .refName(ref.getName())
+            .hash(ref.getHash())
+            .refType(ref.getType())
+            .assignTo(main1)
+            .assignAndGet();
+    soft.assertThat(ref)
+        .extracting(Reference::getName, Reference::getHash)
+        .containsExactly(ref0.getName(), main1.getHash());
+
+    AssignReferenceBuilder<Reference> assignRequest =
+        api.assignReference().refName(ref.getName()).hash(ref.getHash()).assignTo(main1);
+    ref =
+        referenceType == ReferenceType.BRANCH
+            ? assignRequest.asBranch().assignAndGet()
+            : assignRequest.asTag().assignAndGet();
+    soft.assertThat(ref)
+        .extracting(Reference::getName, Reference::getHash)
+        .containsExactly(ref0.getName(), main1.getHash());
+
+    soft.assertThatThrownBy(() -> api.deleteReference().refName(ref0.getName()).delete())
+        .isInstanceOf(NessieBadRequestException.class)
+        .hasMessageContaining("Expected hash must be provided");
+
+    Reference deleted = api.deleteReference().reference(ref).getAndDelete();
+    soft.assertThat(deleted).isEqualTo(ref);
+
+    ref = createReference(ref0, main.getName());
+    deleted = api.deleteReference().refName(ref.getName()).hash(ref.getHash()).getAndDelete();
+    soft.assertThat(deleted).isEqualTo(ref);
+
+    ref = createReference(ref0, main.getName());
+    soft.assertThatThrownBy(
+            () ->
+                api.deleteReference()
+                    .refName(ref0.getName())
+                    .hash(ref0.getHash())
+                    .refType(anotherType)
+                    .delete())
+        .isInstanceOf(NessieBadRequestException.class)
+        .hasMessageMatching(".*Expected reference type .+ does not match existing reference.*");
+
+    deleted =
+        api.deleteReference()
+            .refName(ref.getName())
+            .hash(ref.getHash())
+            .refType(ref.getType())
+            .getAndDelete();
+    soft.assertThat(deleted).isEqualTo(ref);
+
+    ref = createReference(ref0, main.getName());
+    DeleteReferenceBuilder<Reference> deleteRequest =
+        api.deleteReference().refName(ref.getName()).hash(ref.getHash());
+    deleted =
+        referenceType == ReferenceType.BRANCH
+            ? deleteRequest.asBranch().getAndDelete()
+            : deleteRequest.asTag().getAndDelete();
+    soft.assertThat(deleted).isEqualTo(ref);
   }
 
   @Test
@@ -543,7 +662,7 @@ public abstract class BaseTestNessieApi {
               singletonList("NessieHerself"),
               singletonList("Arctic"),
               Instant.EPOCH,
-              ImmutableMap.of("property", "value", "_merge_parent", branch.getHash()));
+              singletonMap("property", "value"));
     } else {
       api().mergeRefIntoBranch().fromRef(branch).branch(main).keepIndividualCommits(false).merge();
       main2 = api().getReference().refName(main.getName()).get();
@@ -589,6 +708,7 @@ public abstract class BaseTestNessieApi {
         .containsKeys(ContentKey.of("a", "a"), ContentKey.of("b", "a"), ContentKey.of("b", "b"));
   }
 
+  @SuppressWarnings("deprecation")
   @Test
   public void mergeTransplantDryRunWithConflictInResult() throws Exception {
     Branch main0 =
@@ -757,27 +877,26 @@ public abstract class BaseTestNessieApi {
       soft.assertThat(diff1response.getEffectiveToReference()).isEqualTo(branch2);
 
       // Key filtering
-      if (fullPagingSupport()) {
-        soft.assertThat(
-                api()
-                    .getDiff()
-                    .fromRef(branch1)
-                    .toRef(branch2)
-                    .minKey(key12)
-                    .maxKey(key31)
-                    .get()
-                    .getDiffs())
-            .extracting(DiffEntry::getKey)
-            .containsExactlyInAnyOrder(key12, key13, key3, key31);
-        soft.assertThat(
-                api().getDiff().fromRef(branch1).toRef(branch2).minKey(key31).get().getDiffs())
-            .extracting(DiffEntry::getKey)
-            .containsExactlyInAnyOrder(key31, key4, key41);
-        soft.assertThat(
-                api().getDiff().fromRef(branch1).toRef(branch2).maxKey(key12).get().getDiffs())
-            .extracting(DiffEntry::getKey)
-            .containsExactlyInAnyOrder(key1, key11, key12);
-      }
+      soft.assertThat(
+              api()
+                  .getDiff()
+                  .fromRef(branch1)
+                  .toRef(branch2)
+                  .minKey(key12)
+                  .maxKey(key31)
+                  .get()
+                  .getDiffs())
+          .extracting(DiffEntry::getKey)
+          .containsExactlyInAnyOrder(key12, key13, key3, key31);
+      soft.assertThat(
+              api().getDiff().fromRef(branch1).toRef(branch2).minKey(key31).get().getDiffs())
+          .extracting(DiffEntry::getKey)
+          .containsExactlyInAnyOrder(key31, key4, key41);
+      soft.assertThat(
+              api().getDiff().fromRef(branch1).toRef(branch2).maxKey(key12).get().getDiffs())
+          .extracting(DiffEntry::getKey)
+          .containsExactlyInAnyOrder(key1, key11, key12);
+
       soft.assertThat(api().getDiff().fromRef(branch1).toRef(branch2).key(key12).get().getDiffs())
           .extracting(DiffEntry::getKey)
           .containsExactlyInAnyOrder(key12);
@@ -823,10 +942,8 @@ public abstract class BaseTestNessieApi {
         api().getDiff().fromRef(branch1).toRefName(branch2.getName()).get().getDiffs();
     soft.assertThat(diff1).isEqualTo(diff2).isEqualTo(diff3);
 
-    if (pagingSupported(api().getDiff())) {
-
-      // Paging
-
+    // Paging
+    if (isV2()) {
       List<DiffEntry> all = new ArrayList<>();
       String token = null;
       for (int i = 0; i < 8; i++) {
@@ -846,23 +963,6 @@ public abstract class BaseTestNessieApi {
       soft.assertThat(api().getDiff().fromRef(branch1).toRef(branch2).maxRecords(1).stream())
           .containsExactlyInAnyOrderElementsOf(diff1);
     }
-  }
-
-  @Test
-  @NessieApiVersions(versions = NessieApiVersion.V2) // v1 throws on getDiff().maxRecords(1)
-  public void diffWithLimitInFirstPage() throws Exception {
-    Branch main = api().getDefaultBranch();
-    assumeFalse(pagingSupported(api().getDiff()));
-    // Verify that result limiting produces expected errors when paging is not supported
-    Branch branch1 = createReference(Branch.of("b1", main.getHash()), main.getName());
-    Branch branch2 = createReference(Branch.of("b2", main.getHash()), main.getName());
-
-    Branch from = prepCommit(branch1, "c1", dummyPut("1-1")).commit();
-    Branch to = prepCommit(branch2, "c2", dummyPut("2-2")).commit();
-
-    assertThatThrownBy(() -> api().getDiff().maxRecords(1).fromRef(from).toRef(to).get())
-        .isInstanceOf(NessieBadRequestException.class)
-        .hasMessageContaining("Paging not supported");
   }
 
   @Test
@@ -920,27 +1020,25 @@ public abstract class BaseTestNessieApi {
     List<Reference> notPaged = api().getAllReferences().get().getReferences();
     soft.assertThat(notPaged).containsExactlyInAnyOrderElementsOf(expect);
 
-    if (pagingSupported(api().getAllReferences())) {
-      List<Reference> all = new ArrayList<>();
-      String token = null;
-      for (int i = 0; i < 11; i++) {
-        ReferencesResponse resp = api().getAllReferences().maxRecords(1).pageToken(token).get();
-        all.addAll(resp.getReferences());
-        token = resp.getToken();
-        if (i == 10) {
-          soft.assertThat(token).isNull();
-        } else {
-          soft.assertThat(token).isNotNull();
-        }
+    List<Reference> all = new ArrayList<>();
+    String token = null;
+    for (int i = 0; i < 11; i++) {
+      ReferencesResponse resp = api().getAllReferences().maxRecords(1).pageToken(token).get();
+      all.addAll(resp.getReferences());
+      token = resp.getToken();
+      if (i == 10) {
+        soft.assertThat(token).isNull();
+      } else {
+        soft.assertThat(token).isNotNull();
       }
-
-      soft.assertThat(all).containsExactlyElementsOf(notPaged);
-
-      soft.assertAll();
-
-      soft.assertThat(api().getAllReferences().maxRecords(1).stream())
-          .containsExactlyInAnyOrderElementsOf(all);
     }
+
+    soft.assertThat(all).containsExactlyElementsOf(notPaged);
+
+    soft.assertAll();
+
+    soft.assertThat(api().getAllReferences().maxRecords(1).stream())
+        .containsExactlyInAnyOrderElementsOf(all);
   }
 
   @Test
@@ -1043,76 +1141,72 @@ public abstract class BaseTestNessieApi {
           .doesNotContainNull()
           .isNotEmpty();
 
-      if (fullPagingSupport()) {
-        soft.assertThat(
-                api()
-                    .getEntries()
-                    .reference(main)
-                    .minKey(ContentKey.of("c", "2"))
-                    .maxKey(ContentKey.of("c", "4"))
-                    .get()
-                    .getEntries())
-            .extracting(Entry::getName)
-            .containsExactlyInAnyOrder(
-                ContentKey.of("c", "2"), ContentKey.of("c", "3"), ContentKey.of("c", "4"));
-        soft.assertThat(
-                api().getEntries().reference(main).prefixKey(ContentKey.of("c")).get().getEntries())
-            .extracting(Entry::getName)
-            .contains(ContentKey.of("c"))
-            .containsAll(
-                IntStream.range(0, 9)
-                    .mapToObj(i -> ContentKey.of("c", Integer.toString(i)))
-                    .collect(Collectors.toList()));
-        soft.assertThat(
-                api()
-                    .getEntries()
-                    .reference(main)
-                    .key(ContentKey.of("c", "2"))
-                    .key(ContentKey.of("c", "4"))
-                    .get()
-                    .getEntries())
-            .extracting(Entry::getName)
-            .containsExactlyInAnyOrder(ContentKey.of("c", "2"), ContentKey.of("c", "4"));
-        soft.assertThat(
-                api()
-                    .getEntries()
-                    .reference(main)
-                    .prefixKey(ContentKey.of("c", "5"))
-                    .get()
-                    .getEntries())
-            .extracting(Entry::getName)
-            .containsExactlyInAnyOrder(ContentKey.of("c", "5"));
+      soft.assertThat(
+              api()
+                  .getEntries()
+                  .reference(main)
+                  .minKey(ContentKey.of("c", "2"))
+                  .maxKey(ContentKey.of("c", "4"))
+                  .get()
+                  .getEntries())
+          .extracting(Entry::getName)
+          .containsExactlyInAnyOrder(
+              ContentKey.of("c", "2"), ContentKey.of("c", "3"), ContentKey.of("c", "4"));
+      soft.assertThat(
+              api().getEntries().reference(main).prefixKey(ContentKey.of("c")).get().getEntries())
+          .extracting(Entry::getName)
+          .contains(ContentKey.of("c"))
+          .containsAll(
+              IntStream.range(0, 9)
+                  .mapToObj(i -> ContentKey.of("c", Integer.toString(i)))
+                  .collect(Collectors.toList()));
+      soft.assertThat(
+              api()
+                  .getEntries()
+                  .reference(main)
+                  .key(ContentKey.of("c", "2"))
+                  .key(ContentKey.of("c", "4"))
+                  .get()
+                  .getEntries())
+          .extracting(Entry::getName)
+          .containsExactlyInAnyOrder(ContentKey.of("c", "2"), ContentKey.of("c", "4"));
+      soft.assertThat(
+              api()
+                  .getEntries()
+                  .reference(main)
+                  .prefixKey(ContentKey.of("c", "5"))
+                  .get()
+                  .getEntries())
+          .extracting(Entry::getName)
+          .containsExactlyInAnyOrder(ContentKey.of("c", "5"));
+    }
+
+    List<Entry> all = new ArrayList<>();
+    String token = null;
+    for (int i = 0; i < 10; i++) {
+      EntriesResponse resp =
+          api()
+              .getEntries()
+              .withContent(isV2())
+              .reference(main)
+              .maxRecords(1)
+              .pageToken(token)
+              .get();
+      all.addAll(resp.getEntries());
+      token = resp.getToken();
+      if (i == 9) {
+        soft.assertThat(token).isNull();
+      } else {
+        soft.assertThat(token).isNotNull();
       }
     }
 
-    if (pagingSupported(api().getEntries())) {
-      List<Entry> all = new ArrayList<>();
-      String token = null;
-      for (int i = 0; i < 10; i++) {
-        EntriesResponse resp =
-            api()
-                .getEntries()
-                .withContent(isV2())
-                .reference(main)
-                .maxRecords(1)
-                .pageToken(token)
-                .get();
-        all.addAll(resp.getEntries());
-        token = resp.getToken();
-        if (i == 9) {
-          soft.assertThat(token).isNull();
-        } else {
-          soft.assertThat(token).isNotNull();
-        }
-      }
+    soft.assertThat(all).containsExactlyElementsOf(notPaged);
 
-      soft.assertThat(all).containsExactlyElementsOf(notPaged);
+    soft.assertAll();
 
-      soft.assertAll();
-
-      soft.assertThat(api().getEntries().withContent(isV2()).reference(main).maxRecords(1).stream())
-          .containsExactlyInAnyOrderElementsOf(all);
-    }
+    soft.assertThat(api().getEntries().withContent(isV2()).reference(main).maxRecords(1).stream())
+        .containsExactlyInAnyOrderElementsOf(all);
   }
 
   @NessieApiVersions(versions = NessieApiVersion.V2)
@@ -1126,14 +1220,23 @@ public abstract class BaseTestNessieApi {
   }
 
   @Test
-  public void entriesWithLimitInFirstPage() throws Exception {
-    assumeFalse(pagingSupported(api().getEntries()));
-    // Verify that result limiting produces expected errors when paging is not supported
+  public void udf() throws Exception {
+    ContentKey key = ContentKey.of("test-udf");
     Branch main =
-        prepCommit(api().getDefaultBranch(), "commit", dummyPut("t1"), dummyPut("t2")).commit();
-    assertThatThrownBy(() -> api().getEntries().maxRecords(1).reference(main).get())
-        .isInstanceOf(NessieBadRequestException.class)
-        .hasMessageContaining("Paging not supported");
+        prepCommit(api().getDefaultBranch(), "commit", Put.of(key, UDF.udf("loc1", "v1", "s1")))
+            .commit();
+
+    soft.assertThat(api().getContent().reference(main).key(key).get().get(key))
+        .asInstanceOf(type(UDF.class))
+        .satisfies(u -> assertThat(u.getId()).isNotNull())
+        .extracting(UDF::getMetadataLocation, UDF::getVersionId, UDF::getSignatureId)
+        .containsExactly("loc1", "v1", "s1");
+
+    soft.assertThat(api().getEntries().reference(main).stream())
+        .hasSize(1)
+        .element(0)
+        .extracting(Entry::getType, Entry::getName)
+        .containsExactly(Content.Type.UDF, key);
   }
 
   @Test
@@ -1145,7 +1248,7 @@ public abstract class BaseTestNessieApi {
             api()
                 .getMultipleNamespaces()
                 .reference(main)
-                .namespace(Namespace.EMPTY)
+                .namespace(EMPTY_NAMESPACE)
                 .get()
                 .getNamespaces())
         .isEmpty();
@@ -1227,7 +1330,7 @@ public abstract class BaseTestNessieApi {
 
       for (Map.Entry<Namespace, List<Namespace>> c :
           ImmutableMap.<Namespace, List<Namespace>>of(
-                  Namespace.EMPTY,
+                  EMPTY_NAMESPACE,
                   singletonList(namespace1WithId),
                   namespace1,
                   asList(namespace2WithId, namespace3WithId),
@@ -1256,9 +1359,19 @@ public abstract class BaseTestNessieApi {
       namespace4WithId = api().createNamespace().refName(mainName).namespace(namespace4).create();
     }
 
+    // Add some non-namespace content to check that it is not returned by the namespace API
+    IcebergTable table = IcebergTable.of("irrelevant", 1, 2, 3, 4);
+    ContentKey table1 = ContentKey.of(namespace4, "table1");
+    api()
+        .commitMultipleOperations()
+        .branch(main)
+        .commitMeta(CommitMeta.fromMessage("Add table1"))
+        .operation(Put.of(table1, table))
+        .commit();
+
     for (Map.Entry<Namespace, List<Namespace>> c :
         ImmutableMap.of(
-                Namespace.EMPTY,
+                EMPTY_NAMESPACE,
                 asList(namespace1WithId, namespace2WithId, namespace3WithId, namespace4WithId),
                 namespace1,
                 asList(namespace1WithId, namespace2WithId, namespace3WithId, namespace4WithId),
@@ -1281,7 +1394,7 @@ public abstract class BaseTestNessieApi {
     }
 
     GetNamespacesResponse getMultiple =
-        api().getMultipleNamespaces().refName(mainName).namespace(Namespace.EMPTY).get();
+        api().getMultipleNamespaces().refName(mainName).namespace(EMPTY_NAMESPACE).get();
     if (isV2()) {
       main = (Branch) api().getReference().refName(mainName).get();
       soft.assertThat(getMultiple.getEffectiveReference()).isEqualTo(main);
@@ -1367,7 +1480,7 @@ public abstract class BaseTestNessieApi {
             api()
                 .getMultipleNamespaces()
                 .refName(mainName)
-                .namespace(Namespace.EMPTY)
+                .namespace(EMPTY_NAMESPACE)
                 .get()
                 .getNamespaces())
         .containsExactlyInAnyOrder(
@@ -1382,7 +1495,7 @@ public abstract class BaseTestNessieApi {
               .removeProperty("foo")
               .updateWithResponse();
       soft.assertThat(updateResponse.getEffectiveBranch()).isNotEqualTo(main);
-      main = updateResponse.getEffectiveBranch();
+      updateResponse.getEffectiveBranch();
     } else {
       api()
           .updateProperties()
@@ -1406,13 +1519,14 @@ public abstract class BaseTestNessieApi {
             api()
                 .getMultipleNamespaces()
                 .refName(mainName)
-                .namespace(Namespace.EMPTY)
+                .namespace(EMPTY_NAMESPACE)
                 .get()
                 .getNamespaces())
         .containsExactlyInAnyOrder(
             namespace1WithId, namespace2update2, namespace3WithId, namespace4WithId);
 
     if (isV2()) {
+      // contains other namespaces
       soft.assertThatThrownBy(
               () -> api().deleteNamespace().refName(mainName).namespace(namespace2).delete())
           .isInstanceOf(NessieNamespaceNotEmptyException.class)
@@ -1420,7 +1534,30 @@ public abstract class BaseTestNessieApi {
           .extracting(NessieNamespaceNotEmptyException::getErrorDetails)
           .extracting(ContentKeyErrorDetails::contentKey)
           .isEqualTo(namespace2.toContentKey());
+      // contains a table
+      soft.assertThatThrownBy(
+              () -> api().deleteNamespace().refName(mainName).namespace(namespace4).delete())
+          .isInstanceOf(NessieNamespaceNotEmptyException.class)
+          .asInstanceOf(type(NessieNamespaceNotEmptyException.class))
+          .extracting(NessieNamespaceNotEmptyException::getErrorDetails)
+          .extracting(ContentKeyErrorDetails::contentKey)
+          .isEqualTo(namespace4.toContentKey());
+    } else {
+      soft.assertThatThrownBy(
+              () -> api().deleteNamespace().refName(mainName).namespace(namespace2).delete())
+          .isInstanceOf(NessieNamespaceNotEmptyException.class);
+      soft.assertThatThrownBy(
+              () -> api().deleteNamespace().refName(mainName).namespace(namespace4).delete())
+          .isInstanceOf(NessieNamespaceNotEmptyException.class);
     }
+
+    main = (Branch) api().getReference().refName(mainName).get();
+    api()
+        .commitMultipleOperations()
+        .branch(main)
+        .commitMeta(CommitMeta.fromMessage("Delete table1"))
+        .operation(Delete.of(table1))
+        .commit();
 
     if (isV2()) {
       main = (Branch) api().getReference().refName(mainName).get();
@@ -1456,7 +1593,7 @@ public abstract class BaseTestNessieApi {
             api()
                 .getMultipleNamespaces()
                 .refName(mainName)
-                .namespace(Namespace.EMPTY)
+                .namespace(EMPTY_NAMESPACE)
                 .get()
                 .getNamespaces())
         .containsExactlyInAnyOrder(namespace1WithId, namespace2update2, namespace3WithId);
@@ -1466,6 +1603,50 @@ public abstract class BaseTestNessieApi {
     soft.assertThatCode(
             () -> api().deleteNamespace().refName(mainName).namespace(namespace2).delete())
         .doesNotThrowAnyException();
+  }
+
+  @Test
+  @NessieApiVersions(versions = NessieApiVersion.V2)
+  public void clientSideGetNamespaces() throws BaseNessieClientServerException {
+    Branch main = api().getDefaultBranch();
+    String mainName = main.getName();
+
+    Namespace parent = Namespace.of("parent");
+    parent =
+        api()
+            .createNamespace()
+            .refName(mainName)
+            .namespace(parent)
+            .createWithResponse()
+            .getNamespace();
+
+    // Test that effective reference is present, even if there are no child namespaces returned
+    GetNamespacesResponse getMultiple =
+        api().getMultipleNamespaces().refName(mainName).namespace(parent).get();
+    main = (Branch) api().getReference().refName(mainName).get();
+    soft.assertThat(getMultiple.getNamespaces()).containsOnly(parent);
+    soft.assertThat(getMultiple.getEffectiveReference()).isEqualTo(main);
+
+    // Test that effective reference is present, even if there are no namespaces at all returned
+    getMultiple =
+        api()
+            .getMultipleNamespaces()
+            .refName(mainName)
+            .namespace(Namespace.of("nonexistent"))
+            .get();
+    main = (Branch) api().getReference().refName(mainName).get();
+    soft.assertThat(getMultiple.getNamespaces()).isEmpty();
+    soft.assertThat(getMultiple.getEffectiveReference()).isEqualTo(main);
+
+    // Test pagination in ClientSideGetMultipleNamespaces
+    for (int i = 0; i < 200; i++) {
+      Namespace ns = Namespace.of("parent", "child" + i);
+      api().createNamespace().refName(mainName).namespace(ns).createWithResponse();
+    }
+    main = (Branch) api().getReference().refName(mainName).get();
+    getMultiple = api().getMultipleNamespaces().refName(mainName).namespace(parent).get();
+    soft.assertThat(getMultiple.getEffectiveReference()).isEqualTo(main);
+    soft.assertThat(getMultiple.getNamespaces()).hasSize(201);
   }
 
   @Test
@@ -1547,7 +1728,7 @@ public abstract class BaseTestNessieApi {
     ContentKey a = ContentKey.of("a");
     ContentKey b = ContentKey.of("b");
     IcebergTable ta = IcebergTable.of("path1", 42, 42, 42, 42);
-    IcebergView tb = IcebergView.of("pathx", 1, 1, "select * from table", "Dremio");
+    IcebergView tb = IcebergView.of("pathx", 1, 1);
     branch =
         api()
             .commitMultipleOperations()
@@ -1569,8 +1750,6 @@ public abstract class BaseTestNessieApi {
   @DisabledOnOs(OS.WINDOWS) // time resolution issues
   public void relativeCommitLocations() throws BaseNessieClientServerException {
     Branch main = api().getDefaultBranch();
-
-    assumeTrue(fullPagingSupport());
 
     int numCommits = 3;
 
@@ -1636,7 +1815,8 @@ public abstract class BaseTestNessieApi {
                                 .findFirst())
                         .map(LogEntry::getCommitMeta)
                         .map(CommitMeta::getHash)
-                        .isEqualTo(Optional.of(hashes.get(i2))))
+                        .get()
+                        .isEqualTo(hashes.get(i2)))
             .describedAs(
                 "commit-log - %s - relative-commit-spec %s - ref-commit: %s %s",
                 i, relativeCommitSpec, refCommit.getHash(), refCommit.getCommitTime())
@@ -1644,17 +1824,15 @@ public abstract class BaseTestNessieApi {
 
         // Check get-entries
         soft.assertThatCode(
-                () -> {
-                  assertThat(
-                          api()
-                              .getEntries()
-                              .refName(branchName)
-                              .hashOnRef(relativeCommitSpec)
-                              .stream()
-                              .map(Entry::getName)
-                              .count())
-                      .isEqualTo(1 + numCommits - i2);
-                })
+                () ->
+                    assertThat(
+                            api()
+                                .getEntries()
+                                .refName(branchName)
+                                .hashOnRef(relativeCommitSpec)
+                                .stream()
+                                .count())
+                        .isEqualTo(1 + numCommits - i2))
             .describedAs(
                 "get-entries - %s - relative-commit-spec %s - ref-commit: %s %s",
                 i, relativeCommitSpec, refCommit.getHash(), refCommit.getCommitTime())
@@ -1679,5 +1857,275 @@ public abstract class BaseTestNessieApi {
                 i, relativeCommitSpec, refCommit.getHash(), refCommit.getCommitTime());
       }
     }
+  }
+
+  @Test
+  @NessieApiVersions(versions = NessieApiVersion.V2)
+  public void createAndUpdateRepositoryConfig() throws Exception {
+    @SuppressWarnings("resource")
+    NessieApiV2 api = apiV2();
+
+    RepositoryConfig created =
+        GarbageCollectorConfig.builder()
+            .defaultCutoffPolicy("P30D")
+            .newFilesGracePeriod(Duration.of(3, ChronoUnit.HOURS))
+            .build();
+    RepositoryConfig updated =
+        GarbageCollectorConfig.builder()
+            .defaultCutoffPolicy("P10D")
+            .expectedFileCountPerContent(123)
+            .build();
+
+    soft.assertThat(created.getType()).isEqualTo(RepositoryConfig.Type.GARBAGE_COLLECTOR);
+    soft.assertThat(updated.getType()).isEqualTo(RepositoryConfig.Type.GARBAGE_COLLECTOR);
+
+    soft.assertThat(
+            api.getRepositoryConfig()
+                .type(RepositoryConfig.Type.GARBAGE_COLLECTOR)
+                .get()
+                .getConfigs())
+        .isEmpty();
+
+    soft.assertThat(api.updateRepositoryConfig().repositoryConfig(created).update().getPrevious())
+        .isNull();
+
+    soft.assertThat(
+            api.getRepositoryConfig()
+                .type(RepositoryConfig.Type.GARBAGE_COLLECTOR)
+                .get()
+                .getConfigs())
+        .containsExactly(created);
+
+    soft.assertThat(api.updateRepositoryConfig().repositoryConfig(updated).update().getPrevious())
+        .isEqualTo(created);
+
+    soft.assertThat(
+            api.getRepositoryConfig()
+                .type(RepositoryConfig.Type.GARBAGE_COLLECTOR)
+                .get()
+                .getConfigs())
+        .containsExactly(updated);
+  }
+
+  @Test
+  @NessieApiVersions(versions = NessieApiVersion.V2)
+  public void genericRepositoryConfigForbidden() {
+    @SuppressWarnings("resource")
+    NessieApiV2 api = apiV2();
+
+    RepositoryConfig created =
+        ImmutableGenericRepositoryConfig.builder()
+            .type(
+                new RepositoryConfig.Type() {
+                  @Override
+                  public String name() {
+                    return "FOO_BAR";
+                  }
+
+                  @Override
+                  public Class<? extends RepositoryConfig> type() {
+                    return GenericRepositoryConfig.class;
+                  }
+                })
+            .putAttributes("foo", "bar")
+            .putAttributes("bar", "baz")
+            .build();
+
+    soft.assertThatThrownBy(
+            () -> api.updateRepositoryConfig().repositoryConfig(created).update().getPrevious())
+        .isInstanceOf(NessieBadRequestException.class)
+        .hasMessageContaining(
+            "Repository config type bundle for 'FOO_BAR' is not available on the Nessie server side");
+  }
+
+  @Test
+  @NessieApiVersions(versions = NessieApiVersion.V2)
+  public void invalidCreateRepositoryConfig() {
+    @SuppressWarnings("resource")
+    NessieApiV2 api = apiV2();
+
+    api().getConfig();
+
+    soft.assertThatThrownBy(
+            () ->
+                api.updateRepositoryConfig()
+                    .repositoryConfig(
+                        GarbageCollectorConfig.builder()
+                            .defaultCutoffPolicy("foo")
+                            .newFilesGracePeriod(Duration.of(3, ChronoUnit.HOURS))
+                            .build())
+                    .update()
+                    .getPrevious())
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("Failed to parse default-cutoff-value");
+  }
+
+  @Test
+  public void invalidParameters() {
+    soft.assertThatThrownBy(() -> api().getEntries().refName("..invalid..").get())
+        .isInstanceOf(NessieBadRequestException.class)
+        .hasMessageContaining(Validation.REF_NAME_MESSAGE);
+  }
+
+  @Test
+  @NessieApiVersions(versions = NessieApiVersion.V2)
+  public void renameTwice() throws Exception {
+    Branch main = api().getDefaultBranch();
+    soft.assertThat(api().getAllReferences().get().getReferences()).containsExactly(main);
+
+    ContentKey key = ContentKey.of("table");
+    ContentKey keyBackup = ContentKey.of("table_backup");
+    ContentKey keyTemp = ContentKey.of("table_tmp");
+    List<ContentKey> keys = ImmutableList.of(key, keyTemp, keyBackup);
+
+    IcebergTable tableOld = IcebergTable.of("old", 1, 2, 3, 4);
+    IcebergTable tableNew = IcebergTable.of("new", 1, 2, 3, 4);
+
+    CommitResponse createTable =
+        prepCommit(main, "commit", Put.of(key, tableOld)).commitWithResponse();
+    tableOld = createTable.contentWithAssignedId(key, tableOld);
+
+    soft.assertThat(api().getContent().reference(createTable.getTargetBranch()).key(key).get())
+        .hasSize(1)
+        .containsEntry(key, tableOld);
+
+    // create new "table_tmp"
+
+    CommitResponse createNewTemp =
+        prepCommit(createTable.getTargetBranch(), "new", Put.of(keyTemp, tableNew))
+            .commitWithResponse();
+    tableNew = createNewTemp.contentWithAssignedId(keyTemp, tableNew);
+
+    soft.assertThat(api().getContent().reference(createNewTemp.getTargetBranch()).keys(keys).get())
+        .hasSize(2)
+        .containsEntry(key, tableOld)
+        .containsEntry(keyTemp, tableNew);
+
+    // rename "original" to "original_backup"
+
+    CommitResponse renameToBackup =
+        prepCommit(
+                createNewTemp.getTargetBranch(),
+                "backup",
+                Delete.of(key),
+                Put.of(keyBackup, tableOld))
+            .commitWithResponse();
+
+    soft.assertThat(api().getContent().reference(renameToBackup.getTargetBranch()).keys(keys).get())
+        .hasSize(2)
+        .containsEntry(keyBackup, tableOld)
+        .containsEntry(keyTemp, tableNew);
+
+    // rename new "table_tmp" to "table"
+
+    CommitResponse renameNew =
+        prepCommit(
+                renameToBackup.getTargetBranch(),
+                "rename new",
+                Delete.of(keyTemp),
+                Put.of(key, tableNew))
+            .commitWithResponse();
+
+    soft.assertThat(api().getContent().reference(renameNew.getTargetBranch()).keys(keys).get())
+        .hasSize(2)
+        .containsEntry(keyBackup, tableOld)
+        .containsEntry(key, tableNew);
+
+    // delete backup "table_backup"
+
+    CommitResponse deleteOld =
+        prepCommit(renameNew.getTargetBranch(), "delete", Delete.of(keyBackup))
+            .commitWithResponse();
+
+    soft.assertThat(api().getContent().reference(deleteOld.getTargetBranch()).keys(keys).get())
+        .hasSize(1)
+        .containsEntry(key, tableNew);
+  }
+
+  @Test
+  @NessieApiVersions(versions = {NessieApiVersion.V2})
+  public void testErrorsV2() throws Exception {
+    ContentKey key = ContentKey.of("namespace", "foo");
+    IcebergTable table = IcebergTable.of("content-table1", 42, 42, 42, 42);
+
+    Branch main = api().getDefaultBranch();
+
+    Branch branch =
+        (Branch)
+            api()
+                .createReference()
+                .reference(Branch.of("ref-conflicts", main.getHash()))
+                .sourceRefName(main.getName())
+                .create();
+
+    soft.assertThatThrownBy(
+            () ->
+                api()
+                    .commitMultipleOperations()
+                    .commitMeta(fromMessage("commit"))
+                    .operation(Put.of(key, table))
+                    .branch(branch)
+                    .commit())
+        .isInstanceOf(NessieReferenceConflictException.class)
+        .asInstanceOf(type(NessieReferenceConflictException.class))
+        .matches(e -> e.getErrorCode().equals(ErrorCode.REFERENCE_CONFLICT))
+        .extracting(NessieReferenceConflictException::getErrorDetails)
+        .asInstanceOf(type(ReferenceConflicts.class))
+        .extracting(ReferenceConflicts::conflicts, list(Conflict.class))
+        .hasSize(1)
+        .extracting(Conflict::conflictType)
+        .containsExactly(ConflictType.NAMESPACE_ABSENT);
+
+    soft.assertThatThrownBy(() -> api().getReference().refName("main@12345678").get())
+        .isInstanceOf(NessieBadRequestException.class)
+        .hasMessageEndingWith("Hashes are not allowed when fetching a reference by name");
+  }
+
+  @Test
+  @NessieApiVersions(versions = {NessieApiVersion.V2})
+  public void referenceHistory() throws Exception {
+    Branch main = api().getDefaultBranch();
+
+    Branch branch =
+        (Branch)
+            api()
+                .createReference()
+                .reference(Branch.of("ref-history", main.getHash()))
+                .sourceRefName(main.getName())
+                .create();
+
+    List<String> expectedHashes = new ArrayList<>();
+    for (int c = 0; c < 10; c++) {
+      expectedHashes.add(branch.getHash());
+      branch =
+          prepCommit(branch, "commit-" + c)
+              .operation(Put.of(ContentKey.of("t-" + c), IcebergTable.of("m-" + c, 1, 2, 3, 4)))
+              .commit();
+    }
+    Collections.reverse(expectedHashes);
+
+    // Functionality is tested in the version-store tests, this test only validates that there is a
+    // result.
+
+    @SuppressWarnings("resource")
+    NessieApiV2 api = apiV2();
+
+    ReferenceHistoryResponse response =
+        api.referenceHistory().refName(branch.getName()).headCommitsToScan(1000).get();
+    soft.assertThat(response)
+        .extracting(
+            ReferenceHistoryResponse::getReference, ReferenceHistoryResponse::commitLogConsistency)
+        .containsExactly(branch, CommitConsistency.COMMIT_CONSISTENT);
+    soft.assertThat(response.current())
+        .extracting(ReferenceHistoryState::commitHash, ReferenceHistoryState::commitConsistency)
+        .containsExactly(branch.getHash(), CommitConsistency.COMMIT_CONSISTENT);
+    soft.assertThat(response.previous())
+        .hasSize(10)
+        .extracting(ReferenceHistoryState::commitConsistency)
+        .containsOnly(CommitConsistency.COMMIT_CONSISTENT);
+    soft.assertThat(response.previous())
+        .hasSize(10)
+        .extracting(ReferenceHistoryState::commitHash)
+        .containsExactlyElementsOf(expectedHashes);
   }
 }

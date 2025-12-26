@@ -21,20 +21,24 @@ import static java.util.Collections.emptyMap;
 import static java.util.Collections.singletonList;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assumptions.assumeThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.projectnessie.model.CommitMeta.fromMessage;
 import static org.projectnessie.model.FetchOption.ALL;
 import static org.projectnessie.model.FetchOption.MINIMAL;
 import static org.projectnessie.model.IdentifiedContentKey.IdentifiedElement.identifiedElement;
 import static org.projectnessie.model.MergeBehavior.NORMAL;
+import static org.projectnessie.services.authz.ApiContext.apiContext;
 import static org.projectnessie.services.authz.Check.canCommitChangeAgainstReference;
 import static org.projectnessie.services.authz.Check.canCreateEntity;
 import static org.projectnessie.services.authz.Check.canDeleteEntity;
+import static org.projectnessie.services.authz.Check.canReadEntityValue;
 import static org.projectnessie.services.authz.Check.canUpdateEntity;
 import static org.projectnessie.services.authz.Check.canViewReference;
+import static org.projectnessie.versioned.RequestMeta.API_READ;
 
 import com.google.common.collect.ImmutableMap;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -48,9 +52,11 @@ import org.projectnessie.api.v1.TreeApi;
 import org.projectnessie.api.v1.params.CommitLogParams;
 import org.projectnessie.api.v1.params.EntriesParams;
 import org.projectnessie.error.BaseNessieClientServerException;
+import org.projectnessie.error.NessieContentNotFoundException;
 import org.projectnessie.model.Branch;
 import org.projectnessie.model.CommitMeta;
 import org.projectnessie.model.CommitResponse;
+import org.projectnessie.model.Content;
 import org.projectnessie.model.ContentKey;
 import org.projectnessie.model.Detached;
 import org.projectnessie.model.EntriesResponse;
@@ -91,7 +97,7 @@ public abstract class AbstractTestAccessChecks extends BaseTestServiceImpl {
     Set<Check> checks = new HashSet<>();
     setBatchAccessChecker(
         c ->
-            new AbstractBatchAccessChecker() {
+            new AbstractBatchAccessChecker(apiContext("Nessie", 1)) {
               @Override
               public Map<Check, String> check() {
                 checks.addAll(getChecks());
@@ -102,9 +108,125 @@ public abstract class AbstractTestAccessChecks extends BaseTestServiceImpl {
   }
 
   @Test
-  public void commitMergeTransplantAccessChecks() throws BaseNessieClientServerException {
-    assumeThat(databaseAdapter).isNull();
+  public void getContentForReadAndWrite() throws Exception {
+    ContentKey keyNamespace = ContentKey.of("ns1");
+    ContentKey keyTable = ContentKey.of("ns1", "key");
+    ContentKey keyNonExisting = ContentKey.of("ns1", "notThere");
+    Namespace namespace = Namespace.of(keyNamespace);
+    IcebergTable table = IcebergTable.of("foo", 42, 42, 42, 42);
 
+    BranchName branch = BranchName.of("getContentForReadAndWrite");
+    Branch main = createBranch(branch.getName());
+
+    CommitResponse commitResponse =
+        commit(
+            main,
+            CommitMeta.builder().message("no security context").build(),
+            Put.of(keyNamespace, namespace),
+            Put.of(keyTable, table));
+
+    Branch commit = commitResponse.getTargetBranch();
+    namespace = commitResponse.contentWithAssignedId(keyNamespace, namespace);
+    table = commitResponse.contentWithAssignedId(keyTable, table);
+
+    IdentifiedElement elementNamespace =
+        identifiedElement(keyNamespace.getName(), namespace.getId());
+    IdentifiedElement elementTable = identifiedElement(keyTable.getName(), table.getId());
+    IdentifiedElement elementNotThere = identifiedElement(keyNonExisting.getName(), null);
+
+    IdentifiedContentKey identifiedKeyNamespace =
+        IdentifiedContentKey.builder()
+            .contentKey(keyNamespace)
+            .type(namespace.getType())
+            .addElements(elementNamespace)
+            .build();
+    IdentifiedContentKey identifiedKeyTable =
+        IdentifiedContentKey.builder()
+            .contentKey(keyTable)
+            .type(table.getType())
+            .addElements(elementNamespace, elementTable)
+            .build();
+    IdentifiedContentKey identifiedKeyNonExisting =
+        IdentifiedContentKey.builder()
+            .contentKey(keyNonExisting)
+            .addElements(elementNamespace, elementNotThere)
+            .build();
+
+    // for read
+
+    Set<Check> checks = recordAccessChecks();
+    contents(commit, false, keyNamespace, keyTable, keyNonExisting);
+    soft.assertThat(checks)
+        .containsExactlyInAnyOrder(
+            canViewReference(branch),
+            canReadEntityValue(branch, identifiedKeyNamespace),
+            canReadEntityValue(branch, identifiedKeyTable));
+
+    checks = recordAccessChecks();
+    content(commit, false, keyNamespace);
+    soft.assertThat(checks)
+        .containsExactlyInAnyOrder(
+            canViewReference(branch), canReadEntityValue(branch, identifiedKeyNamespace));
+
+    checks = recordAccessChecks();
+    content(commit, false, keyTable);
+    soft.assertThat(checks)
+        .containsExactlyInAnyOrder(
+            canViewReference(branch), canReadEntityValue(branch, identifiedKeyTable));
+
+    checks = recordAccessChecks();
+    // Note: in practice the access-check throws before the content-not-found exception
+    soft.assertThatThrownBy(() -> content(commit, false, keyNonExisting))
+        .isInstanceOf(NessieContentNotFoundException.class);
+    soft.assertThat(checks).containsExactlyInAnyOrder(canViewReference(branch));
+
+    // for write
+
+    checks = recordAccessChecks();
+    contents(commit, true, keyNamespace, keyTable, keyNonExisting);
+    soft.assertThat(checks)
+        .containsExactlyInAnyOrder(
+            canCommitChangeAgainstReference(branch),
+            canViewReference(branch),
+            canUpdateEntity(branch, identifiedKeyNamespace),
+            canUpdateEntity(branch, identifiedKeyTable),
+            canCreateEntity(branch, identifiedKeyNonExisting),
+            canReadEntityValue(branch, identifiedKeyNamespace),
+            canReadEntityValue(branch, identifiedKeyTable),
+            canReadEntityValue(branch, identifiedKeyNonExisting));
+
+    checks = recordAccessChecks();
+    content(commit, true, keyNamespace);
+    soft.assertThat(checks)
+        .containsExactlyInAnyOrder(
+            canCommitChangeAgainstReference(branch),
+            canViewReference(branch),
+            canUpdateEntity(branch, identifiedKeyNamespace),
+            canReadEntityValue(branch, identifiedKeyNamespace));
+
+    checks = recordAccessChecks();
+    content(commit, true, keyTable);
+    soft.assertThat(checks)
+        .containsExactlyInAnyOrder(
+            canCommitChangeAgainstReference(branch),
+            canViewReference(branch),
+            canUpdateEntity(branch, identifiedKeyTable),
+            canReadEntityValue(branch, identifiedKeyTable));
+
+    checks = recordAccessChecks();
+    // Note: in practice the access-check throws before the content-not-found exception
+    soft.assertThatThrownBy(() -> content(commit, true, keyNonExisting))
+        .isInstanceOf(NessieContentNotFoundException.class);
+    soft.assertThat(checks)
+        .containsExactlyInAnyOrder(
+            canCommitChangeAgainstReference(branch),
+            canViewReference(branch),
+            canReadEntityValue(branch, identifiedKeyNonExisting),
+            canCreateEntity(branch, identifiedKeyNonExisting));
+  }
+
+  @Test
+  public void commitMergeTransplantAccessChecks() throws BaseNessieClientServerException {
     ContentKey keyUnrelated = ContentKey.of("unrelated");
     ContentKey keyNamespace1 = ContentKey.of("ns1");
     ContentKey keyNamespace2 = ContentKey.of("ns1", "ns2");
@@ -113,7 +235,7 @@ public abstract class AbstractTestAccessChecks extends BaseTestServiceImpl {
     Namespace namespace2 = Namespace.of(keyNamespace2);
     IcebergTable table1 = IcebergTable.of("foo", 42, 42, 42, 42);
     IcebergTable table2 = IcebergTable.of("bar", 42, 42, 42, 42);
-    UDF unrelated = UDF.of("meep", "sql");
+    UDF unrelated = UDF.udf("udf-meta", "42", "666");
 
     Branch common = createBranch("common");
     CommitResponse commonResponse =
@@ -296,7 +418,7 @@ public abstract class AbstractTestAccessChecks extends BaseTestServiceImpl {
 
     setBatchAccessChecker(
         x ->
-            new AbstractBatchAccessChecker() {
+            new AbstractBatchAccessChecker(apiContext("Nessie", 1)) {
               @Override
               public Map<Check, String> check() {
                 return getChecks().stream()
@@ -316,10 +438,45 @@ public abstract class AbstractTestAccessChecks extends BaseTestServiceImpl {
   }
 
   @Test
+  public void entriesAreFilteredBeforeAccessCheck() throws Exception {
+    Branch main = createBranch("entriesAreFilteredBeforeAccessCheck");
+
+    ContentKey someTableKey = ContentKey.of("sometablekey");
+
+    Branch commit =
+        commit(
+                main,
+                CommitMeta.builder().message("whatever").build(),
+                Put.of(someTableKey, IcebergTable.of(someTableKey.getName(), 42, 42, 42, 42)))
+            .getTargetBranch();
+
+    setBatchAccessChecker(
+        x ->
+            new AbstractBatchAccessChecker(apiContext("Nessie", 1)) {
+              @Override
+              public Map<Check, String> check() {
+                getChecks()
+                    .forEach(
+                        check -> {
+                          if (Content.Type.ICEBERG_TABLE.equals(check.contentType())) {
+                            throw new IllegalArgumentException("ALWAYS FAIL FOR TABLE ENTRY");
+                          }
+                        });
+                return Collections.emptyMap();
+              }
+            });
+
+    assertThat(entries(commit, null, "entry.contentType!='ICEBERG_TABLE'")).isEmpty();
+
+    assertThatThrownBy(() -> entries(commit, null, "entry.contentType=='ICEBERG_TABLE'"))
+        .hasMessageContaining("ALWAYS FAIL FOR TABLE ENTRY");
+  }
+
+  @Test
   public void detachedRefAccessChecks() throws Exception {
 
     BatchAccessChecker accessChecker =
-        new AbstractBatchAccessChecker() {
+        new AbstractBatchAccessChecker(apiContext("Nessie", 1)) {
           @Override
           public Map<Check, String> check() {
             Map<Check, String> failed = new LinkedHashMap<>();
@@ -402,7 +559,7 @@ public abstract class AbstractTestAccessChecks extends BaseTestServiceImpl {
           .isInstanceOf(AccessCheckException.class)
           .hasMessageContaining(READ_MSG);
       soft.assertThatThrownBy(
-              () -> contentApi().getContent(key, ref.getName(), ref.getHash(), false))
+              () -> contentApi().getContent(key, ref.getName(), ref.getHash(), false, API_READ))
           .describedAs("ref='%s', getContent", ref)
           .isInstanceOf(AccessCheckException.class)
           .hasMessageContaining(ENTITIES_MSG);
@@ -415,5 +572,33 @@ public abstract class AbstractTestAccessChecks extends BaseTestServiceImpl {
           .isInstanceOf(AccessCheckException.class)
           .hasMessageContaining(VIEW_MSG);
     }
+  }
+
+  @Test
+  public void testCheckReadContentKeyOnDeletedEntity() throws Exception {
+    Branch main = createBranch("testCheckReadContentKeyOnDeletedEntity");
+
+    main =
+        commit(
+                main,
+                CommitMeta.fromMessage("commit 1"),
+                Put.of(ContentKey.of("t1"), IcebergTable.of("m1", 1, 2, 3, 4)))
+            .getTargetBranch();
+
+    main =
+        commit(main, CommitMeta.fromMessage("commit 2"), Delete.of(ContentKey.of("t1")))
+            .getTargetBranch();
+
+    Set<Check> checks = recordAccessChecks();
+    commitLog(main.getName(), ALL, null);
+
+    assertThat(checks)
+        .satisfiesOnlyOnce(
+            check -> {
+              assertThat(check.type()).isEqualTo(CheckType.READ_CONTENT_KEY);
+              assertThat(check.key()).isEqualTo(ContentKey.of("t1"));
+              assertThat(check.identifiedKey()).isNotNull();
+              assertThat(check.contentId()).isNotNull();
+            });
   }
 }

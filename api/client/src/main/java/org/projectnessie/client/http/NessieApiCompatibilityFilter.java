@@ -16,6 +16,7 @@
 package org.projectnessie.client.http;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,22 +28,24 @@ public class NessieApiCompatibilityFilter implements RequestFilter {
   private static final String MAX_API_VERSION = "maxSupportedApiVersion";
   private static final String ACTUAL_API_VERSION = "actualApiVersion";
 
-  private HttpClient.Builder builder;
   private final int clientApiVersion;
   private final AtomicBoolean checkDone = new AtomicBoolean(false);
 
-  NessieApiCompatibilityFilter(HttpClient.Builder builder, int clientApiVersion) {
-    this.builder = builder.copy().clearRequestFilters().clearResponseFilters();
+  private HttpClient httpClient;
+
+  NessieApiCompatibilityFilter(int clientApiVersion) {
     this.clientApiVersion = clientApiVersion;
+  }
+
+  void setHttpClient(HttpClient httpClient) {
+    this.httpClient = httpClient;
   }
 
   @Override
   public void filter(RequestContext context) {
-    if (checkDone.compareAndSet(false, true)) {
-      try (HttpClient httpClient = builder.build()) {
+    if (httpClient != null) {
+      if (checkDone.compareAndSet(false, true)) {
         check(clientApiVersion, httpClient);
-      } finally {
-        builder = null;
       }
     }
   }
@@ -58,7 +61,21 @@ public class NessieApiCompatibilityFilter implements RequestFilter {
       throws NessieApiCompatibilityException {
     JsonNode config;
     try {
-      config = httpClient.newRequest().path("config").get().readEntity(JsonNode.class);
+      HttpResponse response = httpClient.newRequest().bypassFilters().path("config").get();
+      if (response.getStatus() != Status.OK) {
+        LOGGER.warn(
+            "API compatibility check: config endpoint replied with status {}, proceeding without check",
+            response.getStatus());
+        return;
+      }
+      config = response.readEntity(JsonNode.class);
+    } catch (HttpClientException e) {
+      LOGGER.warn(
+          "API compatibility check: failed to contact config endpoint, proceeding without check: {}",
+          e.toString());
+      return;
+    } catch (CancellationException e) {
+      return;
     } catch (Exception e) {
       LOGGER.warn(
           "API compatibility check: failed to contact config endpoint, proceeding without check",

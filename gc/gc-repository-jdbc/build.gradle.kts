@@ -14,17 +14,14 @@
  * limitations under the License.
  */
 
-plugins {
-  id("nessie-conventions-iceberg")
-  id("nessie-jacoco")
-}
+plugins { id("nessie-conventions-java11") }
 
-extra["maven.name"] = "Nessie - GC - JDBC live-contents-set persistence"
+publishingHelper { mavenName = "Nessie - GC - JDBC live-contents-set persistence" }
 
 dependencies {
   compileOnly(libs.errorprone.annotations)
-  compileOnly(libs.immutables.value.annotations)
-  annotationProcessor(libs.immutables.value.processor)
+  compileOnly(nessieProject("nessie-immutables-std"))
+  annotationProcessor(nessieProject("nessie-immutables-std", configuration = "processor"))
   compileOnly(libs.jetbrains.annotations)
 
   implementation(nessieProject("nessie-model"))
@@ -34,32 +31,41 @@ dependencies {
 
   implementation(libs.agroal.pool)
   implementation(libs.postgresql)
+  implementation(libs.mariadb.java.client)
   implementation(libs.h2)
 
   implementation(libs.slf4j.api)
 
   compileOnly(libs.microprofile.openapi)
 
-  // javax/jakarta
   compileOnly(libs.jakarta.validation.api)
-  compileOnly(libs.javax.validation.api)
   compileOnly(libs.jakarta.annotation.api)
   compileOnly(libs.findbugs.jsr305)
 
   compileOnly(platform(libs.jackson.bom))
   compileOnly("com.fasterxml.jackson.core:jackson-annotations")
 
-  testImplementation(project(":nessie-gc-base-tests"))
+  testFixturesApi(project(":nessie-gc-base"))
+  testFixturesApi(project(":nessie-gc-base-tests"))
 
-  testRuntimeOnly(libs.logback.classic)
+  testFixturesRuntimeOnly(libs.logback.classic)
 
-  testImplementation(libs.guava)
+  testFixturesApi(libs.guava)
 
-  testImplementation(platform(libs.jackson.bom))
-  testCompileOnly("com.fasterxml.jackson.core:jackson-annotations")
+  testFixturesApi(platform(libs.jackson.bom))
+  testFixturesCompileOnly("com.fasterxml.jackson.core:jackson-annotations")
 
-  testCompileOnly(libs.microprofile.openapi)
+  testFixturesCompileOnly(libs.microprofile.openapi)
 
-  testImplementation(platform(libs.junit.bom))
-  testImplementation(libs.bundles.junit.testing)
+  testFixturesApi(platform(libs.junit.bom))
+  testFixturesApi(libs.bundles.junit.testing)
+
+  intTestImplementation(libs.postgresql)
+  intTestImplementation(platform(libs.testcontainers.bom))
+  intTestImplementation("org.testcontainers:testcontainers-postgresql")
+  intTestImplementation("org.testcontainers:testcontainers-mariadb")
+  intTestImplementation("org.testcontainers:testcontainers-mysql")
+  intTestRuntimeOnly(libs.docker.java.api)
+  intTestImplementation(project(":nessie-container-spec-helper"))
+  intTestCompileOnly(project(":nessie-immutables-std"))
 }

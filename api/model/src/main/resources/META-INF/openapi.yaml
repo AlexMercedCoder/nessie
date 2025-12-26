@@ -34,6 +34,33 @@ tags:
   - name: v2
     description: End points from the Nessie v2 API
 
+servers:
+  # Not documenting Dremio Arctic API URLs here, because the REST version path element is at a different place.
+  # - url: "https://nessie.dremio.cloud/v2/repositories/{repositoryId}/"
+  #   description: Dremio Arctic Nessie URL
+  #   variables:
+  #     repositoryId:
+  #       description: The repository ID (mandatory) of your Arctic catalog. See "Catalog Endpoint" in "General Information"/"Catalog Settings" on the Dremio Cloud Arctic Catalogs page
+  #       default: ""
+  - url: "{scheme}://{host}:{port}/{basePath}"
+    description: Nessie REST API endpoint.
+    variables:
+      scheme:
+        description: The scheme of the URI, either http or https.
+        default: http
+      host:
+        description: The host address for the specified server
+        default: localhost
+      port:
+        description: The port used when addressing the host
+        default: "19120"
+      basePath:
+        description: |
+          Nessie Core API base path.
+          When using the Swagger UI from Quarkus from the `/q/swagger-ui` URL, leave the `basePath` value empty.
+          Otherwise use `/api/` for `basePath`.
+        default: ""
+
 paths: {} # inferred from java annotations
 
 components:
@@ -255,7 +282,7 @@ components:
               elements:
                 - example
                 - key
-              mergeBehavior: "FORCE"
+            mergeBehavior: "FORCE"
         dryRun: false
         fetchAdditionalInfo: false
         returnConflictAsResult: true
@@ -271,7 +298,7 @@ components:
               elements:
                 - example
                 - key
-              mergeBehavior: "FORCE"
+            mergeBehavior: "FORCE"
         dryRun: false
         fetchAdditionalInfo: false
         returnConflictAsResult: true
@@ -291,7 +318,6 @@ components:
                 - example
                 - key
             mergeBehavior: "NORMAL"
-            conflictType: "NONE"
 
     mergeResponseFail:
       value:
@@ -308,14 +334,19 @@ components:
                 - example
                 - key
             mergeBehavior: "NORMAL"
-            conflictType: "UNRESOLVABLE"
+            conflict:
+              type: "KEY_EXISTS"
+              message: "key 'example.key' already exists"
+              key:
+                elements:
+                  - example
+                  - key
 
     operations:
       value:
         commitMeta:
           author: "authorName <authorName@example.com>"
           authorTime: "2021-04-07T14:42:25.534748Z"
-          hash: "abcdef4242424242424242424242beef00dead42112233445566778899001122"
           message: "Example Commit Message"
           properties:
             additionalProp1: "xxx"
@@ -326,11 +357,9 @@ components:
           - type: PUT
             key:
               elements:
-                - example
-                - key
+                - table1
             content:
               type: ICEBERG_TABLE
-              id: b874b5d5-f926-4eed-9be7-b2380d9810c0
               metadataLocation: "/path/to/metadata/"
               snapshotId: 1
               schemaId: 2
@@ -478,6 +507,49 @@ components:
           - type: BRANCH
             hash: "1122334455667788112233445566778811223344556677881122334455667788"
             name: "main"
+
+    referenceHistoryResponse:
+      value:
+        reference:
+          type: BRANCH
+          hash: "abcdef4242424242424242424242beef00dead42112233445566778899001122"
+          name: "exampleBranch"
+        current:
+          pointer: "abcdef4242424242424242424242beef00dead42112233445566778899001122"
+          commitConsistency: "COMMIT_CONSISTENT"
+          meta:
+            hash: "abcdef4242424242424242424242beef00dead42112233445566778899001122"
+            committer: ""
+            author: "nessie-author"
+            signedOffBy: null
+            message: "update table"
+            commitTime: "2021-11-26T08:01:13.855974Z"
+            authorTime: "2021-11-26T08:01:13.852826Z"
+            properties: {}
+        previous:
+          - pointer: "84c57a20c5e956af4af40f3cc34ecc8a9028b9586da135c79011b1867aa3191d"
+            commitConsistency: "COMMIT_CONSISTENT"
+            meta:
+              hash: "84c57a20c5e956af4af40f3cc34ecc8a9028b9586da135c79011b1867aa3191d"
+              committer: ""
+              author: "nessie-author"
+              signedOffBy: null
+              message: "add table"
+              commitTime: "2021-11-26T07:01:13.855974Z"
+              authorTime: "2021-11-26T07:01:13.852826Z"
+              properties: { }
+          - pointer: "1122334455667788112233445566778811223344556677881122334455667788"
+            commitConsistency: "COMMIT_CONSISTENT"
+            meta:
+              hash: "1122334455667788112233445566778811223344556677881122334455667788"
+              committer: ""
+              author: "nessie-author"
+              signedOffBy: null
+              message: "add table"
+              commitTime: "2021-11-26T06:01:13.855974Z"
+              authorTime: "2021-11-26T06:01:13.852826Z"
+              properties: { }
+        commitLogConsistency: "NOT_CHECKED"
 
     referencesResponseWithMetadata:
       value:

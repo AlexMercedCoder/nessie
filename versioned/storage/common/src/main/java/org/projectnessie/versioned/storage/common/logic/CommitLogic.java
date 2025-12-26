@@ -15,11 +15,15 @@
  */
 package org.projectnessie.versioned.storage.common.logic;
 
+import static org.projectnessie.versioned.storage.common.logic.CommitLogic.ValueReplacement.NO_VALUE_REPLACEMENT;
+import static org.projectnessie.versioned.storage.common.logic.ConflictHandler.ConflictResolution.CONFLICT;
+
+import jakarta.annotation.Nonnull;
+import jakarta.annotation.Nullable;
+import jakarta.validation.constraints.NotNull;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.function.Consumer;
-import javax.annotation.Nonnull;
-import javax.annotation.Nullable;
 import org.projectnessie.versioned.storage.common.config.StoreConfig;
 import org.projectnessie.versioned.storage.common.exceptions.CommitConflictException;
 import org.projectnessie.versioned.storage.common.exceptions.ObjNotFoundException;
@@ -36,24 +40,19 @@ import org.projectnessie.versioned.storage.common.objtypes.ContentValueObj;
 import org.projectnessie.versioned.storage.common.persist.Obj;
 import org.projectnessie.versioned.storage.common.persist.ObjId;
 import org.projectnessie.versioned.storage.common.persist.Reference;
+import org.projectnessie.versioned.storage.common.persist.StoredObjResult;
 
 /** Logic to read commits and perform commits including conflict checks. */
 public interface CommitLogic {
 
   @Nonnull
-  @jakarta.annotation.Nonnull
-  PagedResult<CommitObj, ObjId> commitLog(
-      @Nonnull @jakarta.annotation.Nonnull CommitLogQuery commitLogQuery);
+  PagedResult<CommitObj, ObjId> commitLog(@Nonnull CommitLogQuery commitLogQuery);
 
   @Nonnull
-  @jakarta.annotation.Nonnull
-  PagedResult<ObjId, ObjId> commitIdLog(
-      @Nonnull @jakarta.annotation.Nonnull CommitLogQuery commitLogQuery);
+  PagedResult<ObjId, ObjId> commitIdLog(@Nonnull CommitLogQuery commitLogQuery);
 
   @Nonnull
-  @jakarta.annotation.Nonnull
-  DiffPagedResult<DiffEntry, StoreKey> diff(
-      @Nonnull @jakarta.annotation.Nonnull DiffQuery diffQuery);
+  DiffPagedResult<DiffEntry, StoreKey> diff(@Nonnull DiffQuery diffQuery);
 
   /**
    * Convenience method that combines {@link #buildCommitObj(CreateCommit, ConflictHandler,
@@ -63,14 +62,12 @@ public interface CommitLogic {
    * @param createCommit parameters for {@link #buildCommitObj(CreateCommit, ConflictHandler,
    *     CommitOpHandler, ValueReplacement, ValueReplacement)}
    * @param additionalObjects additional {@link Obj}s to store, for example {@link ContentValueObj}
-   * @return the non-null commit, if the commit was stored as a new record, or {@code null} if an
-   *     object with the same ID already exists.
+   * @return the non-{@code null} commit, if it was stored as a new record or already existed with
+   *     the same values. Returns {@code null} if an object with the same ID already exists
+   *     (collision).
    */
   @Nullable
-  @jakarta.annotation.Nullable
-  CommitObj doCommit(
-      @Nonnull @jakarta.annotation.Nonnull CreateCommit createCommit,
-      @Nonnull @jakarta.annotation.Nonnull List<Obj> additionalObjects)
+  CommitObj doCommit(@Nonnull CreateCommit createCommit, @Nonnull List<Obj> additionalObjects)
       throws CommitConflictException, ObjNotFoundException;
 
   /**
@@ -80,15 +77,17 @@ public interface CommitLogic {
    *
    * @param commit commit to store
    * @param additionalObjects additional {@link Obj}s to store, for example {@link ContentValueObj}
-   * @return {@code true} if committed
+   * @return container holding the information whether the {@link CommitObj} was persisted as a new
+   *     commit object, existed with the same values or was not persisted due to a commit-ID/hash
+   *     collision.
    * @see #doCommit(CreateCommit, List)
    * @see #buildCommitObj(CreateCommit, ConflictHandler, CommitOpHandler, ValueReplacement,
    *     ValueReplacement)
    * @see #updateCommit(CommitObj)
    */
-  boolean storeCommit(
-      @Nonnull @jakarta.annotation.Nonnull CommitObj commit,
-      @Nonnull @jakarta.annotation.Nonnull List<Obj> additionalObjects);
+  @NotNull
+  StoredObjResult<CommitObj> storeCommit(
+      @Nonnull CommitObj commit, @Nonnull List<Obj> additionalObjects);
 
   /**
    * Updates an <em>existing</em> commit and handles storing the (external) {@link
@@ -98,7 +97,7 @@ public interface CommitLogic {
    * @param commit the commit to update
    * @return the persisted commit, containing the updated incremental and reference indexes
    */
-  CommitObj updateCommit(@Nonnull @jakarta.annotation.Nonnull CommitObj commit);
+  CommitObj updateCommit(@Nonnull CommitObj commit);
 
   /**
    * Adds a new commit on top of its parent commit, performing checks of the existing vs expected
@@ -173,49 +172,43 @@ public interface CommitLogic {
    * @see #storeCommit(CommitObj, List)
    */
   @Nonnull
-  @jakarta.annotation.Nonnull
   CommitObj buildCommitObj(
-      @Nonnull @jakarta.annotation.Nonnull CreateCommit createCommit,
-      @Nonnull @jakarta.annotation.Nonnull ConflictHandler conflictHandler,
+      @Nonnull CreateCommit createCommit,
+      @Nonnull ConflictHandler conflictHandler,
       CommitOpHandler commitOpHandler,
-      @Nonnull @jakarta.annotation.Nonnull ValueReplacement expectedValueReplacement,
-      @Nonnull @jakarta.annotation.Nonnull ValueReplacement committedValueReplacement)
+      @Nonnull ValueReplacement expectedValueReplacement,
+      @Nonnull ValueReplacement committedValueReplacement)
       throws CommitConflictException, ObjNotFoundException;
+
+  @Nonnull
+  default CommitObj buildCommitObj(@Nonnull CreateCommit createCommit)
+      throws CommitConflictException, ObjNotFoundException {
+    return buildCommitObj(
+        createCommit, c -> CONFLICT, (k, v) -> {}, NO_VALUE_REPLACEMENT, NO_VALUE_REPLACEMENT);
+  }
 
   @FunctionalInterface
   interface ValueReplacement {
     ValueReplacement NO_VALUE_REPLACEMENT = (add, key, id) -> id;
 
     @Nullable
-    @jakarta.annotation.Nullable
     ObjId maybeReplaceValue(boolean add, StoreKey storeKey, ObjId currentId);
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
-  ObjId findCommonAncestor(
-      @Nonnull @jakarta.annotation.Nonnull ObjId targetId,
-      @Nonnull @jakarta.annotation.Nonnull ObjId sourceId)
+  ObjId findCommonAncestor(@Nonnull ObjId targetId, @Nonnull ObjId sourceId)
       throws NoSuchElementException;
 
   @Nonnull
-  @jakarta.annotation.Nonnull
-  ObjId findMergeBase(
-      @Nonnull @jakarta.annotation.Nonnull ObjId targetId,
-      @Nonnull @jakarta.annotation.Nonnull ObjId sourceId)
+  ObjId findMergeBase(@Nonnull ObjId targetId, @Nonnull ObjId sourceId)
       throws NoSuchElementException;
 
   /** Retrieves the {@link CommitObj commit object} referenced by {@code commitId}. */
   @Nullable
-  @jakarta.annotation.Nullable
-  CommitObj fetchCommit(@Nonnull @jakarta.annotation.Nonnull ObjId commitId)
-      throws ObjNotFoundException;
+  CommitObj fetchCommit(@Nonnull ObjId commitId) throws ObjNotFoundException;
 
   @Nonnull
-  @jakarta.annotation.Nonnull
-  CommitObj[] fetchCommits(
-      @Nonnull @jakarta.annotation.Nonnull ObjId startCommitId,
-      @Nonnull @jakarta.annotation.Nonnull ObjId endCommitId)
+  CommitObj[] fetchCommits(@Nonnull ObjId startCommitId, @Nonnull ObjId endCommitId)
       throws ObjNotFoundException;
 
   /**
@@ -228,15 +221,11 @@ public interface CommitLogic {
    * @return value of {@code createCommit}
    */
   @Nonnull
-  @jakarta.annotation.Nonnull
   CreateCommit.Builder diffToCreateCommit(
-      @Nonnull @jakarta.annotation.Nonnull PagedResult<DiffEntry, StoreKey> diff,
-      @Nonnull @jakarta.annotation.Nonnull CreateCommit.Builder createCommit);
+      @Nonnull PagedResult<DiffEntry, StoreKey> diff, @Nonnull CreateCommit.Builder createCommit);
 
   @Nullable
-  @jakarta.annotation.Nullable
-  CommitObj headCommit(@Nonnull @jakarta.annotation.Nonnull Reference reference)
-      throws ObjNotFoundException;
+  CommitObj headCommit(@Nonnull Reference reference) throws ObjNotFoundException;
 
   /**
    * Identifies all heads and fork-points.

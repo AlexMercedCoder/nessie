@@ -15,17 +15,17 @@
  */
 
 import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
-import org.apache.tools.ant.taskdefs.condition.Os
-import org.apache.tools.ant.util.NullOutputStream
 
 plugins {
-  id("com.github.johnrengelman.shadow")
-  id("nessie-conventions-iceberg")
-  id("nessie-jacoco")
+  id("com.gradleup.shadow")
+  id("nessie-conventions-java11")
   id("nessie-shadow-jar")
+  id("nessie-license-report")
 }
 
-extra["maven.name"] = "Nessie - GC - Standalone command line tool"
+publishingHelper { mavenName = "Nessie - GC - Standalone command line tool" }
+
+dnsjavaDowngrade()
 
 dependencies {
   implementation(nessieProject("nessie-client"))
@@ -33,14 +33,18 @@ dependencies {
   implementation(nessieProject("nessie-gc-iceberg"))
   implementation(nessieProject("nessie-gc-iceberg-files"))
   implementation(nessieProject("nessie-gc-repository-jdbc"))
+  implementation(nessieProject("nessie-notice"))
 
   compileOnly(libs.errorprone.annotations)
-  compileOnly(libs.immutables.value.annotations)
-  annotationProcessor(libs.immutables.value.processor)
+  compileOnly(nessieProject("nessie-immutables-std"))
+  annotationProcessor(nessieProject("nessie-immutables-std", configuration = "processor"))
 
-  implementation(libs.iceberg.core)
-  runtimeOnly(libs.iceberg.hive.metastore)
-  runtimeOnly(libs.iceberg.aws)
+  implementation(platform(libs.iceberg.bom))
+  implementation("org.apache.iceberg:iceberg-core")
+  runtimeOnly("org.apache.iceberg:iceberg-hive-metastore")
+  runtimeOnly("org.apache.iceberg:iceberg-aws")
+  runtimeOnly("org.apache.iceberg:iceberg-gcp")
+  runtimeOnly("org.apache.iceberg:iceberg-azure")
 
   // hadoop-common brings Jackson in ancient versions, pulling in the Jackson BOM to avoid that
   implementation(platform(libs.jackson.bom))
@@ -61,6 +65,23 @@ dependencies {
   implementation(platform(libs.awssdk.bom))
   runtimeOnly("software.amazon.awssdk:s3")
   runtimeOnly("software.amazon.awssdk:url-connection-client")
+  runtimeOnly("software.amazon.awssdk:sts")
+  runtimeOnly("software.amazon.awssdk:kms")
+
+  implementation(platform(libs.google.cloud.storage.bom))
+  implementation(platform(libs.google.cloud.libraries.bom))
+  runtimeOnly("com.google.cloud:google-cloud-storage")
+  runtimeOnly("com.google.cloud:google-cloud-nio")
+  runtimeOnly(libs.google.cloud.bigdataoss.gcs.connector)
+  runtimeOnly(libs.google.cloud.bigdataoss.gcsio) {
+    // brings junit:junit + hamcrest :(
+    exclude("io.grpc", "grpc-testing")
+  }
+
+  implementation(platform(libs.azuresdk.bom))
+  runtimeOnly("com.azure:azure-storage-file-datalake")
+  runtimeOnly("com.azure:azure-identity")
+  runtimeOnly(libs.hadoop.azure)
 
   implementation(libs.picocli)
   annotationProcessor(libs.picocli.codegen)
@@ -71,11 +92,8 @@ dependencies {
   compileOnly(libs.microprofile.openapi)
   compileOnly("com.fasterxml.jackson.core:jackson-annotations")
 
-  // javax/jakarta
   compileOnly(libs.jakarta.validation.api)
-  compileOnly(libs.javax.validation.api)
   compileOnly(libs.jakarta.annotation.api)
-  compileOnly(libs.findbugs.jsr305)
 
   runtimeOnly(libs.h2)
   runtimeOnly(libs.postgresql)
@@ -83,12 +101,12 @@ dependencies {
   testCompileOnly(platform(libs.jackson.bom))
 
   testImplementation(nessieProject("nessie-jaxrs-testextension"))
-  testImplementation(nessieProject(":nessie-versioned-storage-inmemory"))
+  testImplementation(nessieProject("nessie-versioned-storage-inmemory-tests"))
 
   testRuntimeOnly(libs.logback.classic)
 
-  testCompileOnly(libs.immutables.value.annotations)
-  testAnnotationProcessor(libs.immutables.value.processor)
+  testCompileOnly(nessieProject("nessie-immutables-std"))
+  testAnnotationProcessor(nessieProject("nessie-immutables-std", configuration = "processor"))
 
   testCompileOnly("com.fasterxml.jackson.core:jackson-annotations")
   testCompileOnly(libs.microprofile.openapi)
@@ -97,12 +115,16 @@ dependencies {
   testImplementation(libs.bundles.junit.testing)
 }
 
-tasks.named<Test>("test").configure { systemProperty("expectedNessieVersion", project.version) }
+tasks.named<Test>("test").configure {
+  // Java 23 & Hadoop
+  systemProperty("java.security.manager", "allow")
+  systemProperty("expectedNessieVersion", project.version)
+}
 
 val mainClassName = "org.projectnessie.gc.tool.cli.CLI"
 
 val generateAutoComplete by
-  tasks.creating(JavaExec::class.java) {
+  tasks.registering(JavaExec::class) {
     group = "build"
     description = "Generates the bash/zsh autocompletion scripts"
 
@@ -110,60 +132,46 @@ val generateAutoComplete by
 
     dependsOn(compileJava)
 
-    val completionScriptsDir = project.buildDir.resolve("classes/java/main/META-INF/completion")
+    val completionScriptsDir =
+      project.layout.buildDirectory.dir("classes/java/main/META-INF/completion")
 
-    doFirst { completionScriptsDir.mkdirs() }
+    doFirst { mkdir(completionScriptsDir) }
 
-    mainClass.set("picocli.AutoComplete")
+    mainClass = "picocli.AutoComplete"
     classpath(configurations.named("runtimeClasspath"), compileJava)
+    workingDir(projectDir)
     args(
       "--force",
       "-o",
-      completionScriptsDir.resolve("nessie-gc-completion").toString(),
-      mainClassName
+      completionScriptsDir.get().dir("nessie-gc-completion").asFile.relativeTo(projectDir),
+      mainClassName,
     )
 
     inputs.files("src/main").withPathSensitivity(PathSensitivity.RELATIVE)
+    outputs.cacheIf { true }
     outputs.dir(completionScriptsDir)
   }
 
 // generateAutoComplete writes the bash/zsh completion script into the main resource output,
 // which is a bit ugly, but works. But the following tasks need a dependency to that task so that
 // Gradle can properly evaluate the dependencies.
-listOf("compileTestJava", "jandexMain", "jar", "shadowJar").forEach { t ->
+listOf("compileTestJava", "jandex", "jar", "shadowJar").forEach { t ->
   tasks.named(t).configure { dependsOn(generateAutoComplete) }
 }
 
 val shadowJar = tasks.named<ShadowJar>("shadowJar")
 
-val unixExecutable by tasks.registering(UnixExecutableTask::class)
-
-unixExecutable.configure {
-  group = "build"
-  description = "Generates the Unix executable"
-
-  dependsOn(shadowJar)
-  executable.set(buildDir.resolve("executable").resolve("nessie-gc"))
-  template.set(projectDir.resolve("src/exec/exec-preamble.sh"))
-  sourceJar.set(shadowJar.get().archiveFile)
-}
+val copyUberJar by
+  tasks.registering(Copy::class) {
+    group = "build"
+    description = "Copies the uber-jar to build/executable"
+    dependsOn(shadowJar)
+    from(shadowJar.get().archiveFile)
+    into(project.layout.buildDirectory.dir("executable"))
+    rename { "nessie-gc.jar" }
+  }
 
 shadowJar.configure {
   manifest { attributes["Main-Class"] = mainClassName }
-  finalizedBy(unixExecutable)
+  finalizedBy(copyUberJar)
 }
-
-val execSmokeTest by tasks.registering(Exec::class)
-
-execSmokeTest.configure {
-  description = "Verify that the generated nessie-gc executable works"
-  enabled = Os.isFamily(Os.FAMILY_UNIX)
-  val exec = buildDir.resolve("executable").resolve("nessie-gc")
-  inputs.file(exec).withPathSensitivity(PathSensitivity.RELATIVE)
-  dependsOn(unixExecutable)
-  executable(exec)
-  args("help")
-  standardOutput = NullOutputStream.INSTANCE
-}
-
-tasks.named("check").configure { dependsOn(execSmokeTest) }

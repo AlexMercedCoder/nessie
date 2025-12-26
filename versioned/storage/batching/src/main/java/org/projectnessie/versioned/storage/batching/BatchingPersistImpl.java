@@ -20,6 +20,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 import com.google.common.annotations.VisibleForTesting;
 import jakarta.annotation.Nonnull;
 import jakarta.annotation.Nullable;
+import java.lang.reflect.Array;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
@@ -31,6 +32,7 @@ import org.projectnessie.versioned.storage.common.exceptions.ObjTooLargeExceptio
 import org.projectnessie.versioned.storage.common.exceptions.RefAlreadyExistsException;
 import org.projectnessie.versioned.storage.common.exceptions.RefConditionFailedException;
 import org.projectnessie.versioned.storage.common.exceptions.RefNotFoundException;
+import org.projectnessie.versioned.storage.common.objtypes.UpdateableObj;
 import org.projectnessie.versioned.storage.common.persist.CloseableIterator;
 import org.projectnessie.versioned.storage.common.persist.Obj;
 import org.projectnessie.versioned.storage.common.persist.ObjId;
@@ -177,23 +179,6 @@ final class BatchingPersistImpl implements BatchingPersist, ValidatingPersist {
     }
   }
 
-  @Override
-  @Nonnull
-  @javax.annotation.Nonnull
-  public Obj fetchObj(@Nonnull @javax.annotation.Nonnull ObjId id) throws ObjNotFoundException {
-    readLock();
-    try {
-      Obj r = pendingObj(id);
-      if (r != null) {
-        return r;
-      }
-    } finally {
-      readUnlock();
-    }
-
-    return delegate().fetchObj(id);
-  }
-
   private Obj pendingObj(ObjId id) {
     Obj r = pendingUpserts.get(id);
     if (r == null) {
@@ -206,13 +191,13 @@ final class BatchingPersistImpl implements BatchingPersist, ValidatingPersist {
   @Nonnull
   @javax.annotation.Nonnull
   public <T extends Obj> T fetchTypedObj(
-      @Nonnull @javax.annotation.Nonnull ObjId id, ObjType type, Class<T> typeClass)
+      @Nonnull @javax.annotation.Nonnull ObjId id, ObjType type, @Nonnull Class<T> typeClass)
       throws ObjNotFoundException {
     readLock();
     try {
       Obj r = pendingObj(id);
       if (r != null) {
-        if (r.type() != type) {
+        if (type != null && !r.type().equals(type)) {
           throw new ObjNotFoundException(id);
         }
         @SuppressWarnings("unchecked")
@@ -245,12 +230,24 @@ final class BatchingPersistImpl implements BatchingPersist, ValidatingPersist {
   @Override
   @Nonnull
   @javax.annotation.Nonnull
-  public Obj[] fetchObjs(@Nonnull @javax.annotation.Nonnull ObjId[] ids)
-      throws ObjNotFoundException {
+  public <T extends Obj> T[] fetchTypedObjs(
+      @Nonnull ObjId[] ids, ObjType type, @Nonnull Class<T> typeClass) throws ObjNotFoundException {
 
     ObjId[] backendIds = null;
-    Obj[] r = new Obj[ids.length];
+    @SuppressWarnings("unchecked")
+    T[] r = (T[]) Array.newInstance(typeClass, ids.length);
 
+    backendIds = fetchObjsPre(ids, r, backendIds);
+
+    if (backendIds == null) {
+      return r;
+    }
+
+    T[] backendResult = delegate().fetchTypedObjs(backendIds, type, typeClass);
+    return fetchObjsPost(backendResult, r);
+  }
+
+  private <T extends Obj> ObjId[] fetchObjsPre(ObjId[] ids, T[] r, ObjId[] backendIds) {
     readLock();
     try {
       for (int i = 0; i < ids.length; i++) {
@@ -260,7 +257,9 @@ final class BatchingPersistImpl implements BatchingPersist, ValidatingPersist {
         }
         Obj o = pendingObj(id);
         if (o != null) {
-          r[i] = o;
+          @SuppressWarnings("unchecked")
+          T typed = (T) o;
+          r[i] = typed;
         } else {
           if (backendIds == null) {
             backendIds = new ObjId[ids.length];
@@ -271,19 +270,37 @@ final class BatchingPersistImpl implements BatchingPersist, ValidatingPersist {
     } finally {
       readUnlock();
     }
+    return backendIds;
+  }
 
-    if (backendIds == null) {
-      return r;
-    }
-
-    Obj[] backendResult = delegate().fetchObjs(backendIds);
+  private static <T extends Obj> T[] fetchObjsPost(T[] backendResult, T[] r) {
     for (int i = 0; i < backendResult.length; i++) {
-      Obj o = backendResult[i];
+      T o = backendResult[i];
       if (o != null) {
         r[i] = o;
       }
     }
     return r;
+  }
+
+  @Override
+  @Nonnull
+  @javax.annotation.Nonnull
+  public <T extends Obj> T[] fetchTypedObjsIfExist(
+      @Nonnull ObjId[] ids, ObjType type, @Nonnull Class<T> typeClass) {
+
+    ObjId[] backendIds = null;
+    @SuppressWarnings("unchecked")
+    T[] r = (T[]) Array.newInstance(typeClass, ids.length);
+
+    backendIds = fetchObjsPre(ids, r, backendIds);
+
+    if (backendIds == null) {
+      return r;
+    }
+
+    T[] backendResult = delegate().fetchTypedObjsIfExist(backendIds, type, typeClass);
+    return fetchObjsPost(backendResult, r);
   }
 
   @Override
@@ -310,6 +327,22 @@ final class BatchingPersistImpl implements BatchingPersist, ValidatingPersist {
     } finally {
       writeUnlock();
     }
+  }
+
+  @Override
+  public boolean deleteWithReferenced(@Nonnull Obj obj) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public boolean deleteConditional(@Nonnull UpdateableObj obj) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public boolean updateConditional(
+      @Nonnull UpdateableObj expected, @Nonnull UpdateableObj newValue) {
+    throw new UnsupportedOperationException();
   }
 
   @Override
@@ -393,6 +426,13 @@ final class BatchingPersistImpl implements BatchingPersist, ValidatingPersist {
   }
 
   @Override
+  @Nullable
+  @javax.annotation.Nullable
+  public Reference fetchReferenceForUpdate(@Nonnull @javax.annotation.Nonnull String name) {
+    return delegate().fetchReferenceForUpdate(name);
+  }
+
+  @Override
   @Nonnull
   @javax.annotation.Nonnull
   public Reference[] fetchReferences(@Nonnull @javax.annotation.Nonnull String[] names) {
@@ -402,8 +442,20 @@ final class BatchingPersistImpl implements BatchingPersist, ValidatingPersist {
   @Override
   @Nonnull
   @javax.annotation.Nonnull
+  public Reference[] fetchReferencesForUpdate(@Nonnull @javax.annotation.Nonnull String[] names) {
+    return delegate().fetchReferencesForUpdate(names);
+  }
+
+  @Override
+  @Nonnull
+  @javax.annotation.Nonnull
   public CloseableIterator<Obj> scanAllObjects(
       @Nonnull @javax.annotation.Nonnull Set<ObjType> returnedObjTypes) {
     throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public boolean isCaching() {
+    return delegate().isCaching();
   }
 }

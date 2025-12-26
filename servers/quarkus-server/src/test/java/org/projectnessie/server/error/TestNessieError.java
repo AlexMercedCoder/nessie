@@ -19,8 +19,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
+import jakarta.ws.rs.core.Response;
 import java.net.URI;
-import javax.ws.rs.core.Response;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.assertj.core.api.SoftAssertions;
 import org.junit.jupiter.api.AfterEach;
@@ -69,7 +69,7 @@ class TestNessieError {
             .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS);
     client =
         HttpClient.builder()
-            .setBaseUri(uri.resolve("nessieErrorTest"))
+            .setBaseUri(uri.resolve("../nessieErrorTest"))
             .setObjectMapper(mapper)
             .addResponseFilter(new NessieHttpResponseFilter())
             .build();
@@ -122,7 +122,7 @@ class TestNessieError {
             () -> unwrap(() -> client.newRequest().path("unsupportedMediaTypePut").put("foo")))
         .isInstanceOf(NessieUnsupportedMediaTypeException.class)
         .hasMessage(
-            "Unsupported Media Type (HTTP/415): RESTEASY003065: Cannot consume content type");
+            "Unsupported Media Type (HTTP/415): The content-type header value did not match the value in @Consumes");
   }
 
   @Test
@@ -176,17 +176,17 @@ class TestNessieError {
             () -> unwrap(() -> client.newRequest().path("constraintDefinitionException").get()))
         .isInstanceOf(NessieInternalServerException.class)
         .hasMessage(
-            "Internal Server Error (HTTP/500): javax.validation.ConstraintDefinitionException: meep");
+            "Internal Server Error (HTTP/500): jakarta.validation.ConstraintDefinitionException: meep");
     soft.assertThatThrownBy(
             () -> unwrap(() -> client.newRequest().path("constraintDeclarationException").get()))
         .isInstanceOf(NessieInternalServerException.class)
         .hasMessage(
-            "Internal Server Error (HTTP/500): javax.validation.ConstraintDeclarationException: meep");
+            "Internal Server Error (HTTP/500): jakarta.validation.ConstraintDeclarationException: meep");
     soft.assertThatThrownBy(
             () -> unwrap(() -> client.newRequest().path("groupDefinitionException").get()))
         .isInstanceOf(NessieInternalServerException.class)
         .hasMessage(
-            "Internal Server Error (HTTP/500): javax.validation.GroupDefinitionException: meep");
+            "Internal Server Error (HTTP/500): jakarta.validation.GroupDefinitionException: meep");
   }
 
   @Test

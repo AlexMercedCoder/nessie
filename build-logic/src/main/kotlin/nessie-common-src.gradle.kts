@@ -28,8 +28,11 @@ plugins {
 // ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Checkstyle
 
+val noCheckstyle =
+  project.name.endsWith("-proto") || project.extra.has("duplicated-project-sources")
+
 // Exclude projects that only generate Java from protobuf
-if (project.name.endsWith("-proto") || project.extra.has("duplicated-project-sources")) {
+if (noCheckstyle) {
   tasks.withType<Checkstyle>().configureEach { enabled = false }
 } else {
   checkstyle {
@@ -39,12 +42,30 @@ if (project.name.endsWith("-proto") || project.extra.has("duplicated-project-sou
     isIgnoreFailures = false
   }
 
+  configurations.configureEach {
+    // Avoids dependency resolution error:
+    // Could not resolve all task dependencies for configuration '...:checkstyle'.
+    //   > Module 'com.google.guava:guava' has been rejected:
+    //     Cannot select module with conflict on capability
+    //         'com.google.collections:google-collections:33.0.0-jre'
+    //         also provided by [com.google.collections:google-collections:1.0(runtime)]
+    //   > Module 'com.google.collections:google-collections' has been rejected:
+    //     Cannot select module with conflict on capability
+    //         'com.google.collections:google-collections:1.0'
+    //         also provided by [com.google.guava:guava:33.0.0-jre(jreRuntimeElements)]
+    resolutionStrategy.capabilitiesResolution.withCapability(
+      "com.google.collections:google-collections"
+    ) {
+      selectHighestVersion()
+    }
+  }
+
   tasks.withType<Checkstyle>().configureEach {
     if (plugins.hasPlugin("io.quarkus")) {
       when (name) {
-        "checkstyleMain" -> dependsOn(tasks.named("compileQuarkusGeneratedSourcesJava"))
-        "checkstyleTestFixtures" -> dependsOn(tasks.named("compileQuarkusTestGeneratedSourcesJava"))
-        "checkstyleTest" -> dependsOn(tasks.named("compileQuarkusTestGeneratedSourcesJava"))
+        "checkstyleMain" -> dependsOn("compileQuarkusGeneratedSourcesJava")
+        "checkstyleTestFixtures" -> dependsOn("compileQuarkusTestGeneratedSourcesJava")
+        "checkstyleTest" -> dependsOn("compileQuarkusTestGeneratedSourcesJava")
         else -> {}
       }
     }
@@ -58,8 +79,7 @@ if (project.name.endsWith("-proto") || project.extra.has("duplicated-project-sou
 
     sourceSets.withType(SourceSet::class.java).configureEach {
       val sourceSet = this
-      val checkstyleTask = tasks.named(sourceSet.getTaskName("checkstyle", null))
-      checkstyleTask.configure { dependsOn(sourceSet.getTaskName("process", "jandexIndex")) }
+      val checkstyleTask = sourceSet.getTaskName("checkstyle", null)
       checkstyleAll.configure { dependsOn(checkstyleTask) }
     }
   }
@@ -84,9 +104,9 @@ private class MemoizedCheckstyleConfig {
 
 tasks.withType<JavaCompile>().configureEach {
   if (!project.extra.has("duplicated-project-sources")) {
-    options.errorprone.disableAllChecks.set(true)
+    options.errorprone.disableAllChecks = true
   } else {
-    options.errorprone.disableWarningsInGeneratedCode.set(true)
+    options.errorprone.disableWarningsInGeneratedCode = true
 
     val errorproneRules = rootProject.projectDir.resolve("codestyle/errorprone-rules.properties")
     inputs.file(errorproneRules).withPathSensitivity(PathSensitivity.RELATIVE)
@@ -97,7 +117,7 @@ tasks.withType<JavaCompile>().configureEach {
         .convention(provider { MemoizedErrorproneRules.rules(rootProject, errorproneRules) })
 
     options.errorprone.checks.putAll(checksMapProperty)
-    options.errorprone.excludedPaths.set(".*/build/[generated|tmp].*")
+    options.errorprone.excludedPaths = ".*/build/[generated|tmp].*"
   }
 }
 
@@ -131,42 +151,86 @@ plugins.withType<JavaPlugin>().configureEach {
       dependencies {
         add(
           "errorprone",
-          "com.google.errorprone:error_prone_core:${libsRequiredVersion("errorprone")}"
+          "com.google.errorprone:error_prone_core:${libsRequiredVersion("errorprone")}",
         )
         add(
           "errorprone",
-          "jp.skypencil.errorprone.slf4j:errorprone-slf4j:${libsRequiredVersion("errorproneSlf4j")}"
+          "jp.skypencil.errorprone.slf4j:errorprone-slf4j:${libsRequiredVersion("errorproneSlf4j")}",
         )
       }
     }
   }
 }
 
-// ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// IDE
+// Adds Git/Build/System related information to the generated jars, if the `release` project
+// property is present. Do not add that information in development builds, so that the
+// generated jars are still cachable for Gradle.
+if (project.hasProperty("release") || project.hasProperty("jarWithGitInfo")) {
+  tasks.withType<Jar>().configureEach {
+    manifest { MemoizedGitInfo.gitInfo(rootProject, attributes) }
+  }
+}
 
-if (!System.getProperty("idea.sync.active").toBoolean()) {
-  idea {
-    module {
-      // Do not index the following folders
-      excludeDirs =
-        excludeDirs +
-          setOf(
-            buildDir.resolve("libs"),
-            buildDir.resolve("reports"),
-            buildDir.resolve("test-results"),
-            buildDir.resolve("classes"),
-            buildDir.resolve("jacoco"),
-            buildDir.resolve("jandex"),
-            buildDir.resolve("quarkus-app"),
-            buildDir.resolve("generated"),
-            buildDir.resolve("docs"),
-            buildDir.resolve("jacoco-report"),
-            buildDir.resolve("openapi"),
-            buildDir.resolve("openapi-extra"),
-            buildDir.resolve("spotless"),
-            buildDir.resolve("tmp")
+class MemoizedGitInfo {
+  companion object {
+    private fun execProc(rootProject: Project, cmd: String, vararg args: Any): String {
+      var out =
+        rootProject.providers
+          .exec {
+            executable = cmd
+            args(args.toList())
+          }
+          .standardOutput
+          .asText
+          .get()
+      return out.trim()
+    }
+
+    fun gitInfo(rootProject: Project, attribs: Attributes) {
+      val props = gitInfo(rootProject)
+      attribs.putAll(props)
+    }
+
+    fun gitInfo(rootProject: Project): Map<String, String> {
+      if (!rootProject.hasProperty("release") && !rootProject.hasProperty("jarWithGitInfo")) {
+        return emptyMap()
+      }
+
+      return if (rootProject.extra.has("gitReleaseInfo")) {
+        @Suppress("UNCHECKED_CAST")
+        rootProject.extra["gitReleaseInfo"] as Map<String, String>
+      } else {
+        val gitHead = execProc(rootProject, "git", "rev-parse", "HEAD")
+        val gitDescribe = execProc(rootProject, "git", "describe", "--tags")
+        val timestamp = execProc(rootProject, "date", "+%Y-%m-%d-%H:%M:%S%:z")
+        val system = execProc(rootProject, "uname", "-a")
+        val javaVersion = System.getProperty("java.version")
+
+        val info =
+          mapOf(
+            "Nessie-Version" to
+              rootProject.layout.projectDirectory.file("version.txt").asFile.readText().trim(),
+            "Nessie-Build-Git-Head" to gitHead,
+            "Nessie-Build-Git-Describe" to gitDescribe,
+            "Nessie-Build-Timestamp" to timestamp,
+            "Nessie-Build-System" to system,
+            "Nessie-Build-Java-Version" to javaVersion,
           )
+        rootProject.extra["gitReleaseInfo"] = info
+        return info
+      }
+    }
+  }
+}
+
+afterEvaluate {
+  tasks.named("codeChecks").configure {
+    dependsOn("spotlessCheck")
+    if (!noCheckstyle) {
+      dependsOn("checkstyle")
+    }
+    if (tasks.names.contains("checkLicense")) {
+      dependsOn("checkLicense")
     }
   }
 }

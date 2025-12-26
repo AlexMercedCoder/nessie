@@ -15,6 +15,8 @@
  */
 package org.projectnessie.gc.contents.jdbc;
 
+import static com.google.common.base.Throwables.getStackTraceAsString;
+import static org.projectnessie.gc.contents.ContentReference.icebergContent;
 import static org.projectnessie.gc.contents.jdbc.JdbcHelper.isIntegrityConstraintViolation;
 import static org.projectnessie.gc.contents.jdbc.SqlDmlDdl.ADD_CONTENT;
 import static org.projectnessie.gc.contents.jdbc.SqlDmlDdl.DELETE_FILE_DELETIONS;
@@ -36,10 +38,11 @@ import static org.projectnessie.gc.contents.jdbc.SqlDmlDdl.SELECT_FILE_DELETIONS
 import static org.projectnessie.gc.contents.jdbc.SqlDmlDdl.SELECT_LIVE_CONTENT_SET;
 import static org.projectnessie.gc.contents.jdbc.SqlDmlDdl.START_EXPIRE;
 import static org.projectnessie.gc.contents.jdbc.SqlDmlDdl.START_IDENTIFY;
+import static org.projectnessie.model.Content.Type.ICEBERG_TABLE;
+import static org.projectnessie.model.Content.Type.ICEBERG_VIEW;
 
 import com.google.common.base.Preconditions;
 import com.google.errorprone.annotations.MustBeClosed;
-import java.net.URI;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -51,6 +54,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.function.Function;
@@ -72,6 +76,7 @@ import org.projectnessie.gc.files.FileReference;
 import org.projectnessie.model.Content;
 import org.projectnessie.model.ContentKey;
 import org.projectnessie.model.types.ContentTypes;
+import org.projectnessie.storage.uri.StorageUri;
 
 @Value.Immutable
 public abstract class JdbcPersistenceSpi implements PersistenceSpi {
@@ -84,7 +89,18 @@ public abstract class JdbcPersistenceSpi implements PersistenceSpi {
   public interface Builder {
     Builder dataSource(DataSource dataSource);
 
+    Builder fetchSize(int fetchSize);
+
     JdbcPersistenceSpi build();
+  }
+
+  @Value.Lazy
+  protected String productName() {
+    try (Connection conn = dataSource().getConnection()) {
+      return conn.getMetaData().getDatabaseProductName().toLowerCase(Locale.ROOT);
+    } catch (SQLException e) {
+      throw new RuntimeException(e);
+    }
   }
 
   @Override
@@ -154,7 +170,7 @@ public abstract class JdbcPersistenceSpi implements PersistenceSpi {
           stmt.setTimestamp(1, Timestamp.from(finished));
           if (failure != null) {
             stmt.setString(2, LiveContentSet.Status.EXPIRY_FAILED.name());
-            stmt.setString(3, trimError(failure.toString()));
+            stmt.setString(3, trimError(getStackTraceAsString(failure)));
           } else {
             stmt.setString(2, LiveContentSet.Status.EXPIRY_SUCCESS.name());
             stmt.setNull(3, Types.VARCHAR);
@@ -209,7 +225,7 @@ public abstract class JdbcPersistenceSpi implements PersistenceSpi {
   @Override
   public long addIdentifiedLiveContent(UUID liveSetId, Stream<ContentReference> contentReference) {
     return singleStatement(
-        ADD_CONTENT,
+        decorateInsertStatement(ADD_CONTENT),
         (conn, stmt) -> {
           stmt.setString(1, liveSetId.toString());
           long count = 0L;
@@ -219,29 +235,24 @@ public abstract class JdbcPersistenceSpi implements PersistenceSpi {
             stmt.setString(3, ref.commitId());
             stmt.setString(4, ref.contentKey().toPathString());
             stmt.setString(5, ref.contentType().name());
-            if (ref.contentType().equals(Content.Type.ICEBERG_TABLE)) {
+            if (ref.contentType().equals(ICEBERG_TABLE) || ref.contentType().equals(ICEBERG_VIEW)) {
               stmt.setString(
                   6,
                   Objects.requireNonNull(
                       ref.metadataLocation(),
-                      "Illegal null metadataLocation in ContentReference for ICEBERG_TABLE"));
+                      "Illegal null metadataLocation in ContentReference for ICEBERG_TABLE/ICEBERG_VIEW"));
               stmt.setLong(
                   7,
                   Objects.requireNonNull(
                       ref.snapshotId(),
-                      "Illegal null snapshotId in ContentReference for ICEBERG_TABLE"));
+                      "Illegal null snapshotId in ContentReference for ICEBERG_TABLE/ICEBERG_VIEW"));
             } else {
               throw new UnsupportedOperationException(
                   "Unsupported content type " + ref.contentType());
             }
-            try {
-              // TODO add batch updates
-              stmt.executeUpdate();
+            // TODO add batch updates
+            if (stmt.executeUpdate() != 0) {
               count++;
-            } catch (SQLException e) {
-              if (!isIntegrityConstraintViolation(e)) {
-                throw e;
-              }
             }
           }
           return count;
@@ -263,21 +274,15 @@ public abstract class JdbcPersistenceSpi implements PersistenceSpi {
 
   @Override
   public void associateBaseLocations(
-      UUID liveSetId, String contentId, Collection<URI> baseLocations) {
+      UUID liveSetId, String contentId, Collection<StorageUri> baseLocations) {
     singleStatement(
-        INSERT_CONTENT_LOCATION,
+        decorateInsertStatement(INSERT_CONTENT_LOCATION),
         (conn, stmt) -> {
           stmt.setString(1, liveSetId.toString());
           stmt.setString(2, contentId);
-          for (URI baseLocation : baseLocations) {
+          for (StorageUri baseLocation : baseLocations) {
             stmt.setString(3, baseLocation.toString());
-            try {
-              stmt.executeUpdate();
-            } catch (SQLException e) {
-              if (!isIntegrityConstraintViolation(e)) {
-                throw e;
-              }
-            }
+            stmt.executeUpdate();
           }
           return null;
         },
@@ -286,23 +291,23 @@ public abstract class JdbcPersistenceSpi implements PersistenceSpi {
 
   @Override
   @MustBeClosed
-  public Stream<URI> fetchBaseLocations(UUID liveSetId, String contentId) {
+  public Stream<StorageUri> fetchBaseLocations(UUID liveSetId, String contentId) {
     return streamingResult(
         SELECT_CONTENT_LOCATION,
         stmt -> {
           stmt.setString(1, liveSetId.toString());
           stmt.setString(2, contentId);
         },
-        rs -> URI.create(rs.getString(1)));
+        rs -> StorageUri.of(rs.getString(1)));
   }
 
   @Override
   @MustBeClosed
-  public Stream<URI> fetchAllBaseLocations(UUID liveSetId) {
+  public Stream<StorageUri> fetchAllBaseLocations(UUID liveSetId) {
     return streamingResult(
         SELECT_CONTENT_LOCATION_ALL,
         stmt -> stmt.setString(1, liveSetId.toString()),
-        rs -> URI.create(rs.getString(1)));
+        rs -> StorageUri.of(rs.getString(1)));
   }
 
   @Override
@@ -352,7 +357,9 @@ public abstract class JdbcPersistenceSpi implements PersistenceSpi {
   private LiveContentSet queryLiveContentSet(UUID liveSetId, PreparedStatement stmt)
       throws SQLException {
     stmt.setString(1, liveSetId.toString());
+    stmt.setFetchSize(fetchSize());
     try (ResultSet rs = stmt.executeQuery()) {
+      rs.setFetchSize(fetchSize());
       if (!rs.next()) {
         throw new IllegalStateException(new LiveContentSetNotFoundException(liveSetId));
       }
@@ -369,7 +376,7 @@ public abstract class JdbcPersistenceSpi implements PersistenceSpi {
   @Override
   public long addFileDeletions(UUID liveSetId, Stream<FileReference> files) {
     return singleStatement(
-        INSERT_FILE_DELETIONS,
+        decorateInsertStatement(INSERT_FILE_DELETIONS),
         (conn, stmt) -> {
           long count = 0L;
           for (Iterator<FileReference> iter = files.iterator(); iter.hasNext(); ) {
@@ -378,13 +385,8 @@ public abstract class JdbcPersistenceSpi implements PersistenceSpi {
             stmt.setString(2, f.base().toString());
             stmt.setString(3, f.path().toString());
             stmt.setLong(4, f.modificationTimeMillisEpoch());
-            try {
-              stmt.executeUpdate();
+            if (stmt.executeUpdate() != 0) {
               count++;
-            } catch (SQLException e) {
-              if (!isIntegrityConstraintViolation(e)) {
-                throw e;
-              }
             }
           }
           return count;
@@ -402,7 +404,7 @@ public abstract class JdbcPersistenceSpi implements PersistenceSpi {
 
   static FileReference fileObject(ResultSet rs) throws SQLException {
     return FileReference.of(
-        URI.create(rs.getString(2)), URI.create(rs.getString(1)), rs.getLong(3));
+        StorageUri.of(rs.getString(2)), StorageUri.of(rs.getString(1)), rs.getLong(3));
   }
 
   static ContentReference contentReference(ResultSet rs) throws SQLException {
@@ -410,11 +412,11 @@ public abstract class JdbcPersistenceSpi implements PersistenceSpi {
     String commitId = rs.getString(2);
     ContentKey contentKey = ContentKey.fromPathString(rs.getString(3));
     Content.Type contentType = ContentTypes.forName(rs.getString(4));
-    if (contentType.equals(Content.Type.ICEBERG_TABLE)) {
+    if (contentType.equals(ICEBERG_TABLE) || contentType.equals(ICEBERG_VIEW)) {
       String metadataLocation = rs.getString(5);
       long snapshotId = rs.getLong(6);
-      return ContentReference.icebergTable(
-          contentId, commitId, contentKey, metadataLocation, snapshotId);
+      return icebergContent(
+          contentType, contentId, commitId, contentKey, metadataLocation, snapshotId);
     } else {
       throw new IllegalStateException(
           "Unsupported content type '" + contentType + "' in repository");
@@ -435,6 +437,19 @@ public abstract class JdbcPersistenceSpi implements PersistenceSpi {
         .build();
   }
 
+  protected String decorateInsertStatement(String statement) {
+    switch (productName()) {
+      case "postgresql":
+      case "h2":
+        return statement + " ON CONFLICT DO NOTHING";
+      case "mysql":
+      case "mariadb":
+        return statement.replace("INSERT", "INSERT IGNORE");
+      default:
+        throw new IllegalStateException("Unsupported database: " + productName());
+    }
+  }
+
   private Connection connection() {
     try {
       return dataSource().getConnection();
@@ -443,6 +458,7 @@ public abstract class JdbcPersistenceSpi implements PersistenceSpi {
     }
   }
 
+  @SuppressWarnings("SqlSourceToSinkFlow")
   <R> R singleStatement(
       @Language("SQL") String sql, WithStatement<R> withStatement, boolean modifyingStatement) {
     try (Connection conn = connection()) {
@@ -468,12 +484,12 @@ public abstract class JdbcPersistenceSpi implements PersistenceSpi {
     List<AutoCloseable> closeables = new ArrayList<>();
 
     ResultSetSplit<R> split =
-        new ResultSetSplit<>(this::connection, closeables::add, sql, prepare, fromRow);
+        new ResultSetSplit<>(this::connection, fetchSize(), closeables::add, sql, prepare, fromRow);
 
     return StreamSupport.stream(split, false)
         .onClose(
             () -> {
-              Exception ex = JdbcHelper.forClose(closeables, null);
+              Exception ex = JdbcHelper.forClose(closeables);
               if (ex instanceof RuntimeException) {
                 throw (RuntimeException) ex;
               }
@@ -484,4 +500,6 @@ public abstract class JdbcPersistenceSpi implements PersistenceSpi {
   }
 
   abstract DataSource dataSource();
+
+  abstract int fetchSize();
 }

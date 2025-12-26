@@ -16,13 +16,9 @@
 
 import org.apache.tools.ant.taskdefs.condition.Os
 
-plugins {
-  id("nessie-conventions-client")
-  id("nessie-jacoco")
-  alias(libs.plugins.annotations.stripper)
-}
+plugins { id("nessie-conventions-java11") }
 
-extra["maven.name"] = "Nessie - Client"
+publishingHelper { mavenName = "Nessie - Client" }
 
 dependencies {
   api(project(":nessie-model"))
@@ -41,12 +37,15 @@ dependencies {
   compileOnly(libs.jakarta.ws.rs.api)
   compileOnly(libs.javax.ws.rs)
 
-  implementation(libs.slf4j.api)
+  compileOnly(libs.httpclient5)
+
+  implementation(libs.slf4j.api) { version { require(libs.versions.slf4j.compat.get()) } }
   compileOnly(libs.errorprone.annotations)
 
-  compileOnly(libs.immutables.builder)
-  compileOnly(libs.immutables.value.annotations)
-  annotationProcessor(libs.immutables.value.processor)
+  compileOnly(project(":nessie-doc-generator-annotations"))
+
+  compileOnly(project(":nessie-immutables-std"))
+  annotationProcessor(project(":nessie-immutables-std", configuration = "processor"))
 
   testFixturesApi(libs.guava)
   testFixturesApi(libs.bouncycastle.bcprov)
@@ -58,51 +57,70 @@ dependencies {
 
   compileOnly(platform(libs.opentelemetry.bom.alpha))
   compileOnly("io.opentelemetry:opentelemetry-api")
-  compileOnly("io.opentelemetry:opentelemetry-semconv")
 
   compileOnly(platform(libs.awssdk.bom))
   compileOnly("software.amazon.awssdk:auth")
 
   // javax/jakarta
   testFixturesApi(libs.jakarta.annotation.api)
+  testFixturesApi(libs.findbugs.jsr305)
 
   testFixturesApi(platform(libs.opentelemetry.bom.alpha))
   testFixturesApi("io.opentelemetry:opentelemetry-api")
   testFixturesApi("io.opentelemetry:opentelemetry-sdk")
-  testFixturesApi("io.opentelemetry:opentelemetry-semconv")
   testFixturesApi("io.opentelemetry:opentelemetry-exporter-otlp")
   testFixturesApi(platform(libs.awssdk.bom))
   testFixturesApi("software.amazon.awssdk:auth")
   testFixturesApi(libs.undertow.core)
   testFixturesApi(libs.undertow.servlet)
-  testFixturesImplementation(libs.logback.classic)
+  testFixturesApi(libs.httpclient5)
+  testFixturesImplementation(libs.logback.classic) {
+    version { require(libs.versions.logback.compat.get()) }
+    // Logback 1.3 brings Slf4j 2.0, which doesn't work with Spark up to 3.3
+    exclude("org.slf4j", "slf4j-api")
+  }
 
   testImplementation(libs.wiremock)
 
-  intTestImplementation(libs.testcontainers.testcontainers)
-  intTestImplementation(libs.testcontainers.junit)
+  testRuntimeOnly(libs.logback.classic)
+
+  testCompileOnly(project(":nessie-immutables-std"))
+  testAnnotationProcessor(project(":nessie-immutables-std", configuration = "processor"))
+
+  intTestImplementation(platform(libs.testcontainers.bom))
+  intTestImplementation("org.testcontainers:testcontainers")
+  intTestImplementation("org.testcontainers:testcontainers-junit-jupiter")
+  intTestImplementation(libs.keycloak.admin.client)
   intTestImplementation(libs.testcontainers.keycloak) {
     exclude(group = "org.slf4j") // uses SLF4J 2.x, we are not ready yet
   }
+  intTestImplementation(project(":nessie-container-spec-helper"))
+  intTestCompileOnly(project(":nessie-immutables-std"))
 }
 
-jandex { skipDefaultProcessing() }
+tasks.named("jandex") { enabled = false }
 
 val jacksonTestVersions =
   setOf(
-    "2.10.0", // Spark 3.1.2+3.1.3
-    "2.11.4", // Spark 3.?.? (reason unknown)
-    "2.12.3", // Spark 3.2.1+3.2.2
-    "2.13.3" // Spark 3.3.0
+    "2.13.4", // Spark 3.3
+    "2.14.2", // Spark 3.4
+    "2.15.2", // Spark 3.5
+    // there's been some change from 2.18.2->.3, see #10489 &
+    // org.projectnessie.client.rest.ResponseCheckFilter.decodeErrorObject
+    "2.18.2",
   )
 
 @Suppress("UnstableApiUsage")
 fun JvmComponentDependencies.forJacksonVersion(jacksonVersion: String) {
   implementation(project())
 
-  implementation("com.fasterxml.jackson.core:jackson-core:$jacksonVersion")
-  implementation("com.fasterxml.jackson.core:jackson-annotations:$jacksonVersion")
-  implementation("com.fasterxml.jackson.core:jackson-databind:$jacksonVersion")
+  implementation("com.fasterxml.jackson.core:jackson-core") { version { strictly(jacksonVersion) } }
+  implementation("com.fasterxml.jackson.core:jackson-annotations") {
+    version { strictly(jacksonVersion) }
+  }
+  implementation("com.fasterxml.jackson.core:jackson-databind") {
+    version { strictly(jacksonVersion) }
+  }
 }
 
 @Suppress("UnstableApiUsage")
@@ -115,32 +133,25 @@ fun JvmTestSuite.commonCompatSuite() {
 }
 
 @Suppress("UnstableApiUsage")
-fun JvmTestSuite.useJava8() {
-  targets {
-    all {
-      testTask.configure {
-        val javaToolchains = project.extensions.findByType(JavaToolchainService::class.java)
-        javaLauncher.set(
-          javaToolchains!!.launcherFor { languageVersion.set(JavaLanguageVersion.of(8)) }
-        )
-      }
-    }
-  }
-}
-
-@Suppress("UnstableApiUsage")
 testing {
   suites {
-    register("testJava8", JvmTestSuite::class.java) {
-      commonCompatSuite()
+    register("testNoApacheHttp", JvmTestSuite::class.java) {
+      useJUnitJupiter(libsRequiredVersion("junit"))
 
-      dependencies { forJacksonVersion(libs.jackson.bom.get().version!!) }
+      sources { java.srcDirs(sourceSets.getByName("testNoApacheHttp").java.srcDirs) }
 
-      useJava8()
+      targets {
+        all {
+          testTask.configure { useJUnitPlatform { includeTags("NoApacheHttp") } }
+
+          tasks.named("check").configure { dependsOn(testTask) }
+        }
+      }
     }
 
-    configurations.named("testJava8Implementation") {
+    configurations.named("testNoApacheHttpImplementation") {
       extendsFrom(configurations.getByName("testImplementation"))
+      exclude(group = "org.apache.httpcomponents.client5")
     }
 
     jacksonTestVersions.forEach { jacksonVersion ->
@@ -154,33 +165,19 @@ testing {
       configurations.named("testJackson_${safeName}Implementation") {
         extendsFrom(configurations.getByName("testImplementation"))
       }
-
-      register("testJackson_${safeName}_java8", JvmTestSuite::class.java) {
-        commonCompatSuite()
-
-        dependencies { forJacksonVersion(jacksonVersion) }
-
-        useJava8()
-
-        configurations.named("testJackson_${safeName}_java8Implementation") {
-          extendsFrom(configurations.getByName("testImplementation"))
-        }
+      configurations.named("testJackson_${safeName}CompileOnly") {
+        extendsFrom(configurations.getByName("testCompileOnly"))
+      }
+      configurations.named("testJackson_${safeName}AnnotationProcessor") {
+        extendsFrom(configurations.getByName("testAnnotationProcessor"))
       }
     }
   }
 }
 
-annotationStripper {
-  registerDefault().configure {
-    annotationsToDrop("^jakarta[.].+".toRegex())
-    unmodifiedClassesForJavaVersion.set(11)
-  }
-}
-
 // prevent duplicate checkstyle work
-(jacksonTestVersions
-    .map { jacksonVersion -> "Jackson_" + jacksonVersion.replace("[.]".toRegex(), "_") }
-    .flatMap { n -> listOf(n, n + "_java8") } + listOf("Java8"))
+jacksonTestVersions
+  .map { jacksonVersion -> "Jackson_" + jacksonVersion.replace("[.]".toRegex(), "_") }
   .forEach { v -> tasks.named("checkstyleTest$v").configure { enabled = false } }
 
 // Issue w/ testcontainers/podman in GH workflows :(

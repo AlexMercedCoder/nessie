@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import java.net.URI
 import java.util.Properties
 
 includeBuild("../build-logic") { name = "nessie-build-logic" }
@@ -30,6 +31,28 @@ pluginManagement {
     gradlePluginPortal()
     if (System.getProperty("withMavenLocal").toBoolean()) {
       mavenLocal()
+    }
+  }
+}
+
+dependencyResolutionManagement {
+  repositoriesMode = RepositoriesMode.FAIL_ON_PROJECT_REPOS
+  repositories {
+    mavenCentral()
+    gradlePluginPortal()
+    if (System.getProperty("withMavenLocal").toBoolean()) {
+      mavenLocal()
+    }
+    maven {
+      name = "Apache Snapshots"
+      url = URI("https://repository.apache.org/content/repositories/snapshots/")
+      mavenContent { snapshotsOnly() }
+      metadataSources {
+        // Workaround for
+        // https://youtrack.jetbrains.com/issue/IDEA-327421/IJ-fails-to-import-Gradle-project-with-dependency-with-classifier
+        ignoreGradleMetadataRedirection()
+        mavenPom()
+      }
     }
   }
 }
@@ -65,6 +88,7 @@ fun loadProjects(file: String, groupId: String) =
 
 val ideSyncActive =
   System.getProperty("idea.sync.active").toBoolean() ||
+    System.getProperty("idea.active").toBoolean() ||
     System.getProperty("eclipse.product") != null ||
     gradle.startParameter.taskNames.any { it.startsWith("eclipse") }
 
@@ -86,7 +110,7 @@ for (sparkVersion in sparkVersions) {
     nessieProject(
         artifactId,
         groupIdIntegrations,
-        file("../integrations/spark-extensions/v${sparkVersion}")
+        file("../integrations/spark-extensions/v${sparkVersion}"),
       )
       .buildFileName = "../build.gradle.kts"
     if (ideSyncActive) {
@@ -99,12 +123,12 @@ for (scalaVersion in allScalaVersions) {
   nessieProject(
     "nessie-spark-extensions-base_$scalaVersion",
     groupIdIntegrations,
-    file("../integrations/spark-extensions-base")
+    file("../integrations/spark-extensions-base"),
   )
   nessieProject(
     "nessie-spark-extensions-basetests_$scalaVersion",
     groupIdIntegrations,
-    file("../integrations/spark-extensions-basetests")
+    file("../integrations/spark-extensions-basetests"),
   )
   if (ideSyncActive) {
     break

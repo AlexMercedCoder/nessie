@@ -27,7 +27,7 @@ import static org.projectnessie.versioned.CommitValidation.CommitOperation.commi
 import static org.projectnessie.versioned.CommitValidation.CommitOperationType.CREATE;
 import static org.projectnessie.versioned.CommitValidation.CommitOperationType.DELETE;
 import static org.projectnessie.versioned.CommitValidation.CommitOperationType.UPDATE;
-import static org.projectnessie.versioned.MergeResult.KeyDetails.keyDetails;
+import static org.projectnessie.versioned.MergeTransplantResultBase.KeyDetails.keyDetails;
 import static org.projectnessie.versioned.storage.common.logic.CommitConflict.ConflictType.KEY_EXISTS;
 import static org.projectnessie.versioned.storage.common.logic.CommitRetry.commitRetry;
 import static org.projectnessie.versioned.storage.common.logic.Logics.commitLogic;
@@ -43,10 +43,11 @@ import static org.projectnessie.versioned.storage.versionstore.TypeMapping.store
 import static org.projectnessie.versioned.store.DefaultStoreWorker.contentTypeForPayload;
 import static org.projectnessie.versioned.store.DefaultStoreWorker.payloadForContent;
 
-import java.util.ArrayList;
+import jakarta.annotation.Nonnull;
+import jakarta.annotation.Nullable;
 import java.util.HashMap;
 import java.util.Iterator;
-import java.util.List;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Objects;
@@ -55,8 +56,6 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
-import javax.annotation.Nonnull;
-import javax.annotation.Nullable;
 import org.agrona.collections.Object2IntHashMap;
 import org.projectnessie.error.BaseNessieClientServerException;
 import org.projectnessie.model.Conflict;
@@ -71,9 +70,8 @@ import org.projectnessie.versioned.Commit;
 import org.projectnessie.versioned.CommitValidation;
 import org.projectnessie.versioned.Hash;
 import org.projectnessie.versioned.ImmutableCommitValidation;
-import org.projectnessie.versioned.ImmutableMergeResult;
-import org.projectnessie.versioned.MergeResult;
-import org.projectnessie.versioned.MergeResult.KeyDetails;
+import org.projectnessie.versioned.MergeTransplantResultBase;
+import org.projectnessie.versioned.MergeTransplantResultBase.KeyDetails;
 import org.projectnessie.versioned.ReferenceConflictException;
 import org.projectnessie.versioned.ReferenceNotFoundException;
 import org.projectnessie.versioned.ReferenceRetryFailureException;
@@ -88,6 +86,7 @@ import org.projectnessie.versioned.storage.common.exceptions.ObjTooLargeExceptio
 import org.projectnessie.versioned.storage.common.exceptions.RefConditionFailedException;
 import org.projectnessie.versioned.storage.common.exceptions.RefNotFoundException;
 import org.projectnessie.versioned.storage.common.exceptions.RetryTimeoutException;
+import org.projectnessie.versioned.storage.common.exceptions.UnknownOperationResultException;
 import org.projectnessie.versioned.storage.common.indexes.StoreIndex;
 import org.projectnessie.versioned.storage.common.indexes.StoreIndexElement;
 import org.projectnessie.versioned.storage.common.indexes.StoreKey;
@@ -118,11 +117,11 @@ class BaseCommitHelper {
   final CommitObj expected;
 
   BaseCommitHelper(
-      @Nonnull @jakarta.annotation.Nonnull BranchName branch,
-      @Nonnull @jakarta.annotation.Nonnull Optional<Hash> referenceHash,
-      @Nonnull @jakarta.annotation.Nonnull Persist persist,
-      @Nonnull @jakarta.annotation.Nonnull Reference reference,
-      @Nullable @jakarta.annotation.Nullable CommitObj head)
+      @Nonnull BranchName branch,
+      @Nonnull Optional<Hash> referenceHash,
+      @Nonnull Persist persist,
+      @Nonnull Reference reference,
+      @Nullable CommitObj head)
       throws ReferenceNotFoundException {
     this.branch = branch;
     this.referenceHash = referenceHash;
@@ -150,11 +149,11 @@ class BaseCommitHelper {
   @FunctionalInterface
   interface CommitterSupplier<I> {
     I newCommitter(
-        @Nonnull @jakarta.annotation.Nonnull BranchName branch,
-        @Nonnull @jakarta.annotation.Nonnull Optional<Hash> referenceHash,
-        @Nonnull @jakarta.annotation.Nonnull Persist persist,
-        @Nonnull @jakarta.annotation.Nonnull Reference reference,
-        @Nullable @jakarta.annotation.Nullable CommitObj head)
+        @Nonnull BranchName branch,
+        @Nonnull Optional<Hash> referenceHash,
+        @Nonnull Persist persist,
+        @Nonnull Reference reference,
+        @Nullable CommitObj head)
         throws ReferenceNotFoundException;
   }
 
@@ -195,12 +194,12 @@ class BaseCommitHelper {
   }
 
   static <R, I> R committingOperation(
-      @Nonnull @jakarta.annotation.Nonnull String operationName,
-      @Nonnull @jakarta.annotation.Nonnull BranchName branch,
-      @Nonnull @jakarta.annotation.Nonnull Optional<Hash> referenceHash,
-      @Nonnull @jakarta.annotation.Nonnull Persist persist,
-      @Nonnull @jakarta.annotation.Nonnull CommitterSupplier<I> committerSupplier,
-      @Nonnull @jakarta.annotation.Nonnull CommittingFunction<R, I> committingFunction)
+      @Nonnull String operationName,
+      @Nonnull BranchName branch,
+      @Nonnull Optional<Hash> referenceHash,
+      @Nonnull Persist persist,
+      @Nonnull CommitterSupplier<I> committerSupplier,
+      @Nonnull CommittingFunction<R, I> committingFunction)
       throws ReferenceConflictException, ReferenceNotFoundException {
     try {
       return commitRetry(
@@ -209,7 +208,7 @@ class BaseCommitHelper {
             RefMapping refMapping = new RefMapping(p);
             Reference reference;
             try {
-              reference = refMapping.resolveNamedRef(branch);
+              reference = refMapping.resolveNamedRefForUpdate(branch);
             } catch (ReferenceNotFoundException e) {
               throw new CommitWrappedException(e);
             }
@@ -256,7 +255,7 @@ class BaseCommitHelper {
       Object2IntHashMap<ContentKey> allKeysToDelete,
       StoreIndex<CommitOp> headIndex)
       throws ReferenceConflictException {
-    List<Conflict> conflicts = new ArrayList<>();
+    Set<Conflict> conflicts = new LinkedHashSet<>();
 
     validateNamespacesExistForContentKeys(newContent, headIndex, conflicts::add);
     validateNamespacesToDeleteHaveNoChildren(allKeysToDelete, headIndex, conflicts::add);
@@ -270,7 +269,9 @@ class BaseCommitHelper {
       Object2IntHashMap<ContentKey> allKeysToDelete,
       StoreIndex<CommitOp> headIndex,
       Consumer<Conflict> conflictConsumer) {
-    if (!persist.config().validateNamespaces()) {
+    @SuppressWarnings("removal")
+    boolean validateNamespaces = persist.config().validateNamespaces();
+    if (!validateNamespaces) {
       return;
     }
 
@@ -319,9 +320,7 @@ class BaseCommitHelper {
                   conflict(
                       Conflict.ConflictType.NAMESPACE_NOT_EMPTY,
                       namespaceKey,
-                      format(
-                          "The namespace '%s' would be deleted, but cannot, because it has children.",
-                          namespaceKey)));
+                      format("namespace '%s' is not empty", namespaceKey)));
             }
             if (cmp > 0) {
               // iterated past the namespaceKey - break
@@ -335,7 +334,9 @@ class BaseCommitHelper {
       Map<ContentKey, Content> newContent,
       StoreIndex<CommitOp> headIndex,
       Consumer<Conflict> conflictConsumer) {
-    if (!persist.config().validateNamespaces()) {
+    @SuppressWarnings("removal")
+    boolean validateNamespaces = persist.config().validateNamespaces();
+    if (!validateNamespaces) {
       return;
     }
     if (newContent.isEmpty()) {
@@ -357,13 +358,19 @@ class BaseCommitHelper {
       }
 
       StoreIndexElement<CommitOp> ns = headIndex.get(keyToStoreKey(key));
-      if (ns == null || !ns.content().action().exists()) {
+      for (;
+          ns == null || !ns.content().action().exists();
+          key = key.getParent(), ns = headIndex.get(keyToStoreKey(key))) {
         conflictConsumer.accept(
             conflict(
                 Conflict.ConflictType.NAMESPACE_ABSENT,
                 key,
                 format("namespace '%s' must exist", key)));
-      } else {
+        if (key.getElementCount() == 1) {
+          break;
+        }
+      }
+      if (ns != null && ns.content().action().exists()) {
         CommitOp nsContent = ns.content();
         if (nsContent.payload() != payloadForContent(Content.Type.NAMESPACE)) {
           conflictConsumer.accept(
@@ -379,6 +386,17 @@ class BaseCommitHelper {
     }
   }
 
+  static ObjId idForExpectedContent(StoreKey key, StoreIndex<CommitOp> headIndex) {
+    StoreIndexElement<CommitOp> expected = headIndex.get(key);
+    if (expected != null) {
+      CommitOp expectedContent = expected.content();
+      if (expectedContent.action().exists()) {
+        return expectedContent.value();
+      }
+    }
+    return null;
+  }
+
   void verifyMergeTransplantCommitPolicies(
       StoreIndex<CommitOp> headIndex, CommitObj inspectedCommit) throws ReferenceConflictException {
 
@@ -387,15 +405,7 @@ class BaseCommitHelper {
 
     IndexesLogic indexesLogic = indexesLogic(persist);
     for (StoreIndexElement<CommitOp> el : indexesLogic.commitOperations(inspectedCommit)) {
-      StoreIndexElement<CommitOp> expected = headIndex.get(el.key());
-      ObjId expectedId = null;
-      if (expected != null) {
-        CommitOp expectedContent = expected.content();
-        if (expectedContent.action().exists()) {
-          expectedId = expectedContent.value();
-        }
-      }
-
+      ObjId expectedId = idForExpectedContent(el.key(), headIndex);
       CommitOp op = el.content();
       if (op.action().exists()) {
         ObjId value = requireNonNull(op.value());
@@ -427,16 +437,6 @@ class BaseCommitHelper {
     }
 
     validateNamespaces(checkContents, deletedKeysAndPayload, headIndex);
-  }
-
-  ImmutableMergeResult.Builder<Commit> prepareMergeResult() {
-    ImmutableMergeResult.Builder<Commit> mergeResult =
-        MergeResult.<Commit>builder()
-            .targetBranch(branch)
-            .effectiveTargetHash(objIdToHash(headId()));
-
-    referenceHash.ifPresent(mergeResult::expectedHash);
-    return mergeResult;
   }
 
   CommitObj createMergeTransplantCommit(
@@ -491,7 +491,7 @@ class BaseCommitHelper {
                         ? ConflictResolution.ADD
                         : ConflictResolution.DROP;
                   }
-                  // fall through
+                // fall through
                 case NORMAL:
                   keyDetailsMap.put(
                       key, keyDetails(mergeBehavior, commitConflictToConflict(conflict)));
@@ -611,6 +611,14 @@ class BaseCommitHelper {
   void bumpReferencePointer(ObjId newHead, Optional<?> retryState) throws RetryException {
     try {
       persist.updateReferencePointer(reference, newHead);
+    } catch (UnknownOperationResultException e) {
+      // If the above pointer-bump returned an "unknown result", we check once (and only once!)
+      // whether the reference-pointer-change succeeded. This mitigation may not always work,
+      // especially not in highly concurrent update situations.
+      Reference r = persist.fetchReferenceForUpdate(reference.name());
+      if (!reference.forNewPointer(newHead, persist.config()).equals(r)) {
+        throw new RetryException(retryState);
+      }
     } catch (RefConditionFailedException e) {
       throw new RetryException(retryState);
     } catch (RefNotFoundException e) {
@@ -618,8 +626,9 @@ class BaseCommitHelper {
     }
   }
 
-  boolean recordKeyDetailsAndCheckConflicts(
-      ImmutableMergeResult.Builder<Commit> mergeResult, Map<ContentKey, KeyDetails> keyDetailsMap) {
+  <R extends MergeTransplantResultBase, B extends MergeTransplantResultBase.Builder<R, B>>
+      boolean recordKeyDetailsAndCheckConflicts(
+          B mergeResult, Map<ContentKey, KeyDetails> keyDetailsMap) {
     boolean hasConflicts = false;
     for (Entry<ContentKey, KeyDetails> keyDetail : keyDetailsMap.entrySet()) {
       KeyDetails details = keyDetail.getValue();
@@ -629,13 +638,10 @@ class BaseCommitHelper {
     return hasConflicts;
   }
 
-  MergeResult<Commit> finishMergeTransplant(
-      boolean isEmpty,
-      ImmutableMergeResult.Builder<Commit> mergeResult,
-      ObjId newHead,
-      boolean dryRun,
-      boolean hasConflicts)
-      throws RetryException {
+  <R extends MergeTransplantResultBase, B extends MergeTransplantResultBase.Builder<R, B>>
+      R finishMergeTransplant(
+          boolean isEmpty, B mergeResult, ObjId newHead, boolean dryRun, boolean hasConflicts)
+          throws RetryException {
 
     if (!hasConflicts) {
       mergeResult.wasSuccessful(true);

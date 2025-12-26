@@ -14,12 +14,9 @@
  * limitations under the License.
  */
 
-plugins {
-  id("nessie-conventions-server")
-  id("nessie-jacoco")
-}
+plugins { id("nessie-conventions-java11") }
 
-extra["maven.name"] = "Nessie - Storage - Tests"
+publishingHelper { mavenName = "Nessie - Storage - Tests" }
 
 description =
   "Base test code for 'Persist' and 'VersionStore' related tests used to test storage implementations."
@@ -33,24 +30,26 @@ dependencies {
   implementation(project(":nessie-server-store"))
   implementation(project(":nessie-model"))
 
-  // javax/jakarta
   compileOnly(libs.jakarta.validation.api)
-  compileOnly(libs.javax.validation.api)
   compileOnly(libs.jakarta.annotation.api)
-  compileOnly(libs.findbugs.jsr305)
 
   compileOnly(libs.errorprone.annotations)
   implementation(libs.guava)
 
   implementation(libs.logback.classic)
 
-  compileOnly(libs.immutables.builder)
-  compileOnly(libs.immutables.value.annotations)
-  annotationProcessor(libs.immutables.value.processor)
+  compileOnly(project(":nessie-immutables-std"))
+  annotationProcessor(project(":nessie-immutables-std", configuration = "processor"))
 
   compileOnly(libs.microprofile.openapi)
-  compileOnly(platform(libs.jackson.bom))
-  compileOnly("com.fasterxml.jackson.core:jackson-annotations")
+  implementation(platform(libs.jackson.bom))
+  implementation("com.fasterxml.jackson.core:jackson-annotations")
+
+  // required for custom object serialization tests
+  implementation("com.fasterxml.jackson.core:jackson-databind")
+  implementation("com.fasterxml.jackson.datatype:jackson-datatype-guava")
+  implementation("com.fasterxml.jackson.datatype:jackson-datatype-jdk8")
+  implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
 
   implementation(platform(libs.junit.bom))
   implementation(libs.bundles.junit.testing)

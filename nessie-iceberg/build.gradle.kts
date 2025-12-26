@@ -14,12 +14,9 @@
  * limitations under the License.
  */
 
-plugins {
-  id("nessie-conventions-root")
-  alias(libs.plugins.nexus.publish.plugin)
-}
+plugins { id("nessie-conventions-root") }
 
-extra["maven.name"] = "Nessie-Iceberg"
+publishingHelper { mavenName = "Nessie-Iceberg" }
 
 // To fix circular dependencies with NessieClient, certain projects need to use the same Nessie
 // version as Iceberg/Delta has.
@@ -33,13 +30,12 @@ val versionClientNessie: String =
 mapOf(
     "versionClientNessie" to versionClientNessie,
     "versionIceberg" to versionIceberg,
-    "versionJacoco" to libs.versions.jacoco.get(),
-    "versionJandex" to libs.versions.jandex.get()
+    "versionJandex" to libs.versions.jandex.get(),
   )
   .plus(loadProperties(file("../integrations/spark-scala.properties")))
   .forEach { (k, v) -> extra[k.toString()] = v }
 
 publishingHelper {
-  nessieRepoName.set("nessie")
-  inceptionYear.set("2020")
+  nessieRepoName = "nessie"
+  inceptionYear = "2020"
 }

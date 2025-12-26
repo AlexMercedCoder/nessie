@@ -14,28 +14,25 @@
  * limitations under the License.
  */
 
-plugins { id("nessie-conventions-server8") }
+plugins { id("nessie-conventions-java11") }
 
-extra["maven.name"] = "Nessie - Versioned Store Integration Tests"
+publishingHelper { mavenName = "Nessie - Versioned Store Integration Tests" }
 
 dependencies {
   implementation(project(":nessie-model"))
   implementation(project(":nessie-versioned-spi"))
   implementation(libs.guava)
   implementation(libs.slf4j.api)
-  compileOnly(libs.immutables.value.annotations)
-  annotationProcessor(libs.immutables.value.processor)
+  compileOnly(project(":nessie-immutables-std"))
+  annotationProcessor(project(":nessie-immutables-std", configuration = "processor"))
 
   compileOnly(platform(libs.jackson.bom))
   compileOnly("com.fasterxml.jackson.core:jackson-annotations")
 
   compileOnly(libs.microprofile.openapi)
 
-  // javax/jakarta
   compileOnly(libs.jakarta.validation.api)
-  compileOnly(libs.javax.validation.api)
   compileOnly(libs.jakarta.annotation.api)
-  compileOnly(libs.findbugs.jsr305)
 
   implementation(platform(libs.junit.bom))
   implementation(libs.bundles.junit.testing)

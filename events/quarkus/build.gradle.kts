@@ -14,24 +14,29 @@
  * limitations under the License.
  */
 
-import io.quarkus.gradle.tasks.QuarkusBuild
-
 plugins {
   alias(libs.plugins.quarkus)
+    .version(
+      libs.plugins.quarkus.asProvider().map {
+        System.getProperty("quarkus.custom.version", it.version.requiredVersion)
+      }
+    )
   id("nessie-conventions-quarkus")
-  id("nessie-jacoco")
 }
 
-extra["maven.name"] = "Nessie - Events - Quarkus"
+publishingHelper { mavenName = "Nessie - Events - Quarkus" }
+
+cassandraDriverTweak()
 
 dependencies {
   implementation(project(":nessie-versioned-spi"))
   implementation(project(":nessie-events-api"))
   implementation(project(":nessie-events-spi"))
   implementation(project(":nessie-events-service"))
+  implementation(project(":nessie-quarkus-config"))
 
   // Quarkus
-  implementation(enforcedPlatform(libs.quarkus.bom))
+  implementation(quarkusPlatform(project))
   implementation("io.quarkus:quarkus-vertx")
 
   // Metrics
@@ -39,11 +44,13 @@ dependencies {
 
   // OpenTelemetry
   implementation("io.opentelemetry:opentelemetry-api")
-  implementation("io.opentelemetry:opentelemetry-semconv")
+
+  // Jackson
+  compileOnly("com.fasterxml.jackson.core:jackson-annotations")
 
   testImplementation(project(":nessie-model"))
 
-  testImplementation(enforcedPlatform(libs.quarkus.bom))
+  testImplementation(quarkusPlatform(project))
   testImplementation("io.quarkus:quarkus-opentelemetry")
   testImplementation("io.quarkus:quarkus-micrometer")
   testImplementation("io.quarkus:quarkus-micrometer-registry-prometheus")
@@ -56,22 +63,6 @@ dependencies {
   testImplementation(libs.bundles.junit.testing)
   testImplementation(libs.awaitility)
 
-  testCompileOnly(platform(libs.jackson.bom))
   testCompileOnly("com.fasterxml.jackson.core:jackson-annotations")
   testCompileOnly(libs.microprofile.openapi)
 }
-
-listOf("javadoc", "sourcesJar").forEach { name ->
-  tasks.named(name).configure { dependsOn(tasks.named("compileQuarkusGeneratedSourcesJava")) }
-}
-
-listOf("checkstyleTest", "compileTestJava").forEach { name ->
-  tasks.named(name).configure { dependsOn(tasks.named("compileQuarkusTestGeneratedSourcesJava")) }
-}
-
-val quarkusBuild =
-  tasks.named<QuarkusBuild>("quarkusBuild") {
-    outputs.doNotCacheIf("Do not add huge cache artifacts to build cache") { true }
-    inputs.property("final.name", quarkus.finalName())
-    inputs.properties(quarkus.quarkusBuildProperties.get())
-  }

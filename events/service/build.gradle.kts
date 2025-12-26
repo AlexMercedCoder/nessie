@@ -14,12 +14,9 @@
  * limitations under the License.
  */
 
-plugins {
-  id("nessie-conventions-server")
-  id("nessie-jacoco")
-}
+plugins { id("nessie-conventions-java11") }
 
-extra["maven.name"] = "Nessie - Events - Service"
+publishingHelper { mavenName = "Nessie - Events - Service" }
 
 dependencies {
   implementation(project(":nessie-model"))
@@ -36,14 +33,20 @@ dependencies {
   compileOnly(libs.microprofile.openapi)
   compileOnly(libs.jakarta.annotation.api)
 
-  compileOnly(libs.immutables.builder)
-  compileOnly(libs.immutables.value.annotations)
-  annotationProcessor(libs.immutables.value.processor)
+  compileOnly(project(":nessie-immutables-std"))
+  annotationProcessor(project(":nessie-immutables-std", configuration = "processor"))
 
   testImplementation(platform(libs.junit.bom))
   testImplementation(libs.bundles.junit.testing)
   testImplementation(libs.guava)
-  testImplementation(libs.logback.classic)
+  testRuntimeOnly(libs.logback.classic)
 
   testCompileOnly(libs.microprofile.openapi)
+  testCompileOnly(libs.jakarta.annotation.api)
+}
+
+tasks.withType(Test::class).configureEach {
+  // Workaround when running tests with Java 21, can be removed once the mockito/bytebuddy issue is
+  // fixed, see https://github.com/mockito/mockito/issues/3121
+  systemProperty("net.bytebuddy.experimental", "true")
 }

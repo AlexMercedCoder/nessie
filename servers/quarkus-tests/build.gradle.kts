@@ -14,45 +14,51 @@
  * limitations under the License.
  */
 
-plugins { id("nessie-conventions-quarkus") }
+plugins { id("nessie-conventions-java21") }
 
-extra["maven.name"] = "Nessie - Quarkus Tests"
+publishingHelper { mavenName = "Nessie - Quarkus Tests" }
 
 dependencies {
   implementation(project(":nessie-quarkus-common"))
+  implementation(project(":nessie-quarkus-config"))
   implementation(project(":nessie-versioned-tests"))
-  implementation(project(":nessie-versioned-persist-adapter"))
-  implementation(project(":nessie-versioned-persist-testextension"))
-  implementation(project(":nessie-versioned-persist-dynamodb"))
-  implementation(project(":nessie-versioned-persist-dynamodb-test"))
-  implementation(project(":nessie-versioned-persist-mongodb"))
-  implementation(project(":nessie-versioned-persist-mongodb-test"))
-  implementation(project(":nessie-versioned-persist-transactional"))
-  implementation(project(":nessie-versioned-persist-transactional-test"))
-  implementation(project(":nessie-versioned-storage-bigtable"))
-  implementation(project(":nessie-versioned-storage-cassandra"))
-  implementation(project(":nessie-versioned-storage-dynamodb"))
-  implementation(project(":nessie-versioned-storage-mongodb"))
+  implementation(project(":nessie-versioned-storage-bigtable-tests"))
+  implementation(project(":nessie-versioned-storage-cassandra-tests"))
+  implementation(project(":nessie-versioned-storage-cassandra2-tests"))
+  implementation(project(":nessie-versioned-storage-dynamodb-tests"))
+  implementation(project(":nessie-versioned-storage-dynamodb2-tests"))
+  implementation(project(":nessie-versioned-storage-jdbc-tests"))
+  implementation(project(":nessie-versioned-storage-jdbc2-tests"))
+  implementation(project(":nessie-versioned-storage-mongodb-tests"))
+  implementation(project(":nessie-versioned-storage-mongodb2-tests"))
+  implementation(project(":nessie-versioned-storage-rocksdb-tests"))
   implementation(project(":nessie-versioned-storage-testextension"))
+  implementation(project(":nessie-container-spec-helper"))
 
-  implementation(enforcedPlatform(libs.quarkus.bom))
+  implementation(quarkusPlatform(project))
   implementation("io.quarkus:quarkus-junit5")
 
-  implementation(libs.testcontainers.testcontainers)
-  implementation(libs.testcontainers.cassandra)
-  implementation(libs.testcontainers.postgresql)
-  implementation(libs.testcontainers.mongodb)
+  implementation(platform(libs.testcontainers.bom))
+  implementation("org.testcontainers:testcontainers")
+  implementation("org.testcontainers:testcontainers-cassandra")
+  implementation("org.testcontainers:testcontainers-postgresql")
+  implementation("org.testcontainers:testcontainers-mysql")
+  implementation("org.testcontainers:testcontainers-mariadb")
+  implementation("org.testcontainers:testcontainers-mongodb")
   implementation(libs.docker.java.api)
+  compileOnly(project(":nessie-keycloak-testcontainer"))
+  compileOnly(project(":nessie-nessie-testcontainer"))
 
   implementation(platform(libs.awssdk.bom))
   implementation("software.amazon.awssdk:dynamodb") {
     exclude("software.amazon.awssdk", "apache-client")
   }
 
-  implementation(platform(libs.quarkus.amazon.services.bom))
+  implementation(quarkusExtension(project, "amazon-services"))
   implementation("io.quarkiverse.amazonservices:quarkus-amazon-dynamodb")
 
-  implementation(libs.testcontainers.keycloak) {
-    exclude(group = "org.slf4j") // uses SLF4J 2.x, we are not ready yet
-  }
+  implementation(libs.testcontainers.keycloak)
+  implementation(libs.keycloak.admin.client)
+
+  compileOnly(project(":nessie-immutables-std"))
 }

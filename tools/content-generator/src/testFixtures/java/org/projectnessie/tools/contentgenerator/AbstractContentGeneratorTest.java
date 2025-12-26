@@ -17,11 +17,11 @@ package org.projectnessie.tools.contentgenerator;
 
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
+import static org.projectnessie.client.NessieClientBuilder.createClientBuilderFromSystemSettings;
 
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.projectnessie.client.api.NessieApiV2;
-import org.projectnessie.client.http.HttpClientBuilder;
 import org.projectnessie.error.NessieConflictException;
 import org.projectnessie.error.NessieNotFoundException;
 import org.projectnessie.model.Branch;
@@ -53,15 +53,15 @@ public class AbstractContentGeneratorTest {
   void emptyRepo() throws Exception {
     try (NessieApiV2 api = buildNessieApi()) {
       Branch defaultBranch = api.getDefaultBranch();
-      api.assignBranch().branch(defaultBranch).assignTo(Detached.of(NO_ANCESTOR)).assign();
+      api.assignReference().reference(defaultBranch).assignTo(Detached.of(NO_ANCESTOR)).assign();
       api.getAllReferences().stream()
           .forEach(
               ref -> {
                 try {
-                  if (ref instanceof Branch && !ref.getName().equals(defaultBranch.getName())) {
-                    api.deleteBranch().branch((Branch) ref).delete();
-                  } else if (ref instanceof Tag) {
-                    api.deleteTag().tag((Tag) ref).delete();
+                  if (ref instanceof Tag
+                      || (ref instanceof Branch
+                          && !ref.getName().equals(defaultBranch.getName()))) {
+                    api.deleteReference().reference(ref).delete();
                   }
                 } catch (NessieConflictException | NessieNotFoundException e) {
                   throw new RuntimeException(e);
@@ -93,9 +93,6 @@ public class AbstractContentGeneratorTest {
   }
 
   protected NessieApiV2 buildNessieApi() {
-    return HttpClientBuilder.builder()
-        .fromSystemProperties()
-        .withUri(NESSIE_API_URI)
-        .build(NessieApiV2.class);
+    return createClientBuilderFromSystemSettings().withUri(NESSIE_API_URI).build(NessieApiV2.class);
   }
 }

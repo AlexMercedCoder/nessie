@@ -24,10 +24,13 @@ import org.projectnessie.api.v2.params.DiffParams;
 import org.projectnessie.api.v2.params.EntriesParams;
 import org.projectnessie.api.v2.params.GetReferenceParams;
 import org.projectnessie.api.v2.params.Merge;
+import org.projectnessie.api.v2.params.ReferenceHistoryParams;
 import org.projectnessie.api.v2.params.ReferencesParams;
 import org.projectnessie.api.v2.params.Transplant;
 import org.projectnessie.error.NessieConflictException;
+import org.projectnessie.error.NessieContentNotFoundException;
 import org.projectnessie.error.NessieNotFoundException;
+import org.projectnessie.error.NessieReferenceNotFoundException;
 import org.projectnessie.model.Branch;
 import org.projectnessie.model.CommitResponse;
 import org.projectnessie.model.Content;
@@ -41,6 +44,7 @@ import org.projectnessie.model.LogResponse;
 import org.projectnessie.model.MergeResponse;
 import org.projectnessie.model.Operations;
 import org.projectnessie.model.Reference;
+import org.projectnessie.model.ReferenceHistoryResponse;
 import org.projectnessie.model.ReferencesResponse;
 import org.projectnessie.model.SingleReferenceResponse;
 import org.projectnessie.model.Validation;
@@ -91,8 +95,15 @@ public interface TreeApi {
               regexp = Validation.REF_NAME_REGEX,
               message = Validation.REF_NAME_MESSAGE)
           String name,
-      @Valid @jakarta.validation.Valid @NotNull @jakarta.validation.constraints.NotNull
-          Reference.ReferenceType type,
+      @Valid
+          @jakarta.validation.Valid
+          @NotNull
+          @jakarta.validation.constraints.NotNull
+          @Pattern(regexp = Validation.REF_TYPE_REGEX, message = Validation.REF_TYPE_MESSAGE)
+          @jakarta.validation.constraints.Pattern(
+              regexp = Validation.REF_TYPE_REGEX,
+              message = Validation.REF_TYPE_MESSAGE)
+          String type,
       @Valid @jakarta.validation.Valid @Nullable @jakarta.annotation.Nullable Reference sourceRef)
       throws NessieNotFoundException, NessieConflictException;
 
@@ -100,6 +111,18 @@ public interface TreeApi {
   SingleReferenceResponse getReferenceByName(
       @Valid @jakarta.validation.Valid @NotNull @jakarta.validation.constraints.NotNull
           GetReferenceParams params)
+      throws NessieNotFoundException;
+
+  /**
+   * Retrieve the recorded recent history of a reference.
+   *
+   * <p>A reference's history is a size and time limited record of changes of the reference's
+   * current pointer, aka HEAD. The size and time limits are configured in the Nessie server
+   * configuration.
+   */
+  ReferenceHistoryResponse getReferenceHistory(
+      @Valid @jakarta.validation.Valid @NotNull @jakarta.validation.constraints.NotNull
+          ReferenceHistoryParams params)
       throws NessieNotFoundException;
 
   /**
@@ -186,7 +209,13 @@ public interface TreeApi {
    * @param type Optional expected type of reference being assigned. Will be validated if present.
    */
   SingleReferenceResponse assignReference(
-      @Valid @jakarta.validation.Valid Reference.ReferenceType type,
+      @Valid
+          @jakarta.validation.Valid
+          @Pattern(regexp = Validation.REF_TYPE_REGEX, message = Validation.REF_TYPE_MESSAGE)
+          @jakarta.validation.constraints.Pattern(
+              regexp = Validation.REF_TYPE_REGEX,
+              message = Validation.REF_TYPE_MESSAGE)
+          String type,
       @Valid
           @jakarta.validation.Valid
           @NotNull
@@ -208,7 +237,13 @@ public interface TreeApi {
    * @param type Optional expected type of reference being deleted. Will be validated if present.
    */
   SingleReferenceResponse deleteReference(
-      @Valid @jakarta.validation.Valid Reference.ReferenceType type,
+      @Valid
+          @jakarta.validation.Valid
+          @Pattern(regexp = Validation.REF_TYPE_REGEX, message = Validation.REF_TYPE_MESSAGE)
+          @jakarta.validation.constraints.Pattern(
+              regexp = Validation.REF_TYPE_REGEX,
+              message = Validation.REF_TYPE_MESSAGE)
+          String type,
       @Valid
           @jakarta.validation.Valid
           @NotNull
@@ -291,11 +326,19 @@ public interface TreeApi {
    * table-metadata) plus the per-Nessie-reference/hash specific part (Iceberg: snapshot-ID,
    * schema-ID, partition-spec-ID, default-sort-order-ID).
    *
+   * <p>Throws a {@code AccessCheckException} if access checks fail. Note that if the content object
+   * does not exist <em>and</em> the access checks fail, an {@code AccessCheckException} will be
+   * thrown, not a {@link NessieContentNotFoundException}.
+   *
    * @param key the {@link ContentKey}s to retrieve
    * @param ref named-reference to retrieve the content for
    * @param withDocumentation whether to return the documentation, if it exists.
+   * @param forWrite If set to 'true', access control checks will check for write/create privilege
+   *     in addition to read access checks.
    * @return list of {@link GetMultipleContentsResponse.ContentWithKey}s
-   * @throws NessieNotFoundException if {@code ref} or {@code hashOnRef} does not exist
+   * @throws NessieNotFoundException If the content object or if {@code ref} does not exist a {@link
+   *     NessieContentNotFoundException} or a {@link NessieReferenceNotFoundException} is being
+   *     thrown.
    */
   ContentResponse getContent(
       @Valid @jakarta.validation.Valid ContentKey key,
@@ -308,11 +351,12 @@ public interface TreeApi {
               regexp = Validation.REF_NAME_PATH_REGEX,
               message = Validation.REF_NAME_PATH_MESSAGE)
           String ref,
-      boolean withDocumentation)
+      boolean withDocumentation,
+      boolean forWrite)
       throws NessieNotFoundException;
 
   /**
-   * Similar to {@link #getContent(ContentKey, String, boolean)}, but takes multiple {@link
+   * Similar to {@link #getContent(ContentKey, String, boolean, boolean)}, but takes multiple {@link
    * ContentKey}s and returns the {@link Content} for the one or more {@link ContentKey}s in a
    * named-reference (a {@link org.projectnessie.model.Branch} or {@link
    * org.projectnessie.model.Tag}).
@@ -322,11 +366,16 @@ public interface TreeApi {
    * table-metadata) plus the per-Nessie-reference/hash specific part (Iceberg: snapshot-id,
    * schema-id, partition-spec-id, default-sort-order-id).
    *
+   * <p>Throws an {@code AccessCheckException} if access checks fail.
+   *
    * @param ref named-reference to retrieve the content for
    * @param request the {@link ContentKey}s to retrieve
    * @param withDocumentation whether to return the documentation, if it exists.
+   * @param forWrite If set to 'true', access control checks will check for write/create privilege
+   *     in addition to read access checks.
    * @return list of {@link GetMultipleContentsResponse.ContentWithKey}s
-   * @throws NessieNotFoundException if {@code ref} or {@code hashOnRef} does not exist
+   * @throws NessieNotFoundException Throws a {@link NessieReferenceNotFoundException}, if {@code
+   *     ref} does not exist.
    */
   GetMultipleContentsResponse getMultipleContents(
       @Valid
@@ -340,6 +389,7 @@ public interface TreeApi {
           String ref,
       @Valid @jakarta.validation.Valid @NotNull @jakarta.validation.constraints.NotNull
           GetMultipleContentsRequest request,
-      boolean withDocumentation)
+      boolean withDocumentation,
+      boolean forWrite)
       throws NessieNotFoundException;
 }

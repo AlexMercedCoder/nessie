@@ -29,10 +29,10 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.projectnessie.model.CommitMeta;
 import org.projectnessie.model.Content;
 import org.projectnessie.model.ContentKey;
+import org.projectnessie.model.Operation;
+import org.projectnessie.model.Operation.Put;
 import org.projectnessie.versioned.BranchName;
 import org.projectnessie.versioned.Hash;
-import org.projectnessie.versioned.Operation;
-import org.projectnessie.versioned.Put;
 import org.projectnessie.versioned.VersionStore;
 
 @ExtendWith(SoftAssertionsExtension.class)
@@ -80,7 +80,8 @@ public abstract class AbstractDuplicateTable extends AbstractNestedVersionStore 
 
     store()
         .commit(branch1, Optional.empty(), CommitMeta.fromMessage("create table"), putForBranch1);
-    soft.assertThat(contentWithoutId(store().getValue(branch1, key))).isEqualTo(valuebranch1);
+    soft.assertThat(contentWithoutId(store().getValue(branch1, key, false)))
+        .isEqualTo(valuebranch1);
 
     ThrowingCallable createTableOnOtherBranch =
         () ->
@@ -92,6 +93,7 @@ public abstract class AbstractDuplicateTable extends AbstractNestedVersionStore 
                     putForBranch2);
 
     createTableOnOtherBranch.call();
-    soft.assertThat(contentWithoutId(store().getValue(branch2, key))).isEqualTo(valuebranch2);
+    soft.assertThat(contentWithoutId(store().getValue(branch2, key, false)))
+        .isEqualTo(valuebranch2);
   }
 }

@@ -16,43 +16,30 @@
 
 import org.apache.tools.ant.taskdefs.condition.Os
 
-plugins {
-  id("nessie-conventions-server")
-  id("nessie-jacoco")
-}
+plugins { id("nessie-conventions-java11") }
 
-extra["maven.name"] = "Nessie - Storage - JDBC"
+publishingHelper { mavenName = "Nessie - Storage - JDBC" }
 
-description = "Storage implementation for JDBC, supports H2, PostgreSQL and CockroachDB."
+description =
+  "Storage implementation for JDBC, supports H2, PostgreSQL, CockroachDB, MariaDB and MySQL (via MariaDB Driver)."
 
 dependencies {
   implementation(project(":nessie-versioned-storage-common"))
   implementation(project(":nessie-versioned-storage-common-proto"))
+  implementation(project(":nessie-versioned-storage-common-serialize"))
 
-  // javax/jakarta
   compileOnly(libs.jakarta.validation.api)
-  compileOnly(libs.javax.validation.api)
   compileOnly(libs.jakarta.annotation.api)
-  compileOnly(libs.findbugs.jsr305)
 
   compileOnly(libs.errorprone.annotations)
   implementation(libs.guava)
   implementation(libs.agrona)
   implementation(libs.slf4j.api)
 
-  compileOnly(libs.immutables.builder)
-  compileOnly(libs.immutables.value.annotations)
-  annotationProcessor(libs.immutables.value.processor)
+  compileOnly(project(":nessie-immutables-std"))
+  annotationProcessor(project(":nessie-immutables-std", configuration = "processor"))
 
-  compileOnly(libs.agroal.pool)
-  compileOnly(libs.h2)
-  compileOnly(libs.postgresql)
-  compileOnly(libs.testcontainers.postgresql)
-  compileOnly(libs.testcontainers.cockroachdb)
-  compileOnly(libs.docker.java.api)
-
-  compileOnly(project(":nessie-versioned-storage-testextension"))
-
+  testFixturesApi(project(":nessie-versioned-storage-jdbc-tests"))
   testFixturesApi(project(":nessie-versioned-storage-common"))
   testFixturesApi(project(":nessie-versioned-storage-common-tests"))
   testFixturesApi(project(":nessie-versioned-storage-testextension"))
@@ -60,8 +47,8 @@ dependencies {
   testFixturesImplementation(libs.agroal.pool)
   testRuntimeOnly(libs.h2)
   intTestRuntimeOnly(libs.postgresql)
-  intTestRuntimeOnly(libs.testcontainers.postgresql)
-  intTestRuntimeOnly(libs.testcontainers.cockroachdb)
+  intTestRuntimeOnly(libs.mariadb.java.client)
+  intTestRuntimeOnly(platform(libs.testcontainers.bom))
   intTestRuntimeOnly(libs.docker.java.api)
   testFixturesImplementation(platform(libs.junit.bom))
   testFixturesImplementation(libs.bundles.junit.testing)

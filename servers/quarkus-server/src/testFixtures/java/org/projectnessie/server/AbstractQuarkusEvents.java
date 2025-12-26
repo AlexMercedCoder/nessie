@@ -20,7 +20,9 @@ import static org.projectnessie.quarkus.tests.profiles.BaseConfigProfile.TEST_RE
 
 import com.google.common.collect.ImmutableMap;
 import io.restassured.RestAssured;
+import jakarta.inject.Inject;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.AbstractMap.SimpleEntry;
 import java.util.Collections;
 import java.util.List;
@@ -48,6 +50,7 @@ import org.projectnessie.events.api.ReferenceUpdatedEvent;
 import org.projectnessie.events.api.TransplantEvent;
 import org.projectnessie.model.Branch;
 import org.projectnessie.model.CommitMeta;
+import org.projectnessie.model.Content.Type;
 import org.projectnessie.model.ContentKey;
 import org.projectnessie.model.IcebergTable;
 import org.projectnessie.model.MergeResponse;
@@ -56,32 +59,35 @@ import org.projectnessie.model.Reference;
 import org.projectnessie.model.UDF;
 import org.projectnessie.server.events.fixtures.MockEventSubscriber;
 
-@SuppressWarnings("resource")
 @ExtendWith(QuarkusNessieClientResolver.class)
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public abstract class AbstractQuarkusEvents {
 
-  private final Put putInitial = Put.of(ContentKey.of("foo"), UDF.of("foo", "bar"));
+  private final Put putInitial = Put.of(ContentKey.of("foo"), UDF.udf("udf-meta", "42", "666"));
   private final Put put = Put.of(ContentKey.of("key1"), IcebergTable.of("somewhere", 1, 1, 3, 4));
   private final CommitMeta commitMeta = CommitMeta.fromMessage("test commit");
 
   private URI clientUri;
   private NessieApiV1 api;
 
+  @SuppressWarnings("CdiInjectionPointsInspection")
+  @Inject
+  public MockEventSubscriber subscriber;
+
   @BeforeAll
   void startRecording() {
-    subscriber().startRecording();
+    subscriber.startRecording();
   }
 
   @AfterAll
   void stopRecording() {
-    subscriber().stopRecording();
-    subscriber().reset();
+    subscriber.stopRecording();
+    subscriber.reset();
   }
 
   @BeforeEach
   void reset() {
-    subscriber().reset();
+    subscriber.reset();
     clearMetrics();
   }
 
@@ -97,8 +103,8 @@ public abstract class AbstractQuarkusEvents {
     RestAssured.port = uri.getPort();
   }
 
-  protected NessieClientBuilder<?> customizeClient(
-      NessieClientBuilder<?> builder, NessieApiVersion apiVersion) {
+  protected NessieClientBuilder customizeClient(
+      NessieClientBuilder builder, NessieApiVersion apiVersion) {
     return builder;
   }
 
@@ -107,8 +113,6 @@ public abstract class AbstractQuarkusEvents {
   }
 
   protected abstract boolean eventsEnabled();
-
-  protected abstract MockEventSubscriber subscriber();
 
   protected abstract void clearMetrics();
 
@@ -150,7 +154,7 @@ public abstract class AbstractQuarkusEvents {
             .branch(target)
             .transplant();
     String hashAfter = response.getResultantTargetHash();
-    checkEventsForTransplantResult(source, target, hashBefore, hashAfter);
+    checkEventsForTransplantResult(target, hashBefore, hashAfter);
   }
 
   @Test
@@ -176,7 +180,7 @@ public abstract class AbstractQuarkusEvents {
 
   private void checkEventsForCommitResult(Branch branch, String hashBefore, String hashAfter) {
     if (eventsEnabled()) {
-      List<Event> events = subscriber().awaitEvents(2);
+      List<Event> events = subscriber.awaitEvents(2);
       checkCommitEvent(events, branch, hashBefore, hashAfter);
       checkContentStoredEvent(events);
       checkCommitMetrics();
@@ -189,7 +193,7 @@ public abstract class AbstractQuarkusEvents {
   private void checkEventsForMergeResult(
       Branch source, Branch target, String hashBefore, String hashAfter) {
     if (eventsEnabled()) {
-      List<Event> events = subscriber().awaitEvents(3);
+      List<Event> events = subscriber.awaitEvents(3);
       checkMergeEvent(events, source, target, hashBefore, hashAfter);
       checkCommitEvent(events, target, hashBefore, hashAfter);
       checkContentStoredEvent(events);
@@ -200,11 +204,10 @@ public abstract class AbstractQuarkusEvents {
     }
   }
 
-  private void checkEventsForTransplantResult(
-      Branch source, Branch target, String hashBefore, String hashAfter) {
+  private void checkEventsForTransplantResult(Branch target, String hashBefore, String hashAfter) {
     if (eventsEnabled()) {
-      List<Event> events = subscriber().awaitEvents(3);
-      checkTransplantEvent(events, source, target, hashBefore, hashAfter);
+      List<Event> events = subscriber.awaitEvents(3);
+      checkTransplantEvent(events, target, hashBefore, hashAfter);
       checkCommitEvent(events, target, hashBefore, hashAfter);
       checkContentStoredEvent(events);
       checkTransplantMetrics();
@@ -216,7 +219,7 @@ public abstract class AbstractQuarkusEvents {
 
   private void checkEventsForReferenceCreatedResult(Branch branch) {
     if (eventsEnabled()) {
-      List<Event> events = subscriber().awaitEvents(1);
+      List<Event> events = subscriber.awaitEvents(1);
       checkReferenceCreatedEvent(events, branch);
       checkReferenceCreatedMetrics();
     } else {
@@ -227,7 +230,7 @@ public abstract class AbstractQuarkusEvents {
 
   private void checkEventsForReferenceDeletedResult(Branch branch) {
     if (eventsEnabled()) {
-      List<Event> events = subscriber().awaitEvents(1);
+      List<Event> events = subscriber.awaitEvents(1);
       checkReferenceDeletedEvent(events, branch);
       checkReferenceDeletedMetrics();
     } else {
@@ -238,7 +241,7 @@ public abstract class AbstractQuarkusEvents {
 
   private void checkEventsForReferenceAssignedResult(Branch branch1, Branch branch2) {
     if (eventsEnabled()) {
-      List<Event> events = subscriber().awaitEvents(1);
+      List<Event> events = subscriber.awaitEvents(1);
       checkReferenceUpdatedEvent(events, branch1, branch2);
       checkReferenceUpdatedMetrics();
     } else {
@@ -258,14 +261,14 @@ public abstract class AbstractQuarkusEvents {
             CommitEvent::getProperties,
             CommitEvent::getHashBefore,
             CommitEvent::getHashAfter,
-            e -> e.getReference().getFullName().orElse(null))
+            e -> e.getReference().getName())
         .containsExactly(
             TEST_REPO_ID,
             eventInitiator(),
             ImmutableMap.of("foo", "bar"),
             hashBefore,
             hashAfter,
-            "refs/heads/" + branch.getName());
+            branch.getName());
   }
 
   private void checkMergeEvent(
@@ -279,20 +282,20 @@ public abstract class AbstractQuarkusEvents {
             MergeEvent::getProperties,
             MergeEvent::getHashBefore,
             MergeEvent::getHashAfter,
-            e -> e.getSourceReference().getFullName().orElse(null),
-            e -> e.getTargetReference().getFullName().orElse(null))
+            e -> e.getSourceReference().getName(),
+            e -> e.getTargetReference().getName())
         .containsExactly(
             TEST_REPO_ID,
             eventInitiator(),
             ImmutableMap.of("foo", "bar"),
             hashBefore,
             hashAfter,
-            "refs/heads/" + source.getName(),
-            "refs/heads/" + target.getName());
+            source.getName(),
+            target.getName());
   }
 
   private void checkTransplantEvent(
-      List<Event> events, Branch source, Branch target, String hashBefore, String hashAfter) {
+      List<Event> events, Branch target, String hashBefore, String hashAfter) {
     TransplantEvent transplantEvent = findEvent(events, TransplantEvent.class);
     assertThat(transplantEvent)
         .isNotNull()
@@ -302,16 +305,14 @@ public abstract class AbstractQuarkusEvents {
             TransplantEvent::getProperties,
             TransplantEvent::getHashBefore,
             TransplantEvent::getHashAfter,
-            e -> e.getSourceReference().getFullName().orElse(null),
-            e -> e.getTargetReference().getFullName().orElse(null))
+            e -> e.getTargetReference().getName())
         .containsExactly(
             TEST_REPO_ID,
             eventInitiator(),
             ImmutableMap.of("foo", "bar"),
             hashBefore,
             hashAfter,
-            "refs/heads/" + source.getName(),
-            "refs/heads/" + target.getName());
+            target.getName());
   }
 
   private void checkContentStoredEvent(List<Event> events) {
@@ -325,7 +326,11 @@ public abstract class AbstractQuarkusEvents {
             e -> e.getContentKey().getName(),
             e -> e.getContent().getType())
         .containsExactly(
-            TEST_REPO_ID, eventInitiator(), ImmutableMap.of("foo", "bar"), "key1", "ICEBERG_TABLE");
+            TEST_REPO_ID,
+            eventInitiator(),
+            ImmutableMap.of("foo", "bar"),
+            "key1",
+            Type.ICEBERG_TABLE);
   }
 
   private void checkReferenceCreatedEvent(List<Event> events, Branch branch) {
@@ -336,13 +341,13 @@ public abstract class AbstractQuarkusEvents {
             ReferenceCreatedEvent::getRepositoryId,
             e -> e.getEventInitiator().orElse(null),
             ReferenceCreatedEvent::getProperties,
-            e -> e.getReference().getFullName().orElse(null),
+            e -> e.getReference().getName(),
             ReferenceCreatedEvent::getHashAfter)
         .containsExactly(
             TEST_REPO_ID,
             eventInitiator(),
             ImmutableMap.of("foo", "bar"),
-            "refs/heads/" + branch.getName(),
+            branch.getName(),
             branch.getHash());
   }
 
@@ -354,13 +359,13 @@ public abstract class AbstractQuarkusEvents {
             ReferenceDeletedEvent::getRepositoryId,
             e -> e.getEventInitiator().orElse(null),
             ReferenceDeletedEvent::getProperties,
-            e -> e.getReference().getFullName().orElse(null),
+            e -> e.getReference().getName(),
             ReferenceDeletedEvent::getHashBefore)
         .containsExactly(
             TEST_REPO_ID,
             eventInitiator(),
             ImmutableMap.of("foo", "bar"),
-            "refs/heads/" + branch.getName(),
+            branch.getName(),
             branch.getHash());
   }
 
@@ -383,7 +388,7 @@ public abstract class AbstractQuarkusEvents {
   }
 
   private void checkNoEvents() {
-    assertThat(subscriber().getEvents()).isEmpty();
+    assertThat(subscriber.getEvents()).isEmpty();
   }
 
   private void checkNoMetrics() {
@@ -454,7 +459,7 @@ public abstract class AbstractQuarkusEvents {
             .operation(putInitial)
             .commit();
     if (eventsEnabled()) {
-      subscriber().awaitEvents(2);
+      subscriber.awaitEvents(2);
       reset();
     }
     Branch target = createBranch("target" + System.nanoTime(), source);
@@ -465,7 +470,7 @@ public abstract class AbstractQuarkusEvents {
             .commitMeta(commitMeta)
             .commit();
     if (eventsEnabled()) {
-      subscriber().awaitEvents(2); // COMMIT + CONTENT_STORED
+      subscriber.awaitEvents(2); // COMMIT + CONTENT_STORED
       reset();
     }
     return new SimpleEntry<>(source, target);
@@ -496,7 +501,7 @@ public abstract class AbstractQuarkusEvents {
     Reference reference = Branch.of(name, source.getHash());
     Branch branch = (Branch) api.createReference().reference(reference).create();
     if (eventsEnabled()) {
-      subscriber().awaitEvents(1);
+      subscriber.awaitEvents(1);
       reset();
     }
     return branch;
@@ -507,9 +512,17 @@ public abstract class AbstractQuarkusEvents {
   }
 
   private String getMetrics() {
+    int managementPort = Integer.getInteger("quarkus.management.port");
+    URI managementBaseUri;
+    try {
+      managementBaseUri =
+          new URI("http", null, clientUri.getHost(), managementPort, "/", null, null);
+    } catch (URISyntaxException e) {
+      throw new RuntimeException(e);
+    }
     return RestAssured.given()
         .when()
-        .baseUri(clientUri.resolve("/").toString())
+        .baseUri(managementBaseUri.toString())
         .basePath("/q/metrics")
         .accept("*/*")
         .get()

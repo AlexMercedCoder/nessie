@@ -19,8 +19,8 @@ import static java.util.stream.Collectors.toList;
 import static org.projectnessie.model.ContentKey.fromPathString;
 import static org.projectnessie.tools.contentgenerator.keygen.KeyGenerator.newKeyGenerator;
 
+import jakarta.validation.constraints.Min;
 import java.time.Duration;
-import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -36,23 +36,23 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.IntFunction;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
-import javax.validation.constraints.Min;
 import org.projectnessie.client.api.CommitMultipleOperationsBuilder;
 import org.projectnessie.client.api.NessieApiV2;
 import org.projectnessie.error.BaseNessieClientServerException;
 import org.projectnessie.error.NessieConflictException;
 import org.projectnessie.error.NessieReferenceNotFoundException;
 import org.projectnessie.model.Branch;
-import org.projectnessie.model.CommitMeta;
 import org.projectnessie.model.Content;
 import org.projectnessie.model.ContentKey;
 import org.projectnessie.model.GetMultipleContentsResponse;
 import org.projectnessie.model.ImmutableDeltaLakeTable;
 import org.projectnessie.model.ImmutableIcebergTable;
 import org.projectnessie.model.ImmutableIcebergView;
+import org.projectnessie.model.ImmutableUDF;
 import org.projectnessie.model.Namespace;
 import org.projectnessie.model.Operation.Put;
 import org.projectnessie.model.Tag;
+import org.projectnessie.model.UDF;
 import org.projectnessie.model.types.ContentTypes;
 import org.projectnessie.tools.contentgenerator.keygen.KeyGenerator;
 import picocli.CommandLine.Command;
@@ -61,7 +61,7 @@ import picocli.CommandLine.Option;
 import picocli.CommandLine.ParameterException;
 
 @Command(name = "generate", mixinStandardHelpOptions = true, description = "Generate commits")
-public class GenerateContent extends AbstractCommand {
+public class GenerateContent extends CommittingCommand {
 
   @Option(
       names = {"-b", "--num-branches"},
@@ -213,13 +213,9 @@ public class GenerateContent extends AbstractCommand {
             api.commitMultipleOperations()
                 .branch(commitToBranch)
                 .commitMeta(
-                    CommitMeta.builder()
-                        .message(
-                            String.format(
-                                "Commit #%d of %d on %s", commitNum, numCommits, branchName))
-                        .author(System.getProperty("user.name"))
-                        .authorTime(Instant.now())
-                        .build());
+                    commitMetaFromMessage(
+                        String.format(
+                            "Commit #%d of %d on %s", commitNum, numCommits, branchName)));
 
         // Collect the namespaces that we do not (yet) know whether those exist.
         Set<ContentKey> namespacesToCheck = new HashSet<>();
@@ -348,6 +344,7 @@ public class GenerateContent extends AbstractCommand {
       return deltaBuilder.build();
     }
     if (contentType.equals(Content.Type.ICEBERG_VIEW)) {
+      @SuppressWarnings("deprecation")
       ImmutableIcebergView.Builder viewBuilder =
           ImmutableIcebergView.builder()
               .metadataLocation("metadata " + random.nextLong())
@@ -362,6 +359,17 @@ public class GenerateContent extends AbstractCommand {
         viewBuilder.id(contentId);
       }
       return viewBuilder.build();
+    }
+    if (contentType.equals(Content.Type.UDF)) {
+      ImmutableUDF.Builder udfBuilder =
+          UDF.builder().metadataLocation("metadata " + random.nextLong());
+      if (currentContents != null) {
+        udfBuilder.id(currentContents.getId());
+      }
+      if (contentId != null) {
+        udfBuilder.id(contentId);
+      }
+      return udfBuilder.build();
     }
     throw new UnsupportedOperationException(
         String.format("Content type %s not supported", contentType.name()));

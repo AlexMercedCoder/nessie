@@ -15,33 +15,43 @@
  */
 package org.projectnessie.quarkus.config;
 
-import io.quarkus.runtime.annotations.StaticInitSafe;
+import com.google.api.gax.core.CredentialsProvider;
 import io.smallrye.config.ConfigMapping;
 import io.smallrye.config.WithDefault;
-import java.util.Map;
 import java.util.Optional;
+import org.projectnessie.versioned.storage.bigtable.BigTableClientsConfig;
 
-@StaticInitSafe
+/**
+ * When setting {@code nessie.version.store.type=BIGTABLE} which enables Google BigTable as the
+ * version store used by the Nessie server, the following configurations are applicable.
+ */
 @ConfigMapping(prefix = "nessie.version.store.persist.bigtable")
-public interface QuarkusBigTableConfig {
+public interface QuarkusBigTableConfig extends BigTableClientsConfig {
 
   @WithDefault("nessie")
+  @Override
   String instanceId();
 
-  Optional<String> appProfileId();
+  @WithDefault("8086")
+  @Override
+  int emulatorPort();
 
-  Optional<String> quotaProjectId();
+  @WithDefault("true")
+  @Override
+  boolean enableTelemetry();
 
-  Optional<String> endpoint();
-
-  Optional<String> mtlsEndpoint();
-
-  Optional<String> emulatorHost();
-
+  /** Prefix for tables, default is no prefix. */
   Optional<String> tablePrefix();
 
-  Map<String, String> jwtAudienceMapping();
+  @WithDefault("false")
+  boolean noTableAdminClient();
 
-  @WithDefault("8086")
-  int emulatorPort();
+  /**
+   * Prevent looking up {@link CredentialsProvider} to prevent "global tracer field race" in tests.
+   * This undocumented setting is ONLY for tests!
+   *
+   * @hidden
+   */
+  @WithDefault("false")
+  boolean disableCredentialsLookupForTests();
 }

@@ -34,14 +34,17 @@ import org.apache.spark.SparkConf;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.connector.catalog.CatalogPlugin;
-import org.apache.spark.sql.execution.datasources.v2.NessieUtils;
+import org.apache.spark.sql.execution.datasources.v2.CatalogBridge;
+import org.apache.spark.sql.execution.datasources.v2.CatalogUtils;
 import org.apache.spark.sql.internal.SQLConf;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.TestInfo;
-import org.projectnessie.client.api.NessieApiV1;
-import org.projectnessie.client.http.HttpClientBuilder;
+import org.projectnessie.client.NessieClientBuilder;
+import org.projectnessie.client.api.NessieApiV2;
+import org.projectnessie.client.config.NessieClientConfigSource;
+import org.projectnessie.client.config.NessieClientConfigSources;
 import org.projectnessie.error.NessieConflictException;
 import org.projectnessie.error.NessieNotFoundException;
 import org.projectnessie.model.Branch;
@@ -57,26 +60,32 @@ import org.projectnessie.model.Operation.Put;
 import org.projectnessie.model.Operations;
 import org.projectnessie.model.Reference;
 import org.projectnessie.model.Tag;
-import scala.None$;
 
 public abstract class SparkSqlTestBase {
 
   protected static final String NON_NESSIE_CATALOG = "invalid_hive";
-  protected static SparkConf conf = new SparkConf();
+  protected static final SparkConf conf = new SparkConf();
 
   protected static SparkSession spark;
 
-  protected boolean first = true;
-
+  protected Branch mainBeforeTest;
   protected Branch initialDefaultBranch;
 
   protected String refName;
   protected String additionalRefName;
-  protected NessieApiV1 api;
+  protected NessieApiV2 api;
 
   protected String nessieApiUri() {
     return format(
-        "%s/api/v1",
+        "%s/api/v2",
+        requireNonNull(
+            System.getProperty("quarkus.http.test-url"),
+            "Required system property quarkus.http.test-url is not set"));
+  }
+
+  protected String icebergApiUri() {
+    return format(
+        "%s/iceberg/",
         requireNonNull(
             System.getProperty("quarkus.http.test-url"),
             "Required system property quarkus.http.test-url is not set"));
@@ -88,12 +97,23 @@ public abstract class SparkSqlTestBase {
     return emptyMap();
   }
 
+  protected boolean useIcebergREST() {
+    return false;
+  }
+
   protected Map<String, String> nessieParams() {
+    if (useIcebergREST()) {
+      return ImmutableMap.of(
+          "uri", format("%s%s", icebergApiUri(), defaultBranch()), "type", "rest");
+    }
+
     return ImmutableMap.of(
         "ref",
         defaultBranch(),
         "uri",
         nessieApiUri(),
+        "client-api-version",
+        "2",
         "warehouse",
         warehouseURI(),
         "catalog-impl",
@@ -107,15 +127,17 @@ public abstract class SparkSqlTestBase {
   @BeforeEach
   protected void setupSparkAndApi(TestInfo testInfo)
       throws NessieNotFoundException, NessieConflictException {
-    HttpClientBuilder httpClientBuilder = HttpClientBuilder.builder().withUri(nessieApiUri());
-    api = configureNessieHttpClient(httpClientBuilder).build(NessieApiV1.class);
+    api =
+        NessieClientBuilder.createClientBuilderFromSystemSettings(nessieClientConfigSource())
+            .withUri(nessieApiUri())
+            .build(NessieApiV2.class);
 
     refName = testInfo.getTestMethod().map(Method::getName).get();
     additionalRefName = refName + "_other";
 
-    initialDefaultBranch = api.getDefaultBranch();
+    mainBeforeTest = initialDefaultBranch = api.getDefaultBranch();
 
-    if (first && requiresCommonAncestor()) {
+    if (requiresCommonAncestor()) {
       initialDefaultBranch =
           api.commitMultipleOperations()
               .branch(initialDefaultBranch)
@@ -128,7 +150,6 @@ public abstract class SparkSqlTestBase {
               .commitMeta(CommitMeta.fromMessage("INFRA: common ancestor"))
               .operation(Delete.of(ContentKey.of("dummy")))
               .commit();
-      first = false;
     }
 
     sparkHadoop().forEach((k, v) -> conf.set(format("spark.hadoop.%s", k), v));
@@ -141,6 +162,7 @@ public abstract class SparkSqlTestBase {
             });
 
     conf.set(SQLConf.PARTITION_OVERWRITE_MODE().key(), "dynamic")
+        .set("spark.ui.enabled", "false")
         .set("spark.testing", "true")
         .set("spark.sql.warehouse.dir", warehouseURI())
         .set("spark.sql.shuffle.partitions", "4")
@@ -158,8 +180,8 @@ public abstract class SparkSqlTestBase {
     spark.sparkContext().setLogLevel("WARN");
   }
 
-  protected HttpClientBuilder configureNessieHttpClient(HttpClientBuilder httpClientBuilder) {
-    return httpClientBuilder;
+  protected NessieClientConfigSource nessieClientConfigSource() {
+    return NessieClientConfigSources.defaultConfigSources();
   }
 
   @AfterEach
@@ -167,22 +189,19 @@ public abstract class SparkSqlTestBase {
     @SuppressWarnings("resource")
     CatalogPlugin sparkCatalog =
         SparkSession.active().sessionState().catalogManager().catalog("nessie");
-    // *sing*
-    // Oh, Scala, your lovely Java bindings make me cry...
-    NessieUtils.setCurrentRefForSpark(
-        sparkCatalog, None$.<String>empty(), Branch.of(defaultBranch(), null), false);
+    try (CatalogBridge bridge = CatalogUtils.buildBridge(sparkCatalog, "nessie")) {
+      bridge.setCurrentRefForSpark(Branch.of(defaultBranch(), null), false);
+    }
 
     if (api != null) {
       Branch defaultBranch = api.getDefaultBranch();
       for (Reference ref : api.getAllReferences().get().getReferences()) {
-        if (ref instanceof Branch && !ref.getName().equals(defaultBranch.getName())) {
-          api.deleteBranch().branchName(ref.getName()).hash(ref.getHash()).delete();
-        }
-        if (ref instanceof Tag) {
-          api.deleteTag().tagName(ref.getName()).hash(ref.getHash()).delete();
+        if (ref instanceof Tag
+            || (ref instanceof Branch && !ref.getName().equals(defaultBranch.getName()))) {
+          api.deleteReference().reference(ref).delete();
         }
       }
-      api.assignBranch().assignTo(initialDefaultBranch).branch(defaultBranch).assign();
+      api.assignReference().assignTo(mainBeforeTest).reference(defaultBranch).assign();
       api.close();
       api = null;
     }
@@ -207,7 +226,7 @@ public abstract class SparkSqlTestBase {
   @FormatMethod
   protected static List<Object[]> sql(String query, Object... args) {
     List<Row> rows = spark.sql(format(query, args)).collectAsList();
-    if (rows.size() < 1) {
+    if (rows.isEmpty()) {
       return ImmutableList.of();
     }
 
@@ -252,7 +271,7 @@ public abstract class SparkSqlTestBase {
     return values;
   }
 
-  protected List<SparkCommitLogEntry> fetchLog(String branch) {
+  List<SparkCommitLogEntry> fetchLog(String branch) {
     return sql("SHOW LOG %s IN nessie", branch).stream()
         .map(SparkCommitLogEntry::fromShowLog)
         .collect(Collectors.toList());
@@ -272,13 +291,13 @@ public abstract class SparkSqlTestBase {
     assertThat(api.getReference().refName(tagName).get()).isEqualTo(Tag.of(tagName, defaultHash()));
   }
 
-  protected List<SparkCommitLogEntry> createBranchCommitAndReturnLog()
+  List<SparkCommitLogEntry> createBranchCommitAndReturnLog()
       throws NessieConflictException, NessieNotFoundException {
     createBranchForTest(refName);
     return commitAndReturnLog(refName, defaultHash());
   }
 
-  protected List<SparkCommitLogEntry> commitAndReturnLog(String branch, String initialHashOrBranch)
+  List<SparkCommitLogEntry> commitAndReturnLog(String branch, String initialHashOrBranch)
       throws NessieNotFoundException, NessieConflictException {
     ContentKey key = ContentKey.of("table", "name");
     CommitMeta cm1 =
@@ -311,8 +330,7 @@ public abstract class SparkSqlTestBase {
     Operations ops =
         content != null
             ? ImmutableOperations.builder()
-                .addOperations(
-                    Put.of(key, IcebergTable.of("foo", 42, 42, 42, 42, content.getId()), content))
+                .addOperations(Put.of(key, IcebergTable.of("foo", 42, 42, 42, 42, content.getId())))
                 .commitMeta(cm1)
                 .build()
             : ImmutableOperations.builder()
@@ -334,8 +352,7 @@ public abstract class SparkSqlTestBase {
 
     Operations ops2 =
         ImmutableOperations.builder()
-            .addOperations(
-                Put.of(key, IcebergTable.of("bar", 42, 42, 42, 42, content.getId()), content))
+            .addOperations(Put.of(key, IcebergTable.of("bar", 42, 42, 42, 42, content.getId())))
             .commitMeta(cm2)
             .build();
 
@@ -351,8 +368,7 @@ public abstract class SparkSqlTestBase {
 
     Operations ops3 =
         ImmutableOperations.builder()
-            .addOperations(
-                Put.of(key, IcebergTable.of("baz", 42, 42, 42, 42, content.getId()), content))
+            .addOperations(Put.of(key, IcebergTable.of("baz", 42, 42, 42, 42, content.getId())))
             .commitMeta(cm3)
             .build();
 

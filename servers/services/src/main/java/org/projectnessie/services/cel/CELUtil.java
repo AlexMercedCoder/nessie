@@ -15,10 +15,10 @@
  */
 package org.projectnessie.services.cel;
 
-import com.google.api.expr.v1alpha1.Decl;
 import com.google.common.collect.ImmutableList;
 import java.util.List;
 import org.projectnessie.cel.checker.Decls;
+import org.projectnessie.cel.relocated.com.google.api.expr.v1alpha1.Decl;
 import org.projectnessie.cel.tools.ScriptHost;
 import org.projectnessie.cel.types.jackson.JacksonRegistry;
 import org.projectnessie.model.CommitMeta;
@@ -29,7 +29,6 @@ import org.projectnessie.model.Namespace;
 import org.projectnessie.model.Operation;
 import org.projectnessie.model.Operation.Delete;
 import org.projectnessie.model.Operation.Put;
-import org.projectnessie.model.RefLogResponse;
 import org.projectnessie.model.Reference;
 import org.projectnessie.model.ReferenceMetadata;
 import org.projectnessie.versioned.KeyEntry;
@@ -49,9 +48,12 @@ public final class CELUtil {
   public static final String VAR_ENTRY = "entry";
   public static final String VAR_PATH = "path";
   public static final String VAR_ROLE = "role";
+  public static final String VAR_ROLES = "roles";
   public static final String VAR_OP = "op";
+  public static final String VAR_ACTIONS = "actions";
+  public static final String VAR_API = "api";
   public static final String VAR_OPERATIONS = "operations";
-  public static final String VAR_REFLOG = "reflog";
+  public static final String VAR_CONTENT_TYPE = "contentType";
 
   public static final List<Decl> REFERENCES_DECLARATIONS =
       ImmutableList.of(
@@ -79,17 +81,15 @@ public final class CELUtil {
       ImmutableList.of(
           Decls.newVar(VAR_REF, Decls.String),
           Decls.newVar(VAR_PATH, Decls.String),
+          Decls.newVar(VAR_CONTENT_TYPE, Decls.String),
           Decls.newVar(VAR_ROLE, Decls.String),
+          Decls.newVar(VAR_ROLES, Decls.newListType(Decls.String)),
           Decls.newVar(VAR_OP, Decls.String));
 
   public static final List<Object> COMMIT_LOG_TYPES =
       ImmutableList.of(CommitMeta.class, OperationForCel.class, ContentKey.class, Namespace.class);
 
   public static final List<Object> CONTENT_KEY_TYPES = ImmutableList.of(KeyedEntityForCel.class);
-
-  @SuppressWarnings("deprecation")
-  public static final List<Object> REFLOG_TYPES =
-      ImmutableList.of(RefLogResponse.RefLogResponseEntry.class);
 
   public static final List<Object> REFERENCES_TYPES =
       ImmutableList.of(CommitMeta.class, ReferenceMetadata.class, Reference.class);
@@ -99,12 +99,6 @@ public final class CELUtil {
   public static final CommitMeta EMPTY_COMMIT_META = CommitMeta.fromMessage("");
   public static final ReferenceMetadata EMPTY_REFERENCE_METADATA =
       ImmutableReferenceMetadata.builder().commitMetaOfHEAD(EMPTY_COMMIT_META).build();
-
-  @SuppressWarnings("deprecation")
-  public static final List<Decl> REFLOG_DECLARATIONS =
-      ImmutableList.of(
-          Decls.newVar(
-              VAR_REFLOG, Decls.newObjectType(RefLogResponse.RefLogResponseEntry.class.getName())));
 
   private CELUtil() {}
 
@@ -171,13 +165,14 @@ public final class CELUtil {
     if (model instanceof Operation) {
       return new OperationForCelImpl((Operation) model);
     }
-    if (model instanceof KeyEntry) {
-      return new KeyEntryForCelImpl((KeyEntry) model);
-    }
     if (model instanceof ContentKey) {
       return new KeyForCelImpl((ContentKey) model);
     }
     return model;
+  }
+
+  public static Object forCel(ContentKey key, Content.Type type) {
+    return new KeyEntryForCelImpl(key, type);
   }
 
   private static class KeyForCelImpl extends AbstractKeyedEntity {
@@ -198,26 +193,33 @@ public final class CELUtil {
     }
   }
 
+  /**
+   * the class does not wrap a {@link KeyEntry} because we need to be able to evaluate {@link
+   * java.util.function.BiPredicate}&lt;ContentKey, Content.Type&gt; as early as possible to avoid
+   * redundant work.
+   */
   private static class KeyEntryForCelImpl extends AbstractKeyedEntity implements KeyEntryForCel {
-    private final KeyEntry entry;
+    private final ContentKey key;
+    private final Content.Type type;
 
-    private KeyEntryForCelImpl(KeyEntry entry) {
-      this.entry = entry;
+    private KeyEntryForCelImpl(ContentKey key, Content.Type type) {
+      this.key = key;
+      this.type = type;
     }
 
     @Override
     protected ContentKey key() {
-      return entry.getKey().contentKey();
+      return key;
     }
 
     @Override
     public String getContentType() {
-      return entry.getKey().type().name();
+      return type.name();
     }
 
     @Override
     public String toString() {
-      return entry.toString();
+      return "KeyEntryForCelImpl{" + "key=" + key + ", type=" + type + "}";
     }
   }
 
@@ -296,7 +298,7 @@ public final class CELUtil {
 
     @Override
     public String getNamespace() {
-      return key().getNamespace().name();
+      return key().getNamespace().toPathString();
     }
 
     @Override

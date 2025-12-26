@@ -16,8 +16,6 @@
 package org.projectnessie.versioned.transfer;
 
 import static org.projectnessie.versioned.storage.common.indexes.StoreIndexes.newStoreIndex;
-import static org.projectnessie.versioned.storage.common.logic.Logics.referenceLogic;
-import static org.projectnessie.versioned.storage.common.logic.Logics.repositoryLogic;
 import static org.projectnessie.versioned.storage.common.objtypes.CommitObj.commitBuilder;
 import static org.projectnessie.versioned.storage.common.persist.ObjId.objIdFromBytes;
 import static org.projectnessie.versioned.storage.versionstore.TypeMapping.headersFromCommitMeta;
@@ -32,13 +30,13 @@ import org.projectnessie.versioned.storage.common.exceptions.RefAlreadyExistsExc
 import org.projectnessie.versioned.storage.common.exceptions.RetryTimeoutException;
 import org.projectnessie.versioned.storage.common.indexes.StoreIndex;
 import org.projectnessie.versioned.storage.common.indexes.StoreKey;
-import org.projectnessie.versioned.storage.common.logic.ReferenceLogic;
 import org.projectnessie.versioned.storage.common.objtypes.CommitObj;
 import org.projectnessie.versioned.storage.common.objtypes.CommitOp;
 import org.projectnessie.versioned.storage.versionstore.RefMapping;
 import org.projectnessie.versioned.transfer.serialize.TransferTypes.Commit;
 import org.projectnessie.versioned.transfer.serialize.TransferTypes.ExportMeta;
 import org.projectnessie.versioned.transfer.serialize.TransferTypes.NamedReference;
+import org.projectnessie.versioned.transfer.serialize.TransferTypes.RelatedObj;
 
 final class ImportPersistV1 extends ImportPersistCommon {
 
@@ -48,15 +46,13 @@ final class ImportPersistV1 extends ImportPersistCommon {
 
   @Override
   void prepareRepository() {
-    persist.erase();
-    repositoryLogic(persist).initialize("main", false, b -> {});
+    importer.repositoryLogic().initialize("main", false, b -> {});
   }
 
   @Override
   long importNamedReferences() throws IOException {
     try {
       long namedReferenceCount = 0L;
-      ReferenceLogic refLogic = referenceLogic(persist);
       for (String fileName : exportMeta.getNamedReferencesFilesList()) {
         try (InputStream input = importFiles.newFileInput(fileName)) {
           while (true) {
@@ -78,7 +74,9 @@ final class ImportPersistV1 extends ImportPersistCommon {
             }
 
             try {
-              refLogic.createReference(ref, objIdFromBytes(namedReference.getCommitId()), null);
+              importer
+                  .referenceLogic()
+                  .createReference(ref, objIdFromBytes(namedReference.getCommitId()), null);
             } catch (RefAlreadyExistsException | RetryTimeoutException e) {
               throw new RuntimeException(e);
             }
@@ -126,4 +124,7 @@ final class ImportPersistV1 extends ImportPersistCommon {
 
     importer.progressListener().progress(ProgressEvent.COMMIT_WRITTEN);
   }
+
+  @Override
+  void processGeneric(RelatedObj genericObj) {}
 }

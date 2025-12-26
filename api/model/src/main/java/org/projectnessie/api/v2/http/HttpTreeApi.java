@@ -15,11 +15,12 @@
  */
 package org.projectnessie.api.v2.http;
 
-import static org.projectnessie.api.v2.doc.ApiDoc.BRANCH_DESCRIPTION;
-import static org.projectnessie.api.v2.doc.ApiDoc.CHECKED_BRANCH_DESCRIPTION;
 import static org.projectnessie.api.v2.doc.ApiDoc.CHECKED_REF_DESCRIPTION;
 import static org.projectnessie.api.v2.doc.ApiDoc.CHECKED_REF_INFO;
+import static org.projectnessie.api.v2.doc.ApiDoc.COMMIT_BRANCH_DESCRIPTION;
+import static org.projectnessie.api.v2.doc.ApiDoc.FOR_WRITE_PARAMETER_DESCRIPTION;
 import static org.projectnessie.api.v2.doc.ApiDoc.KEY_PARAMETER_DESCRIPTION;
+import static org.projectnessie.api.v2.doc.ApiDoc.MERGE_TRANSPLANT_BRANCH_DESCRIPTION;
 import static org.projectnessie.api.v2.doc.ApiDoc.PAGING_INFO;
 import static org.projectnessie.api.v2.doc.ApiDoc.REF_NAME_DESCRIPTION;
 import static org.projectnessie.api.v2.doc.ApiDoc.REF_PARAMETER_DESCRIPTION;
@@ -28,6 +29,7 @@ import static org.projectnessie.model.Validation.REF_NAME_PATH_ELEMENT_REGEX;
 
 import com.fasterxml.jackson.annotation.JsonView;
 import java.util.List;
+import javax.validation.constraints.Pattern;
 import javax.ws.rs.BeanParam;
 import javax.ws.rs.Consumes;
 import javax.ws.rs.DELETE;
@@ -54,6 +56,7 @@ import org.projectnessie.api.v2.params.DiffParams;
 import org.projectnessie.api.v2.params.EntriesParams;
 import org.projectnessie.api.v2.params.GetReferenceParams;
 import org.projectnessie.api.v2.params.Merge;
+import org.projectnessie.api.v2.params.ReferenceHistoryParams;
 import org.projectnessie.api.v2.params.ReferencesParams;
 import org.projectnessie.api.v2.params.Transplant;
 import org.projectnessie.error.NessieConflictException;
@@ -69,8 +72,10 @@ import org.projectnessie.model.LogResponse;
 import org.projectnessie.model.MergeResponse;
 import org.projectnessie.model.Operations;
 import org.projectnessie.model.Reference;
+import org.projectnessie.model.ReferenceHistoryResponse;
 import org.projectnessie.model.ReferencesResponse;
 import org.projectnessie.model.SingleReferenceResponse;
+import org.projectnessie.model.Validation;
 import org.projectnessie.model.ser.Views;
 
 @Consumes(MediaType.APPLICATION_JSON)
@@ -150,7 +155,7 @@ public interface HttpTreeApi extends TreeApi {
               examples = {@ExampleObject(ref = "referenceType")})
           @QueryParam("type")
           @jakarta.ws.rs.QueryParam("type")
-          Reference.ReferenceType type,
+          String type,
       @RequestBody(
               required = true,
               description = "Source reference data from which the new reference is to be created.",
@@ -191,6 +196,48 @@ public interface HttpTreeApi extends TreeApi {
   @JsonView(Views.V2.class)
   SingleReferenceResponse getReferenceByName(
       @BeanParam @jakarta.ws.rs.BeanParam GetReferenceParams params) throws NessieNotFoundException;
+
+  @GET
+  @jakarta.ws.rs.GET
+  @Produces(MediaType.APPLICATION_JSON)
+  @jakarta.ws.rs.Produces(jakarta.ws.rs.core.MediaType.APPLICATION_JSON)
+  @Path("{ref:" + REF_NAME_PATH_ELEMENT_REGEX + "}/recent-changes")
+  @jakarta.ws.rs.Path("{ref:" + REF_NAME_PATH_ELEMENT_REGEX + "}/recent-changes")
+  @Operation(
+      summary = "Fetch recent pointer changes of a reference",
+      operationId = "getReferenceHistory",
+      description =
+          "Retrieve the recorded recent history of a reference.\n"
+              + "\n"
+              + "A reference's history is a size and time limited record of changes of the reference's "
+              + "current pointer, aka HEAD. The size and time limits are configured in the Nessie server "
+              + "configuration.\n"
+              + "\n"
+              + "This function is only useful for deployments using replicating multi-zone/region database "
+              + "setups. If the \"primary write target\" fails and cannot be recovered, replicas might not "
+              + "have all written records (data loss scenario). This function helps identifying whether "
+              + "the commits of a reference that were written within the configured \"replication lag\" are "
+              + "present and consistent. A reference might then be deleted or re-assigned to a consistent commit.")
+  @APIResponses({
+    @APIResponse(
+        responseCode = "200",
+        description = "Found and returned reference.",
+        content = {
+          @Content(
+              mediaType = MediaType.APPLICATION_JSON,
+              examples = {@ExampleObject(ref = "referenceHistoryResponse")},
+              schema = @Schema(implementation = ReferenceHistoryResponse.class))
+        }),
+    @APIResponse(responseCode = "400", description = "Invalid input, ref name not valid"),
+    @APIResponse(responseCode = "401", description = "Invalid credentials provided"),
+    @APIResponse(responseCode = "403", description = "Not allowed to view the given reference"),
+    @APIResponse(responseCode = "404", description = "Reference not found")
+  })
+  @JsonView(Views.V2.class)
+  @Override
+  ReferenceHistoryResponse getReferenceHistory(
+      @BeanParam @jakarta.ws.rs.BeanParam ReferenceHistoryParams params)
+      throws NessieNotFoundException;
 
   @Override
   @GET
@@ -268,8 +315,8 @@ public interface HttpTreeApi extends TreeApi {
   @jakarta.ws.rs.GET
   @Produces(MediaType.APPLICATION_JSON)
   @jakarta.ws.rs.Produces(jakarta.ws.rs.core.MediaType.APPLICATION_JSON)
-  @Path("{ref}/history")
-  @jakarta.ws.rs.Path("{ref}/history")
+  @Path("{ref:" + REF_NAME_PATH_ELEMENT_REGEX + "}/history")
+  @jakarta.ws.rs.Path("{ref:" + REF_NAME_PATH_ELEMENT_REGEX + "}/history")
   @Operation(
       summary = "Get commit log for a particular reference",
       description =
@@ -432,7 +479,7 @@ public interface HttpTreeApi extends TreeApi {
               examples = {@ExampleObject(ref = "referenceType")})
           @QueryParam("type")
           @jakarta.ws.rs.QueryParam("type")
-          Reference.ReferenceType type,
+          String type,
       @Parameter(
               schema = @Schema(pattern = REF_NAME_PATH_ELEMENT_REGEX),
               description = CHECKED_REF_DESCRIPTION,
@@ -490,7 +537,7 @@ public interface HttpTreeApi extends TreeApi {
               examples = {@ExampleObject(ref = "referenceType")})
           @QueryParam("type")
           @jakarta.ws.rs.QueryParam("type")
-          Reference.ReferenceType type,
+          String type,
       @Parameter(
               schema = @Schema(pattern = REF_NAME_PATH_ELEMENT_REGEX),
               description = CHECKED_REF_DESCRIPTION,
@@ -566,7 +613,11 @@ public interface HttpTreeApi extends TreeApi {
       @Parameter(description = WITH_DOC_PARAMETER_DESCRIPTION)
           @QueryParam("with-doc")
           @jakarta.ws.rs.QueryParam("with-doc")
-          boolean withDocumentation)
+          boolean withDocumentation,
+      @Parameter(description = FOR_WRITE_PARAMETER_DESCRIPTION)
+          @QueryParam("for-write")
+          @jakarta.ws.rs.QueryParam("for-write")
+          boolean forWrite)
       throws NessieNotFoundException;
 
   @GET
@@ -603,6 +654,7 @@ public interface HttpTreeApi extends TreeApi {
   @JsonView(Views.V2.class)
   GetMultipleContentsResponse getSeveralContents(
       @Parameter(
+              schema = @Schema(pattern = REF_NAME_PATH_ELEMENT_REGEX),
               description = REF_PARAMETER_DESCRIPTION,
               examples = {
                 @ExampleObject(ref = "ref"),
@@ -624,6 +676,12 @@ public interface HttpTreeApi extends TreeApi {
                 @ExampleObject(ref = "refDefault"),
                 @ExampleObject(ref = "refDetached"),
               })
+          @Pattern(
+              regexp = Validation.REF_NAME_PATH_REGEX,
+              message = Validation.REF_NAME_PATH_MESSAGE)
+          @jakarta.validation.constraints.Pattern(
+              regexp = Validation.REF_NAME_PATH_REGEX,
+              message = Validation.REF_NAME_PATH_MESSAGE)
           @PathParam("ref")
           @jakarta.ws.rs.PathParam("ref")
           String ref,
@@ -634,7 +692,11 @@ public interface HttpTreeApi extends TreeApi {
       @Parameter(description = WITH_DOC_PARAMETER_DESCRIPTION)
           @QueryParam("with-doc")
           @jakarta.ws.rs.QueryParam("with-doc")
-          boolean withDocumentation)
+          boolean withDocumentation,
+      @Parameter(description = FOR_WRITE_PARAMETER_DESCRIPTION)
+          @QueryParam("for-write")
+          @jakarta.ws.rs.QueryParam("for-write")
+          boolean forWrite)
       throws NessieNotFoundException;
 
   @Override
@@ -707,7 +769,11 @@ public interface HttpTreeApi extends TreeApi {
       @Parameter(description = WITH_DOC_PARAMETER_DESCRIPTION)
           @QueryParam("with-doc")
           @jakarta.ws.rs.QueryParam("with-doc")
-          boolean withDocumentation)
+          boolean withDocumentation,
+      @Parameter(description = FOR_WRITE_PARAMETER_DESCRIPTION)
+          @QueryParam("for-write")
+          @jakarta.ws.rs.QueryParam("for-write")
+          boolean forWrite)
       throws NessieNotFoundException;
 
   @Override
@@ -715,8 +781,8 @@ public interface HttpTreeApi extends TreeApi {
   @jakarta.ws.rs.POST
   @Produces(MediaType.APPLICATION_JSON)
   @jakarta.ws.rs.Produces(jakarta.ws.rs.core.MediaType.APPLICATION_JSON)
-  @Path("{branch}/history/transplant")
-  @jakarta.ws.rs.Path("{branch}/history/transplant")
+  @Path("{branch:" + REF_NAME_PATH_ELEMENT_REGEX + "}/history/transplant")
+  @jakarta.ws.rs.Path("{branch:" + REF_NAME_PATH_ELEMENT_REGEX + "}/history/transplant")
   @Operation(
       summary =
           "Transplant commits specified by the 'Transplant' payload object onto the given 'branch'",
@@ -734,10 +800,7 @@ public interface HttpTreeApi extends TreeApi {
         content =
             @Content(
                 mediaType = MediaType.APPLICATION_JSON,
-                examples = {
-                  @ExampleObject(ref = "mergeResponseSuccess"),
-                  @ExampleObject(ref = "mergeResponseFail")
-                },
+                examples = @ExampleObject(ref = "mergeResponseSuccess"),
                 schema = @Schema(implementation = MergeResponse.class)),
         description =
             "Transplant operation completed. "
@@ -750,13 +813,20 @@ public interface HttpTreeApi extends TreeApi {
         responseCode = "403",
         description = "Not allowed to view the given reference or transplant commits"),
     @APIResponse(responseCode = "404", description = "Ref doesn't exists"),
-    @APIResponse(responseCode = "409", description = "update conflict")
+    @APIResponse(
+        responseCode = "409",
+        description = "Transplant conflict",
+        content =
+            @Content(
+                mediaType = MediaType.APPLICATION_JSON,
+                examples = @ExampleObject(ref = "mergeResponseFail"),
+                schema = @Schema(implementation = MergeResponse.class)))
   })
   @JsonView(Views.V2.class)
   MergeResponse transplantCommitsIntoBranch(
       @Parameter(
               schema = @Schema(pattern = REF_NAME_PATH_ELEMENT_REGEX),
-              description = CHECKED_BRANCH_DESCRIPTION,
+              description = MERGE_TRANSPLANT_BRANCH_DESCRIPTION,
               examples = @ExampleObject(ref = "refWithHash"))
           @PathParam("branch")
           @jakarta.ws.rs.PathParam("branch")
@@ -776,8 +846,8 @@ public interface HttpTreeApi extends TreeApi {
   @jakarta.ws.rs.POST
   @Produces(MediaType.APPLICATION_JSON)
   @jakarta.ws.rs.Produces(jakarta.ws.rs.core.MediaType.APPLICATION_JSON)
-  @Path("{branch}/history/merge")
-  @jakarta.ws.rs.Path("{branch}/history/merge")
+  @Path("{branch:" + REF_NAME_PATH_ELEMENT_REGEX + "}/history/merge")
+  @jakarta.ws.rs.Path("{branch:" + REF_NAME_PATH_ELEMENT_REGEX + "}/history/merge")
   @Operation(
       summary = "Merge commits from another reference onto 'branch'.",
       description =
@@ -798,10 +868,7 @@ public interface HttpTreeApi extends TreeApi {
         content =
             @Content(
                 mediaType = MediaType.APPLICATION_JSON,
-                examples = {
-                  @ExampleObject(ref = "mergeResponseSuccess"),
-                  @ExampleObject(ref = "mergeResponseFail")
-                },
+                examples = @ExampleObject(ref = "mergeResponseSuccess"),
                 schema = @Schema(implementation = MergeResponse.class)),
         description =
             "Merge operation completed. "
@@ -813,30 +880,21 @@ public interface HttpTreeApi extends TreeApi {
         responseCode = "403",
         description = "Not allowed to view the given reference or merge commits"),
     @APIResponse(responseCode = "404", description = "Ref doesn't exists"),
-    @APIResponse(responseCode = "409", description = "update conflict")
+    @APIResponse(
+        responseCode = "409",
+        description = "Merge conflict",
+        content =
+            @Content(
+                mediaType = MediaType.APPLICATION_JSON,
+                examples = @ExampleObject(ref = "mergeResponseFail"),
+                schema = @Schema(implementation = MergeResponse.class)))
   })
   @JsonView(Views.V2.class)
   MergeResponse mergeRefIntoBranch(
       @Parameter(
               schema = @Schema(pattern = REF_NAME_PATH_ELEMENT_REGEX),
-              description = CHECKED_BRANCH_DESCRIPTION,
-              examples = {
-                @ExampleObject(ref = "refWithHash"),
-                @ExampleObject(
-                    ref = "refWithTimestampMillisSinceEpoch",
-                    description =
-                        "The commit 'valid for' the timestamp 1685185847230 in ms since epoch on main"),
-                @ExampleObject(
-                    ref = "refWithTimestampInstant",
-                    description = "The commit 'valid for' the given ISO-8601 instant on main"),
-                @ExampleObject(
-                    ref = "refWithNthPredecessor",
-                    description = "The 10th commit from HEAD of main"),
-                @ExampleObject(
-                    ref = "refWithMergeParent",
-                    description =
-                        "References the merge-parent of commit 2e1cfa82b035c26cbbbdae632cea070514eb8b773f616aaeaf668e2f0be8f10d on main"),
-              })
+              description = MERGE_TRANSPLANT_BRANCH_DESCRIPTION,
+              examples = @ExampleObject(ref = "refWithHash"))
           @PathParam("branch")
           @jakarta.ws.rs.PathParam("branch")
           String branch,
@@ -855,8 +913,8 @@ public interface HttpTreeApi extends TreeApi {
   @Override
   @POST
   @jakarta.ws.rs.POST
-  @Path("{branch}/history/commit")
-  @jakarta.ws.rs.Path("{branch}/history/commit")
+  @Path("{branch:" + REF_NAME_PATH_ELEMENT_REGEX + "}/history/commit")
+  @jakarta.ws.rs.Path("{branch:" + REF_NAME_PATH_ELEMENT_REGEX + "}/history/commit")
   @Produces(MediaType.APPLICATION_JSON)
   @jakarta.ws.rs.Produces(jakarta.ws.rs.core.MediaType.APPLICATION_JSON)
   @Consumes(MediaType.APPLICATION_JSON)
@@ -885,33 +943,15 @@ public interface HttpTreeApi extends TreeApi {
     @APIResponse(
         responseCode = "403",
         description = "Not allowed to view the given reference or perform commits"),
-    @APIResponse(responseCode = "404", description = "Provided ref doesn't exists"),
+    @APIResponse(responseCode = "404", description = "Provided ref doesn't exist"),
     @APIResponse(responseCode = "409", description = "Update conflict")
   })
   @JsonView(Views.V2.class)
   CommitResponse commitMultipleOperations(
       @Parameter(
               schema = @Schema(pattern = REF_NAME_PATH_ELEMENT_REGEX),
-              description = BRANCH_DESCRIPTION,
-              examples = {
-                @ExampleObject(ref = "ref"),
-                @ExampleObject(ref = "refWithHash"),
-                @ExampleObject(
-                    ref = "refWithTimestampMillisSinceEpoch",
-                    description =
-                        "The commit 'valid for' the timestamp 1685185847230 in ms since epoch on main"),
-                @ExampleObject(
-                    ref = "refWithTimestampInstant",
-                    description = "The commit 'valid for' the given ISO-8601 instant on main"),
-                @ExampleObject(
-                    ref = "refWithNthPredecessor",
-                    description = "The 10th commit from HEAD of main"),
-                @ExampleObject(
-                    ref = "refWithMergeParent",
-                    description =
-                        "References the merge-parent of commit 2e1cfa82b035c26cbbbdae632cea070514eb8b773f616aaeaf668e2f0be8f10d on main"),
-                @ExampleObject(ref = "refDefault"),
-              })
+              description = COMMIT_BRANCH_DESCRIPTION,
+              examples = @ExampleObject(ref = "refWithHash"))
           @PathParam("branch")
           @jakarta.ws.rs.PathParam("branch")
           String branch,

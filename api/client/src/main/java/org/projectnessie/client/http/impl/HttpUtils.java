@@ -16,15 +16,24 @@
 package org.projectnessie.client.http.impl;
 
 import com.google.errorprone.annotations.FormatMethod;
+import java.io.UnsupportedEncodingException;
+import java.net.URI;
 import java.net.URLConnection;
-import java.util.Objects;
+import java.net.URLDecoder;
+import java.util.HashMap;
+import java.util.Map;
 import org.projectnessie.client.http.impl.HttpHeaders.HttpHeader;
 
+/**
+ * Utility methods for HTTP clients.
+ *
+ * <p>This class should only be used by Nessie HTTP client implementations.
+ */
 public final class HttpUtils {
 
   public static final String GZIP = "gzip";
   public static final String DEFLATE = "deflate";
-  public static final String ACCEPT_ENCODING = GZIP + ";q=1.0, " + DEFLATE + ";q=0.9";
+  public static final String GZIP_DEFLATE = GZIP + ";q=1.0, " + DEFLATE + ";q=0.9";
   public static final String HEADER_ACCEPT = "Accept";
   public static final String HEADER_ACCEPT_ENCODING = "Accept-Encoding";
   public static final String HEADER_CONTENT_ENCODING = "Content-Encoding";
@@ -53,7 +62,6 @@ public final class HttpUtils {
    * @return trimmed str
    */
   public static String checkNonNullTrim(String str) {
-    Objects.requireNonNull(str);
     return str.trim();
   }
 
@@ -63,5 +71,38 @@ public final class HttpUtils {
         con.addRequestProperty(header.getName(), value);
       }
     }
+  }
+
+  /**
+   * Parse query parameters from URI. This method cannot handle multiple values for the same
+   * parameter.
+   *
+   * @param query They query string to parse
+   * @return map of query parameters
+   */
+  public static Map<String, String> parseQueryString(String query) {
+    if (query == null) {
+      throw new IllegalArgumentException("Missing query string");
+    }
+    Map<String, String> params = new HashMap<>();
+    String[] pairs = query.split("&");
+    for (String pair : pairs) {
+      int idx = pair.indexOf("=");
+      String name;
+      String value;
+      try {
+        name = URLDecoder.decode(pair.substring(0, idx), "UTF-8");
+        value = URLDecoder.decode(pair.substring(idx + 1), "UTF-8");
+      } catch (UnsupportedEncodingException e) {
+        // cannot happen with UTF-8
+        throw new IllegalStateException(e);
+      }
+      params.put(name, value);
+    }
+    return params;
+  }
+
+  public static boolean isHttpUri(URI uri) {
+    return "http".equalsIgnoreCase(uri.getScheme()) || "https".equalsIgnoreCase(uri.getScheme());
   }
 }

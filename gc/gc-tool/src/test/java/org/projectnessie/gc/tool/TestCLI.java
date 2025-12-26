@@ -18,14 +18,16 @@ package org.projectnessie.gc.tool;
 import static java.util.Arrays.asList;
 import static java.util.Collections.singletonList;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
+import static org.projectnessie.gc.contents.ContentReference.icebergContent;
 import static org.projectnessie.jaxrs.ext.NessieJaxRsExtension.jaxRsExtension;
+import static org.projectnessie.model.Content.Type.ICEBERG_TABLE;
 
 import java.io.BufferedReader;
 import java.io.StringReader;
 import java.net.URI;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.Connection;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Stream;
@@ -33,6 +35,7 @@ import javax.sql.DataSource;
 import org.assertj.core.api.SoftAssertions;
 import org.assertj.core.api.junit.jupiter.InjectSoftAssertions;
 import org.assertj.core.api.junit.jupiter.SoftAssertionsExtension;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
@@ -43,17 +46,20 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.projectnessie.client.ext.NessieClientUri;
-import org.projectnessie.gc.contents.ContentReference;
 import org.projectnessie.gc.contents.jdbc.AgroalJdbcDataSourceProvider;
+import org.projectnessie.gc.contents.jdbc.JdbcHelper;
 import org.projectnessie.gc.contents.jdbc.JdbcPersistenceSpi;
 import org.projectnessie.gc.files.FileReference;
+import org.projectnessie.gc.tool.cli.options.SchemaCreateStrategy;
 import org.projectnessie.gc.tool.cli.util.RunCLI;
 import org.projectnessie.jaxrs.ext.NessieJaxRsExtension;
 import org.projectnessie.model.ContentKey;
+import org.projectnessie.storage.uri.StorageUri;
 import org.projectnessie.versioned.storage.common.persist.Persist;
-import org.projectnessie.versioned.storage.inmemory.InmemoryBackendTestFactory;
+import org.projectnessie.versioned.storage.inmemorytests.InmemoryBackendTestFactory;
 import org.projectnessie.versioned.storage.testextension.NessieBackend;
 import org.projectnessie.versioned.storage.testextension.NessiePersist;
 import org.projectnessie.versioned.storage.testextension.PersistExtension;
@@ -63,12 +69,12 @@ import org.projectnessie.versioned.storage.testextension.PersistExtension;
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 public class TestCLI {
 
-  public static final String JDBC_URL = "jdbc:h2:mem:nessie_gc;DB_CLOSE_DELAY=-1";
-  @NessiePersist static Persist perssit;
+  public static final String JDBC_URL = "jdbc:h2:mem:nessie_gc;MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
+  @NessiePersist static Persist persist;
 
   @InjectSoftAssertions private SoftAssertions soft;
 
-  @RegisterExtension static NessieJaxRsExtension server = jaxRsExtension(() -> perssit);
+  @RegisterExtension static NessieJaxRsExtension server = jaxRsExtension(() -> persist);
 
   private static URI nessieUri;
 
@@ -77,31 +83,51 @@ public class TestCLI {
     nessieUri = uri;
   }
 
+  private static DataSource dataSource;
+
+  @BeforeAll
+  static void initDataSource() throws Exception {
+    dataSource =
+        AgroalJdbcDataSourceProvider.builder()
+            .jdbcUrl(JDBC_URL)
+            .poolMinSize(1)
+            .poolMaxSize(1)
+            .poolInitialSize(1)
+            .build()
+            .dataSource();
+  }
+
+  @AfterAll
+  static void closeDataSource() throws Exception {
+    if (dataSource instanceof AutoCloseable) {
+      ((AutoCloseable) dataSource).close();
+    }
+  }
+
+  private void dropTables() throws Exception {
+    try (Connection conn = dataSource.getConnection()) {
+      JdbcHelper.dropTables(conn);
+    }
+  }
+
   static Stream<Arguments> optionErrors() {
     return Stream.of(
         // missing contents-storage option
         arguments(
             singletonList("gc"),
-            "Error: Missing required argument (specify one of these): ([--inmemory] | [--jdbc-url="),
+            "Error: Missing required argument (specify one of these): ([--inmemory] | [[--jdbc]"),
         arguments(
             singletonList("mark-live"),
-            "Error: Missing required argument (specify one of these): ([--inmemory] | [--jdbc-url="),
+            "Error: Missing required argument (specify one of these): ([--inmemory] | [[--jdbc]"),
         arguments(
             asList("sweep", "--live-set-id=00000000-0000-0000-0000-000000000000"),
-            "Error: Missing required argument (specify one of these): ([--inmemory] | [--jdbc-url="),
+            "Error: Missing required argument (specify one of these): ([--inmemory] | [[--jdbc]"),
         arguments(
             asList("deferred-deletes", "--live-set-id=00000000-0000-0000-0000-000000000000"),
-            "Error: Missing required argument (specify one of these): ([--inmemory] | [--jdbc-url="),
+            "Error: Missing required argument (specify one of these): ([--inmemory] | [[--jdbc]"),
         arguments(
             asList("list-deferred", "--live-set-id=00000000-0000-0000-0000-000000000000"),
-            "Error: Missing required argument (specify one of these): ([--inmemory] | [--jdbc-url="),
-        // incomplete jdbc auth
-        arguments(
-            asList("mark-live", "--jdbc-url", "jdbc:foo//bar", "--jdbc-user", "user"),
-            "Error: Missing required argument(s): --jdbc-password"),
-        arguments(
-            asList("mark-live", "--jdbc-url", "jdbc:foo//bar", "--jdbc-password", "pass"),
-            "Error: Missing required argument(s): --jdbc-user="),
+            "Error: Missing required argument (specify one of these): ([--inmemory] | [[--jdbc]"),
         // No live-set-id
         arguments(
             asList("sweep", "--jdbc-url", "jdbc:foo//bar"),
@@ -135,8 +161,19 @@ public class TestCLI {
 
   @Test
   @Order(0)
-  public void createTables() throws Exception {
+  public void createSchema() throws Exception {
+    dropTables();
     RunCLI run = RunCLI.run("create-sql-schema", "--jdbc-url", JDBC_URL);
+    soft.assertThat(run.getExitCode()).as(run::getErr).isEqualTo(0);
+  }
+
+  @ParameterizedTest
+  @EnumSource(SchemaCreateStrategy.class)
+  @Order(1)
+  public void createSchemaWithStrategy(SchemaCreateStrategy strategy) throws Exception {
+    dropTables();
+    RunCLI run =
+        RunCLI.run("create-sql-schema", "--jdbc-schema", strategy.name(), "--jdbc-url", JDBC_URL);
     soft.assertThat(run.getExitCode()).as(run::getErr).isEqualTo(0);
   }
 
@@ -159,6 +196,23 @@ public class TestCLI {
   @Order(1)
   public void smokeTestJdbc() throws Exception {
     RunCLI run = RunCLI.run("gc", "--jdbc-url", JDBC_URL, "--uri", nessieUri.toString());
+    soft.assertThat(run.getExitCode()).as(run::getErr).isEqualTo(0);
+  }
+
+  @ParameterizedTest
+  @EnumSource(SchemaCreateStrategy.class)
+  @Order(1)
+  public void smokeTestJdbcWithSchemaUpdate(SchemaCreateStrategy strategy) throws Exception {
+    dropTables();
+    RunCLI run =
+        RunCLI.run(
+            "gc",
+            "--jdbc-schema",
+            strategy.name(),
+            "--jdbc-url",
+            JDBC_URL,
+            "--uri",
+            nessieUri.toString());
     soft.assertThat(run.getExitCode()).as(run::getErr).isEqualTo(0);
   }
 
@@ -287,26 +341,27 @@ public class TestCLI {
     soft.assertThat(liveSetIdFile).isRegularFile();
     soft.assertAll();
 
-    UUID id =
-        UUID.fromString(new String(Files.readAllBytes(liveSetIdFile), StandardCharsets.UTF_8));
+    UUID id = UUID.fromString(Files.readString(liveSetIdFile));
 
-    URI dataLakeDir1 = dir.resolve("data-lake/dir1").toUri();
-    URI dataLakeDir2 = dir.resolve("data-lake/dir2").toUri();
+    StorageUri dataLakeDir1 = StorageUri.of(dir.resolve("data-lake/dir1").toUri());
+    StorageUri dataLakeDir2 = StorageUri.of(dir.resolve("data-lake/dir2").toUri());
     DataSource dataSource =
         AgroalJdbcDataSourceProvider.builder().jdbcUrl(JDBC_URL).build().dataSource();
     try {
       JdbcPersistenceSpi persistenceSpi =
-          JdbcPersistenceSpi.builder().dataSource(dataSource).build();
+          JdbcPersistenceSpi.builder().dataSource(dataSource).fetchSize(10).build();
       persistenceSpi.addIdentifiedLiveContent(
           id,
           Stream.of(
-              ContentReference.icebergTable(
+              icebergContent(
+                  ICEBERG_TABLE,
                   "cid-1",
                   "12345678",
                   ContentKey.of("hello", "world"),
                   "meta://data/location1",
                   42L),
-              ContentReference.icebergTable(
+              icebergContent(
+                  ICEBERG_TABLE,
                   "cid-1",
                   "44444444",
                   ContentKey.of("hello", "world"),
@@ -317,9 +372,9 @@ public class TestCLI {
       persistenceSpi.addFileDeletions(
           id,
           Stream.of(
-              FileReference.of(URI.create("file1"), dataLakeDir1, 42L),
-              FileReference.of(URI.create("file2"), dataLakeDir1, 42L),
-              FileReference.of(URI.create("file3"), dataLakeDir2, 88L)));
+              FileReference.of(StorageUri.of("file1"), dataLakeDir1, 42L),
+              FileReference.of(StorageUri.of("file2"), dataLakeDir1, 42L),
+              FileReference.of(StorageUri.of("file3"), dataLakeDir2, 88L)));
     } finally {
       ((AutoCloseable) dataSource).close();
     }
@@ -362,22 +417,21 @@ public class TestCLI {
     soft.assertThat(liveSetIdFile).isRegularFile();
     soft.assertAll();
 
-    UUID id =
-        UUID.fromString(new String(Files.readAllBytes(liveSetIdFile), StandardCharsets.UTF_8));
+    UUID id = UUID.fromString(Files.readString(liveSetIdFile));
 
-    URI dataLakeDir1 = dir.resolve("data-lake/dir1").toUri();
-    URI dataLakeDir2 = dir.resolve("data-lake/dir2").toUri();
+    StorageUri dataLakeDir1 = StorageUri.of(dir.resolve("data-lake/dir1").toUri());
+    StorageUri dataLakeDir2 = StorageUri.of(dir.resolve("data-lake/dir2").toUri());
     DataSource dataSource =
         AgroalJdbcDataSourceProvider.builder().jdbcUrl(JDBC_URL).build().dataSource();
     try {
       JdbcPersistenceSpi persistenceSpi =
-          JdbcPersistenceSpi.builder().dataSource(dataSource).build();
+          JdbcPersistenceSpi.builder().dataSource(dataSource).fetchSize(10).build();
       persistenceSpi.addFileDeletions(
           id,
           Stream.of(
-              FileReference.of(URI.create("file1"), dataLakeDir1, 42L),
-              FileReference.of(URI.create("file2"), dataLakeDir1, 42L),
-              FileReference.of(URI.create("file3"), dataLakeDir2, 88L)));
+              FileReference.of(StorageUri.of("file1"), dataLakeDir1, 42L),
+              FileReference.of(StorageUri.of("file2"), dataLakeDir1, 42L),
+              FileReference.of(StorageUri.of("file3"), dataLakeDir2, 88L)));
     } finally {
       ((AutoCloseable) dataSource).close();
     }

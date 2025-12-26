@@ -15,17 +15,24 @@
  */
 package org.projectnessie.events.quarkus;
 
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.inject.Instance;
+import jakarta.inject.Inject;
 import java.util.List;
-import javax.enterprise.context.ApplicationScoped;
 import org.projectnessie.events.service.EventSubscribers;
 import org.projectnessie.events.spi.EventSubscriber;
 
 @ApplicationScoped
 public class QuarkusEventSubscribers extends EventSubscribers {
 
-  private static final List<EventSubscriber> SUBSCRIBERS = loadSubscribers();
-
+  // Quarkus requires a no-arg constructor for CDI
+  @SuppressWarnings("unused")
   public QuarkusEventSubscribers() {
-    super(SUBSCRIBERS);
+    super(List.of());
+  }
+
+  @Inject
+  public QuarkusEventSubscribers(Instance<EventSubscriber> subscribers) {
+    super(subscribers.stream().toList());
   }
 }

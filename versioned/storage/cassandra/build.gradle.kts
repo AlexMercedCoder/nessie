@@ -16,24 +16,19 @@
 
 import org.apache.tools.ant.taskdefs.condition.Os
 
-plugins {
-  id("nessie-conventions-server")
-  id("nessie-jacoco")
-}
+plugins { id("nessie-conventions-java11") }
 
-extra["maven.name"] = "Nessie - Storage - Cassandra & ScyllaDB"
+publishingHelper { mavenName = "Nessie - Storage - Apache Cassandra" }
 
-description = "Storage implementation for Cassandra & ScyllaDB."
+description = "Storage implementation for Apache Cassandra."
 
 dependencies {
   implementation(project(":nessie-versioned-storage-common"))
   implementation(project(":nessie-versioned-storage-common-proto"))
+  implementation(project(":nessie-versioned-storage-common-serialize"))
 
-  // javax/jakarta
   compileOnly(libs.jakarta.validation.api)
-  compileOnly(libs.javax.validation.api)
   compileOnly(libs.jakarta.annotation.api)
-  compileOnly(libs.findbugs.jsr305)
 
   compileOnly(libs.errorprone.annotations)
   implementation(libs.agrona)
@@ -41,24 +36,20 @@ dependencies {
   implementation(libs.slf4j.api)
 
   implementation(platform(libs.cassandra.driver.bom))
-  implementation("com.datastax.oss:java-driver-core")
-
-  compileOnly(libs.testcontainers.cassandra) {
-    exclude("com.datastax.cassandra", "cassandra-driver-core")
+  implementation("org.apache.cassandra:java-driver-core") {
+    // spotbugs-annotations has only a GPL license!
+    exclude("com.github.spotbugs", "spotbugs-annotations")
   }
-  compileOnly(libs.docker.java.api)
 
-  compileOnly(libs.immutables.builder)
-  compileOnly(libs.immutables.value.annotations)
-  annotationProcessor(libs.immutables.value.processor)
+  compileOnly(project(":nessie-immutables-std"))
+  annotationProcessor(project(":nessie-immutables-std", configuration = "processor"))
 
-  compileOnly(project(":nessie-versioned-storage-testextension"))
-
+  intTestImplementation(project(":nessie-versioned-storage-cassandra-tests"))
   intTestImplementation(project(":nessie-versioned-storage-common-tests"))
   intTestImplementation(project(":nessie-versioned-storage-testextension"))
   intTestImplementation(project(":nessie-versioned-tests"))
-  intTestRuntimeOnly(libs.testcontainers.cassandra)
-  intTestRuntimeOnly(libs.docker.java.api)
+  intTestRuntimeOnly(platform(libs.testcontainers.bom))
+  intTestRuntimeOnly("org.testcontainers:testcontainers-cassandra")
   intTestImplementation(platform(libs.junit.bom))
   intTestImplementation(libs.bundles.junit.testing)
   intTestRuntimeOnly(libs.logback.classic)

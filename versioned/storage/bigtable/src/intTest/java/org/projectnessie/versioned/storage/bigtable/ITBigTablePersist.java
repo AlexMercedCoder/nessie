@@ -28,6 +28,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.projectnessie.versioned.storage.bigtabletests.AbstractBigTableBackendTestFactory;
+import org.projectnessie.versioned.storage.bigtabletests.BigTableBackendContainerTestFactory;
 import org.projectnessie.versioned.storage.common.config.StoreConfig;
 import org.projectnessie.versioned.storage.common.logic.RepositoryLogic;
 import org.projectnessie.versioned.storage.common.persist.Persist;
@@ -47,9 +49,7 @@ public class ITBigTablePersist extends AbstractPersistTests {
     @BeforeEach
     void noAdminClient() {
       BigTableBackend b = (BigTableBackend) backend;
-      backend =
-          new BigTableBackend(
-              BigTableBackendConfig.builder().dataClient(b.client()).build(), false);
+      backend = new BigTableBackend(BigTableBackendConfig.builder().dataClient(b.client()).build());
     }
   }
 
@@ -65,13 +65,19 @@ public class ITBigTablePersist extends AbstractPersistTests {
     void tablePrefix() {
       AbstractBigTableBackendTestFactory btFactory = (AbstractBigTableBackendTestFactory) factory;
       try (BigTableBackend backendA =
-              btFactory.createNewBackend(
-                  btFactory.bigtableConfigBuilder().tablePrefix(Optional.of("instanceA")).build(),
-                  true);
+              (BigTableBackend)
+                  btFactory.createNewBackend(
+                      btFactory
+                          .bigtableConfigBuilder()
+                          .tablePrefix(Optional.of("instanceA"))
+                          .build());
           BigTableBackend backendB =
-              btFactory.createNewBackend(
-                  btFactory.bigtableConfigBuilder().tablePrefix(Optional.of("instanceB")).build(),
-                  true)) {
+              (BigTableBackend)
+                  btFactory.createNewBackend(
+                      btFactory
+                          .bigtableConfigBuilder()
+                          .tablePrefix(Optional.of("instanceB"))
+                          .build())) {
 
         BigtableTableAdminClient adminClientA = requireNonNull(backendA.adminClient());
         BigtableTableAdminClient adminClientB = requireNonNull(backendB.adminClient());

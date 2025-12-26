@@ -15,17 +15,19 @@
  */
 package org.projectnessie.versioned;
 
+import jakarta.annotation.Nonnull;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
-import java.util.stream.Stream;
-import javax.annotation.Nonnull;
 import org.projectnessie.model.CommitMeta;
 import org.projectnessie.model.ContentKey;
 import org.projectnessie.model.IdentifiedContentKey;
+import org.projectnessie.model.Operation;
+import org.projectnessie.model.RepositoryConfig;
 import org.projectnessie.versioned.paging.PaginationIterator;
 
 /**
@@ -49,24 +51,24 @@ public class EventsVersionStore implements VersionStore {
   }
 
   @Override
-  public CommitResult<Commit> commit(
-      @Nonnull @jakarta.annotation.Nonnull BranchName branch,
-      @Nonnull @jakarta.annotation.Nonnull Optional<Hash> referenceHash,
-      @Nonnull @jakarta.annotation.Nonnull CommitMeta metadata,
-      @Nonnull @jakarta.annotation.Nonnull List<Operation> operations,
-      @Nonnull @jakarta.annotation.Nonnull CommitValidator validator,
-      @Nonnull @jakarta.annotation.Nonnull BiConsumer<ContentKey, String> addedContents)
+  public CommitResult commit(
+      @Nonnull BranchName branch,
+      @Nonnull Optional<Hash> referenceHash,
+      @Nonnull CommitMeta metadata,
+      @Nonnull List<Operation> operations,
+      @Nonnull CommitValidator validator,
+      @Nonnull BiConsumer<ContentKey, String> addedContents)
       throws ReferenceNotFoundException, ReferenceConflictException {
-    CommitResult<Commit> result =
+    CommitResult result =
         delegate.commit(branch, referenceHash, metadata, operations, validator, addedContents);
     resultSink.accept(result);
     return result;
   }
 
   @Override
-  public MergeResult<Commit> transplant(TransplantOp transplantOp)
+  public TransplantResult transplant(TransplantOp transplantOp)
       throws ReferenceNotFoundException, ReferenceConflictException {
-    MergeResult<Commit> result = delegate.transplant(transplantOp);
+    TransplantResult result = delegate.transplant(transplantOp);
     if (result.wasApplied()) {
       resultSink.accept(result);
     }
@@ -74,9 +76,9 @@ public class EventsVersionStore implements VersionStore {
   }
 
   @Override
-  public MergeResult<Commit> merge(MergeOp mergeOp)
+  public MergeResult merge(MergeOp mergeOp)
       throws ReferenceNotFoundException, ReferenceConflictException {
-    MergeResult<Commit> result = delegate.merge(mergeOp);
+    MergeResult result = delegate.merge(mergeOp);
     if (result.wasApplied()) {
       resultSink.accept(result);
     }
@@ -84,7 +86,7 @@ public class EventsVersionStore implements VersionStore {
   }
 
   @Override
-  public ReferenceAssignedResult assign(NamedRef ref, Optional<Hash> expectedHash, Hash targetHash)
+  public ReferenceAssignedResult assign(NamedRef ref, Hash expectedHash, Hash targetHash)
       throws ReferenceNotFoundException, ReferenceConflictException {
     ReferenceAssignedResult result = delegate.assign(ref, expectedHash, targetHash);
     resultSink.accept(result);
@@ -101,7 +103,7 @@ public class EventsVersionStore implements VersionStore {
   }
 
   @Override
-  public ReferenceDeletedResult delete(NamedRef ref, Optional<Hash> hash)
+  public ReferenceDeletedResult delete(NamedRef ref, Hash hash)
       throws ReferenceNotFoundException, ReferenceConflictException {
     ReferenceDeletedResult result = delegate.delete(ref, hash);
     resultSink.accept(result);
@@ -109,7 +111,6 @@ public class EventsVersionStore implements VersionStore {
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
   public RepositoryInformation getRepositoryInformation() {
     return delegate.getRepositoryInformation();
@@ -125,7 +126,6 @@ public class EventsVersionStore implements VersionStore {
   }
 
   @Nonnull
-  @jakarta.annotation.Nonnull
   @Override
   public Hash noAncestorHash() {
     return delegate.noAncestorHash();
@@ -135,6 +135,12 @@ public class EventsVersionStore implements VersionStore {
   public ReferenceInfo<CommitMeta> getNamedRef(String ref, GetNamedRefsParams params)
       throws ReferenceNotFoundException {
     return delegate.getNamedRef(ref, params);
+  }
+
+  @Override
+  public ReferenceHistory getReferenceHistory(String refName, Integer headCommitsToScan)
+      throws ReferenceNotFoundException {
+    return delegate.getReferenceHistory(refName, headCommitsToScan);
   }
 
   @Override
@@ -163,14 +169,16 @@ public class EventsVersionStore implements VersionStore {
   }
 
   @Override
-  public ContentResult getValue(Ref ref, ContentKey key) throws ReferenceNotFoundException {
-    return delegate.getValue(ref, key);
+  public ContentResult getValue(Ref ref, ContentKey key, boolean returnNotFound)
+      throws ReferenceNotFoundException {
+    return delegate.getValue(ref, key, returnNotFound);
   }
 
   @Override
-  public Map<ContentKey, ContentResult> getValues(Ref ref, Collection<ContentKey> keys)
+  public Map<ContentKey, ContentResult> getValues(
+      Ref ref, Collection<ContentKey> keys, boolean returnNotFound)
       throws ReferenceNotFoundException {
-    return delegate.getValues(ref, keys);
+    return delegate.getValues(ref, keys, returnNotFound);
   }
 
   @Override
@@ -181,9 +189,14 @@ public class EventsVersionStore implements VersionStore {
   }
 
   @Override
-  @Deprecated
-  @SuppressWarnings("MustBeClosedChecker")
-  public Stream<RefLogDetails> getRefLog(Hash refLogId) throws RefLogNotFoundException {
-    return delegate.getRefLog(refLogId);
+  public List<RepositoryConfig> getRepositoryConfig(
+      Set<RepositoryConfig.Type> repositoryConfigTypes) {
+    return delegate.getRepositoryConfig(repositoryConfigTypes);
+  }
+
+  @Override
+  public RepositoryConfig updateRepositoryConfig(RepositoryConfig repositoryConfig)
+      throws ReferenceConflictException {
+    return delegate.updateRepositoryConfig(repositoryConfig);
   }
 }

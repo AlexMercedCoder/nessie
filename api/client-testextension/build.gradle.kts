@@ -14,12 +14,9 @@
  * limitations under the License.
  */
 
-plugins {
-  id("nessie-conventions-server")
-  id("nessie-jacoco")
-}
+plugins { id("nessie-conventions-java11") }
 
-extra["maven.name"] = "Nessie - JUnit Jupyter Test Extension for Client-Side Tests"
+publishingHelper { mavenName = "Nessie - JUnit Jupiter Test Extension for Client-Side Tests" }
 
 dependencies {
   api(platform(libs.junit.bom))

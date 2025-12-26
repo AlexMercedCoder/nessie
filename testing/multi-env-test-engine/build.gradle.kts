@@ -14,12 +14,9 @@
  * limitations under the License.
  */
 
-plugins {
-  id("nessie-conventions-server")
-  id("nessie-jacoco")
-}
+plugins { id("nessie-conventions-java11") }
 
-extra["maven.name"] = "Nessie - Multi-Environment Test Engine"
+publishingHelper { mavenName = "Nessie - Multi-Environment Test Engine" }
 
 dependencies {
   api(libs.slf4j.api)

@@ -18,14 +18,20 @@ package org.projectnessie.versioned.storage.cassandra;
 import static com.datastax.oss.driver.api.core.ConsistencyLevel.LOCAL_QUORUM;
 import static com.datastax.oss.driver.api.core.ConsistencyLevel.LOCAL_SERIAL;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.collect.ImmutableMap.toImmutableMap;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static java.lang.String.format;
+import static java.util.Map.entry;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.projectnessie.versioned.storage.cassandra.CassandraConstants.COLS_OBJS_ALL;
 import static org.projectnessie.versioned.storage.cassandra.CassandraConstants.COL_OBJ_ID;
+import static org.projectnessie.versioned.storage.cassandra.CassandraConstants.COL_REFS_CREATED_AT;
 import static org.projectnessie.versioned.storage.cassandra.CassandraConstants.COL_REFS_DELETED;
+import static org.projectnessie.versioned.storage.cassandra.CassandraConstants.COL_REFS_EXTENDED_INFO;
 import static org.projectnessie.versioned.storage.cassandra.CassandraConstants.COL_REFS_NAME;
 import static org.projectnessie.versioned.storage.cassandra.CassandraConstants.COL_REFS_POINTER;
+import static org.projectnessie.versioned.storage.cassandra.CassandraConstants.COL_REFS_PREVIOUS;
 import static org.projectnessie.versioned.storage.cassandra.CassandraConstants.COL_REPO_ID;
 import static org.projectnessie.versioned.storage.cassandra.CassandraConstants.CREATE_TABLE_OBJS;
 import static org.projectnessie.versioned.storage.cassandra.CassandraConstants.CREATE_TABLE_REFS;
@@ -38,14 +44,14 @@ import static org.projectnessie.versioned.storage.cassandra.CassandraConstants.M
 import static org.projectnessie.versioned.storage.cassandra.CassandraConstants.SELECT_BATCH_SIZE;
 import static org.projectnessie.versioned.storage.cassandra.CassandraConstants.TABLE_OBJS;
 import static org.projectnessie.versioned.storage.cassandra.CassandraConstants.TABLE_REFS;
-import static org.projectnessie.versioned.storage.cassandra.CqlColumnType.NAME;
-import static org.projectnessie.versioned.storage.cassandra.CqlColumnType.OBJ_ID;
 
-import com.datastax.oss.driver.api.core.CqlIdentifier;
+import com.datastax.oss.driver.api.core.AllNodesFailedException;
 import com.datastax.oss.driver.api.core.CqlSession;
 import com.datastax.oss.driver.api.core.DriverException;
+import com.datastax.oss.driver.api.core.DriverTimeoutException;
 import com.datastax.oss.driver.api.core.cql.AsyncResultSet;
 import com.datastax.oss.driver.api.core.cql.BoundStatement;
+import com.datastax.oss.driver.api.core.cql.BoundStatementBuilder;
 import com.datastax.oss.driver.api.core.cql.PreparedStatement;
 import com.datastax.oss.driver.api.core.cql.ResultSet;
 import com.datastax.oss.driver.api.core.cql.Row;
@@ -54,14 +60,14 @@ import com.datastax.oss.driver.api.core.metadata.Metadata;
 import com.datastax.oss.driver.api.core.metadata.schema.ColumnMetadata;
 import com.datastax.oss.driver.api.core.metadata.schema.KeyspaceMetadata;
 import com.datastax.oss.driver.api.core.metadata.schema.TableMetadata;
-import com.datastax.oss.driver.api.core.servererrors.CASWriteUnknownException;
-import com.google.common.collect.ImmutableMap;
+import com.datastax.oss.driver.api.core.servererrors.QueryConsistencyException;
+import jakarta.annotation.Nonnull;
 import java.lang.reflect.Array;
-import java.text.MessageFormat;
 import java.util.ArrayList;
-import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletionStage;
@@ -74,17 +80,13 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-import javax.annotation.Nonnull;
 import org.agrona.collections.Hashing;
 import org.agrona.collections.Object2IntHashMap;
+import org.projectnessie.versioned.storage.common.exceptions.UnknownOperationResultException;
 import org.projectnessie.versioned.storage.common.persist.Backend;
 import org.projectnessie.versioned.storage.common.persist.PersistFactory;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-final class CassandraBackend implements Backend {
-
-  private static final Logger LOGGER = LoggerFactory.getLogger(CassandraBackend.class);
+public final class CassandraBackend implements Backend {
 
   private final CassandraBackendConfig config;
   private final boolean closeClient;
@@ -92,7 +94,7 @@ final class CassandraBackend implements Backend {
   private final Map<String, PreparedStatement> statements = new ConcurrentHashMap<>();
   private final CqlSession session;
 
-  CassandraBackend(CassandraBackendConfig config, boolean closeClient) {
+  public CassandraBackend(CassandraBackendConfig config, boolean closeClient) {
     this.config = config;
     this.session = requireNonNull(config.client());
     this.closeClient = closeClient;
@@ -211,10 +213,12 @@ final class CassandraBackend implements Backend {
                 try {
                   for (Row row : rs.currentPage()) {
                     R resultItem = rowToResult.apply(row);
-                    K id = idExtractor.apply(resultItem);
-                    int i = idToIndex.getValue(id);
-                    if (i != -1) {
-                      result.set(i, resultItem);
+                    if (resultItem != null) {
+                      K id = idExtractor.apply(resultItem);
+                      int i = idToIndex.getValue(id);
+                      if (i != -1) {
+                        result.set(i, resultItem);
+                      }
                     }
                   }
 
@@ -296,57 +300,69 @@ final class CassandraBackend implements Backend {
     }
   }
 
-  private BoundStatement buildStatement(String cql, Object[] values) {
+  @Nonnull
+  BoundStatement buildStatement(String cql, boolean idempotent, Object... values) {
     PreparedStatement prepared =
         statements.computeIfAbsent(cql, c -> session.prepare(format(c, config.keyspace())));
     return prepared
-        .bind(values)
+        .boundStatementBuilder(values)
         .setTimeout(config.dmlTimeout())
         .setConsistencyLevel(LOCAL_QUORUM)
-        .setSerialConsistencyLevel(LOCAL_SERIAL);
+        .setSerialConsistencyLevel(LOCAL_SERIAL)
+        .setIdempotence(idempotent)
+        .build();
   }
 
-  boolean executeCas(String cql, Object... values) {
+  @Nonnull
+  BoundStatementBuilder newBoundStatementBuilder(String cql, boolean idempotent) {
+    PreparedStatement prepared =
+        statements.computeIfAbsent(cql, c -> session.prepare(format(c, config.keyspace())));
+    return prepared.boundStatementBuilder().setIdempotence(idempotent);
+  }
+
+  boolean executeCas(BoundStatement stmt) {
     try {
-      ResultSet rs = execute(cql, values);
+      ResultSet rs = session.execute(stmt);
       return rs.wasApplied();
     } catch (DriverException e) {
-      handleDriverException(e);
-      return false;
+      throw unhandledException(e);
     }
   }
 
-  ResultSet execute(String cql, Object... values) {
-    return session.execute(buildStatement(cql, values));
-  }
-
-  CompletionStage<AsyncResultSet> executeAsync(String cql, Object... values) {
-    return session.executeAsync(buildStatement(cql, values));
-  }
-
-  void handleDriverException(DriverException e) {
-    if (e instanceof CASWriteUnknownException) {
-      logCASWriteUnknown((CASWriteUnknownException) e);
-    } else {
-      throw e;
+  ResultSet execute(BoundStatement stmt) {
+    try {
+      return session.execute(stmt);
+    } catch (DriverException e) {
+      throw unhandledException(e);
     }
   }
 
-  @SuppressWarnings("Slf4jDoNotLogMessageOfExceptionExplicitly")
-  private static void logCASWriteUnknown(CASWriteUnknownException e) {
-    if (LOGGER.isDebugEnabled()) {
-      LOGGER.debug(
-          "Assuming CAS failed due to CASWriteUnknownException with message'{}', coordinator: {}, errors: {}, warnings: {}",
-          e.getMessage(),
-          e.getExecutionInfo().getCoordinator(),
-          e.getExecutionInfo().getErrors(),
-          e.getExecutionInfo().getWarnings());
+  CompletionStage<AsyncResultSet> executeAsync(BoundStatement stmt) {
+    return session.executeAsync(stmt);
+  }
+
+  static RuntimeException unhandledException(DriverException e) {
+    if (isUnknownOperationResult(e)) {
+      return new UnknownOperationResultException(e);
+    } else if (e instanceof AllNodesFailedException) {
+      AllNodesFailedException all = (AllNodesFailedException) e;
+      if (all.getAllErrors().values().stream()
+          .flatMap(List::stream)
+          .filter(DriverException.class::isInstance)
+          .map(DriverException.class::cast)
+          .anyMatch(CassandraBackend::isUnknownOperationResult)) {
+        return new UnknownOperationResultException(e);
+      }
     }
+    return e;
+  }
+
+  private static boolean isUnknownOperationResult(DriverException e) {
+    return e instanceof QueryConsistencyException || e instanceof DriverTimeoutException;
   }
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
   public PersistFactory createFactory() {
     return new CassandraPersistFactory(this);
   }
@@ -359,7 +375,7 @@ final class CassandraBackend implements Backend {
   }
 
   @Override
-  public void setupSchema() {
+  public Optional<String> setupSchema() {
     Metadata metadata = session.getMetadata();
     Optional<KeyspaceMetadata> keyspace = metadata.getKeyspace(config.keyspace());
 
@@ -372,58 +388,67 @@ final class CassandraBackend implements Backend {
         keyspace.get(),
         TABLE_REFS,
         CREATE_TABLE_REFS,
-        Stream.of(COL_REPO_ID, COL_REFS_NAME, COL_REFS_POINTER, COL_REFS_DELETED)
-            .collect(Collectors.toSet()),
-        ImmutableMap.of(COL_REPO_ID, NAME.type(), COL_REFS_NAME, NAME.type()));
+        Stream.of(
+                COL_REPO_ID,
+                COL_REFS_NAME,
+                COL_REFS_POINTER,
+                COL_REFS_DELETED,
+                COL_REFS_CREATED_AT,
+                COL_REFS_EXTENDED_INFO,
+                COL_REFS_PREVIOUS)
+            .collect(toImmutableSet()),
+        List.of(COL_REPO_ID, COL_REFS_NAME));
     createTableIfNotExists(
         keyspace.get(),
         TABLE_OBJS,
         CREATE_TABLE_OBJS,
-        Stream.concat(
-                Stream.of(COL_REPO_ID), Arrays.stream(COLS_OBJS_ALL.split(",")).map(String::trim))
-            .collect(Collectors.toSet()),
-        ImmutableMap.of(COL_REPO_ID, NAME.type(), COL_OBJ_ID, OBJ_ID.type()));
+        Stream.concat(Stream.of(COL_REPO_ID), COLS_OBJS_ALL.stream()).collect(toImmutableSet()),
+        List.of(COL_REPO_ID, COL_OBJ_ID));
+    return Optional.of(
+        "keyspace: "
+            + config.keyspace()
+            + " DDL timeout: "
+            + config.ddlTimeout()
+            + " DML timeout: "
+            + config.dmlTimeout());
   }
 
   private void createTableIfNotExists(
       KeyspaceMetadata meta,
       String tableName,
       String createTable,
-      Set<String> expectedColumns,
-      Map<String, String> expectedPrimaryKey) {
+      Set<CqlColumn> expectedColumns,
+      List<CqlColumn> expectedPrimaryKey) {
 
     Optional<TableMetadata> table = meta.getTable(tableName);
 
-    Object[] types =
-        Arrays.stream(CqlColumnType.values()).map(CqlColumnType::type).toArray(Object[]::new);
     createTable = format(createTable, meta.getName());
-    createTable = MessageFormat.format(createTable, types);
 
     if (table.isPresent()) {
-      Set<String> columns =
-          table.get().getColumns().values().stream()
-              .map(ColumnMetadata::getName)
-              .map(CqlIdentifier::asInternal)
-              .collect(Collectors.toSet());
-      Map<String, String> primaryKey =
-          table.get().getPartitionKey().stream()
-              .collect(
-                  Collectors.toMap(c -> c.getName().asInternal(), c -> c.getType().toString()));
 
       checkState(
-          primaryKey.equals(expectedPrimaryKey),
+          checkPrimaryKey(table.get(), expectedPrimaryKey),
           "Expected primary key columns %s do not match existing primary key columns %s for table '%s'. DDL template:\n%s",
-          expectedPrimaryKey,
-          primaryKey,
+          expectedPrimaryKey.stream()
+              .map(col -> entry(col.name(), col.type().dataType()))
+              .collect(toImmutableMap(Entry::getKey, Entry::getValue)),
+          table.get().getPartitionKey().stream()
+              .map(col -> entry(col.getName(), col.getType()))
+              .collect(toImmutableMap(Entry::getKey, Entry::getValue)),
           tableName,
           createTable);
-      checkState(
-          columns.containsAll(expectedColumns),
-          "Expected columns %s do not contain all columns %s for table '%s'. DDL template:\n%s",
-          expectedColumns,
-          columns,
-          tableName,
-          createTable);
+
+      List<String> missingColumns = checkColumns(table.get(), expectedColumns);
+      if (!missingColumns.isEmpty()) {
+        throw new IllegalStateException(
+            format(
+                "The database table %s is missing mandatory columns %s.%nFound columns : %s%nExpected columns : %s%nDDL template:\n%s",
+                tableName,
+                sortedColumnNames(missingColumns),
+                sortedColumnNames(table.get().getColumns().keySet()),
+                sortedColumnNames(expectedColumns),
+                createTable));
+      }
 
       // Existing table looks compatible
       return;
@@ -434,14 +459,34 @@ final class CassandraBackend implements Backend {
     session.execute(stmt);
   }
 
-  @Override
-  public String configInfo() {
-    return "keyspace: "
-        + config.keyspace()
-        + " DDL timeout: "
-        + config.ddlTimeout()
-        + " DML timeout: "
-        + config.dmlTimeout();
+  private static String sortedColumnNames(Collection<?> input) {
+    return input.stream().map(Object::toString).sorted().collect(Collectors.joining(","));
+  }
+
+  private boolean checkPrimaryKey(TableMetadata table, List<CqlColumn> expectedPrimaryKey) {
+    List<ColumnMetadata> partitionKey = table.getPartitionKey();
+    if (partitionKey.size() == expectedPrimaryKey.size()) {
+      for (int i = 0; i < partitionKey.size(); i++) {
+        ColumnMetadata column = partitionKey.get(i);
+        CqlColumn expectedColumn = expectedPrimaryKey.get(i);
+        if (!column.getName().asInternal().equals(expectedColumn.name())
+            || !column.getType().equals(expectedColumn.type().dataType())) {
+          return false;
+        }
+      }
+      return true;
+    }
+    return false;
+  }
+
+  private List<String> checkColumns(TableMetadata table, Set<CqlColumn> expectedColumns) {
+    List<String> missing = new ArrayList<>();
+    for (CqlColumn expectedColumn : expectedColumns) {
+      if (table.getColumn(expectedColumn.name()).isEmpty()) {
+        missing.add(expectedColumn.name());
+      }
+    }
+    return missing;
   }
 
   @Override
@@ -454,16 +499,16 @@ final class CassandraBackend implements Backend {
 
     try (LimitedConcurrentRequests requests =
         new LimitedConcurrentRequests(MAX_CONCURRENT_DELETES)) {
-      for (Row row : execute(ERASE_REFS_SCAN, repoIdList)) {
+      for (Row row : execute(buildStatement(ERASE_REFS_SCAN, true, repoIdList))) {
         String repoId = row.getString(0);
         String ref = row.getString(1);
-        requests.submitted(executeAsync(ERASE_REF, repoId, ref));
+        requests.submitted(executeAsync(buildStatement(ERASE_REF, true, repoId, ref)));
       }
 
-      for (Row row : execute(ERASE_OBJS_SCAN, repoIdList)) {
+      for (Row row : execute(buildStatement(ERASE_OBJS_SCAN, true, repoIdList))) {
         String repoId = row.getString(0);
         String objId = row.getString(1);
-        requests.submitted(executeAsync(ERASE_OBJ, repoId, objId));
+        requests.submitted(executeAsync(buildStatement(ERASE_OBJ, true, repoId, objId)));
       }
     }
     // We must ensure that the system clock advances a little, so that C*'s next write-timestamp

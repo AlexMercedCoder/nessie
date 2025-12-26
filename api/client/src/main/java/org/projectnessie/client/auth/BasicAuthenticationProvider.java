@@ -15,14 +15,14 @@
  */
 package org.projectnessie.client.auth;
 
-import static org.projectnessie.client.NessieConfigConstants.CONF_NESSIE_PASSWORD;
-import static org.projectnessie.client.NessieConfigConstants.CONF_NESSIE_USERNAME;
-
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.function.Function;
+import java.util.function.Supplier;
+import org.projectnessie.client.NessieConfigConstants;
 import org.projectnessie.client.http.HttpAuthentication;
 import org.projectnessie.client.http.HttpClient;
+import org.projectnessie.client.http.RequestContext;
 
 /**
  * HTTP BASIC authentication provider.
@@ -39,6 +39,13 @@ public class BasicAuthenticationProvider implements NessieAuthenticationProvider
     return new BasicAuthentication(username, password);
   }
 
+  public static HttpAuthentication create(String username, Supplier<String> passwordSupplier) {
+    if (username == null || passwordSupplier == null) {
+      throw new NullPointerException("username and password supplier must be non-null");
+    }
+    return new BasicAuthentication(username, passwordSupplier);
+  }
+
   @Override
   public String getAuthTypeValue() {
     return AUTH_TYPE_VALUE;
@@ -46,12 +53,12 @@ public class BasicAuthenticationProvider implements NessieAuthenticationProvider
 
   @Override
   public HttpAuthentication build(Function<String, String> configSupplier) {
-    String username = configSupplier.apply(CONF_NESSIE_USERNAME);
+    String username = configSupplier.apply(NessieConfigConstants.CONF_NESSIE_USERNAME);
     if (username == null) {
       username = configSupplier.apply("nessie.username"); // legacy property name
     }
 
-    String password = configSupplier.apply(CONF_NESSIE_PASSWORD);
+    String password = configSupplier.apply(NessieConfigConstants.CONF_NESSIE_PASSWORD);
     if (password == null) {
       password = configSupplier.apply("nessie.password"); // legacy property name
     }
@@ -60,9 +67,9 @@ public class BasicAuthenticationProvider implements NessieAuthenticationProvider
   }
 
   private static class BasicAuthentication implements HttpAuthentication {
-    private final String authHeaderValue;
+    private final Supplier<String> headerSupplier;
 
-    private BasicAuthentication(String username, String password) {
+    private static String basicHeader(String username, String password) {
       if (username == null || password == null) {
         throw new NullPointerException(
             "username and password parameters must be present for auth type " + AUTH_TYPE_VALUE);
@@ -71,12 +78,26 @@ public class BasicAuthenticationProvider implements NessieAuthenticationProvider
       String userPass = username + ':' + password;
       byte[] encoded = Base64.getEncoder().encode(userPass.getBytes(StandardCharsets.UTF_8));
       String encodedString = new String(encoded, StandardCharsets.UTF_8);
-      this.authHeaderValue = "Basic " + encodedString;
+      return "Basic " + encodedString;
+    }
+
+    private BasicAuthentication(String username, String password) {
+      String header = basicHeader(username, password);
+      this.headerSupplier = () -> header;
+    }
+
+    private BasicAuthentication(String username, Supplier<String> passwordSupplier) {
+      this.headerSupplier = () -> basicHeader(username, passwordSupplier.get());
     }
 
     @Override
     public void applyToHttpClient(HttpClient.Builder client) {
-      client.addRequestFilter(ctx -> ctx.putHeader("Authorization", authHeaderValue));
+      client.addRequestFilter(this::applyToHttpRequest);
+    }
+
+    @Override
+    public void applyToHttpRequest(RequestContext context) {
+      context.putHeader("Authorization", headerSupplier.get());
     }
   }
 }

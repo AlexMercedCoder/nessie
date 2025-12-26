@@ -15,13 +15,14 @@
  */
 package org.projectnessie.gc.roundtrip;
 
-import static java.util.Collections.singleton;
+import static org.projectnessie.gc.contents.ContentReference.icebergContent;
 import static org.projectnessie.gc.identify.CutoffPolicy.atTimestamp;
 import static org.projectnessie.gc.identify.CutoffPolicy.numCommits;
 import static org.projectnessie.model.Content.Type.ICEBERG_TABLE;
+import static org.projectnessie.model.Content.Type.ICEBERG_VIEW;
 
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Maps;
-import java.net.URI;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -39,7 +40,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
-import org.projectnessie.gc.contents.ContentReference;
 import org.projectnessie.gc.contents.LiveContentSet;
 import org.projectnessie.gc.contents.LiveContentSet.Status;
 import org.projectnessie.gc.contents.LiveContentSetsRepository;
@@ -61,12 +61,16 @@ import org.projectnessie.model.Content;
 import org.projectnessie.model.ContentKey;
 import org.projectnessie.model.Detached;
 import org.projectnessie.model.IcebergTable;
+import org.projectnessie.model.IcebergView;
 import org.projectnessie.model.LogResponse.LogEntry;
 import org.projectnessie.model.Operation.Put;
 import org.projectnessie.model.Reference;
+import org.projectnessie.storage.uri.StorageUri;
 
 @ExtendWith(SoftAssertionsExtension.class)
 public class TestMarkAndSweep {
+  public static final ImmutableSet<Content.Type> ICEBERG_CONTENT_TYPES =
+      ImmutableSet.of(ICEBERG_TABLE, ICEBERG_VIEW);
 
   @InjectSoftAssertions protected SoftAssertions soft;
 
@@ -83,7 +87,7 @@ public class TestMarkAndSweep {
     final int numKeysAtCutOff;
     final long numExpired;
     final String cidPrefix = "cid-";
-    final URI basePath = URI.create("meep://host-and-port/data/lake/");
+    final StorageUri basePath = StorageUri.of("meep://host-and-port/data/lake/");
     final Instant now = Instant.now();
     final Instant maxFileModificationTime;
     final long newestToDeleteMillis;
@@ -122,7 +126,7 @@ public class TestMarkAndSweep {
       return cidPrefix + l;
     }
 
-    URI numToBaseLocation(long l) {
+    StorageUri numToBaseLocation(long l) {
       return basePath.resolve(l + "/");
     }
 
@@ -134,14 +138,18 @@ public class TestMarkAndSweep {
       return Long.parseLong(cid.substring(cidPrefix.length()));
     }
 
-    long baseLocationToNum(URI path) {
-      String p = path.getPath();
+    long baseLocationToNum(StorageUri path) {
+      String p = path.location();
       int l = p.lastIndexOf('/');
       int l1 = p.lastIndexOf('/', l - 1);
       return Long.parseLong(p.substring(l1 + 1, l));
     }
 
     Content numToContent(long l) {
+      if ((l & 1L) == 1L) {
+        return IcebergView.of(
+            numToContentId(l), numToBaseLocation(l).resolve("metadata-" + l).toString(), l, 1);
+      }
       return IcebergTable.of(
           numToBaseLocation(l).resolve("metadata-" + l).toString(), l, 1, 2, 3, numToContentId(l));
     }
@@ -169,13 +177,13 @@ public class TestMarkAndSweep {
 
     PerRefCutoffPolicySupplier cutOffPolicySupplier() {
       Instant cutOff = now.minus(numCommits - numExpired, ChronoUnit.SECONDS);
-      return atTimestamp ? r -> atTimestamp(cutOff) : r -> numCommits((int) numCommits);
+      return atTimestamp ? r -> atTimestamp(cutOff) : r -> numCommits((int) numCommits - 1);
     }
   }
 
   @ParameterizedTest
   @MethodSource("markAndSweep")
-  public void markAndSweep(MarkAndSweep markAndSweep) throws Exception {
+  void markAndSweep(MarkAndSweep markAndSweep) throws Exception {
 
     InMemoryPersistenceSpi storage = new InMemoryPersistenceSpi();
     LiveContentSetsRepository repository =
@@ -186,23 +194,17 @@ public class TestMarkAndSweep {
                 new ContentTypeFilter() {
                   @Override
                   public boolean test(Content.Type type) {
-                    return ICEBERG_TABLE == type;
+                    return ICEBERG_CONTENT_TYPES.contains(type);
                   }
 
                   @Override
                   public Set<Content.Type> validTypes() {
-                    return singleton(ICEBERG_TABLE);
+                    return ICEBERG_CONTENT_TYPES;
                   }
                 })
             .cutOffPolicySupplier(markAndSweep.cutOffPolicySupplier())
             .contentToContentReference(
-                (content, commitId, key) ->
-                    ContentReference.icebergTable(
-                        content.getId(),
-                        commitId,
-                        key,
-                        ((IcebergTable) content).getMetadataLocation(),
-                        ((IcebergTable) content).getSnapshotId()))
+                (content, commitId, key) -> icebergContent(commitId, key, content))
             .liveContentSetsRepository(repository)
             .repositoryConnector(
                 new RepositoryConnector() {
@@ -279,14 +281,14 @@ public class TestMarkAndSweep {
         path -> {
           long l = markAndSweep.baseLocationToNum(path);
           return Stream.of(
-              FileReference.of(path.resolve("metadata-" + l), path, 123L),
-              FileReference.of(path.resolve("1-unused"), path, 123L),
-              FileReference.of(path.resolve("2-unused"), path, markAndSweep.newestToDeleteMillis),
-              FileReference.of(path.resolve("too-new-2"), path, markAndSweep.tooNewMillis));
+              FileReference.of(StorageUri.of("metadata-" + l), path, 123L),
+              FileReference.of(StorageUri.of("1-unused"), path, 123L),
+              FileReference.of(StorageUri.of("2-unused"), path, markAndSweep.newestToDeleteMillis),
+              FileReference.of(StorageUri.of("too-new-2"), path, markAndSweep.tooNewMillis));
         };
     FileDeleter deleter =
         fileObject -> {
-          soft.assertThat(fileObject.path().getPath()).endsWith("-unused");
+          soft.assertThat(fileObject.path().location()).endsWith("-unused");
           return DeleteResult.SUCCESS;
         };
 
@@ -299,13 +301,15 @@ public class TestMarkAndSweep {
                     .fileDeleter(deleter)
                     .expectedFileCount(100)
                     .contentToFiles(
-                        contentReference ->
-                            Stream.of(
-                                FileReference.of(
-                                    URI.create(contentReference.metadataLocation()),
-                                    markAndSweep.numToBaseLocation(
-                                        markAndSweep.contentIdToNum(contentReference.contentId())),
-                                    -1L)))
+                        contentReference -> {
+                          StorageUri baseLocation =
+                              markAndSweep.numToBaseLocation(
+                                  markAndSweep.contentIdToNum(contentReference.contentId()));
+                          StorageUri location = StorageUri.of(contentReference.metadataLocation());
+                          return Stream.of(
+                              FileReference.of(
+                                  baseLocation.relativize(location), baseLocation, -1L));
+                        })
                     .maxFileModificationTime(markAndSweep.maxFileModificationTime)
                     .build())
             .build();

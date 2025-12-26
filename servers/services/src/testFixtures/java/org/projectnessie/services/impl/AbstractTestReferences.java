@@ -18,7 +18,6 @@ package org.projectnessie.services.impl;
 import static java.util.stream.Collectors.toSet;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.junit.jupiter.api.Assumptions.abort;
 import static org.projectnessie.model.CommitMeta.fromMessage;
 import static org.projectnessie.model.FetchOption.ALL;
 import static org.projectnessie.model.FetchOption.MINIMAL;
@@ -59,15 +58,6 @@ public abstract class AbstractTestReferences extends BaseTestServiceImpl {
   @ParameterizedTest
   @ValueSource(ints = {0, 20, 22})
   public void referencesPaging(int numRefs) throws BaseNessieClientServerException {
-    try {
-      treeApi().getAllReferences(MINIMAL, null, "666f6f", new UnlimitedListResponseHandler<>());
-    } catch (IllegalArgumentException e) {
-      if (!e.getMessage().contains("Paging not supported")) {
-        throw e;
-      }
-      abort("DatabaseAdapter implementations / PersistVersionStore do not support paging");
-    }
-
     Branch defaultBranch = treeApi().getDefaultBranch();
     int pageSize = 5;
 
@@ -109,7 +99,9 @@ public abstract class AbstractTestReferences extends BaseTestServiceImpl {
   public void getAllReferences() {
     assertThat(allReferences())
         .anySatisfy(
-            r -> assertThat(r.getName()).isEqualTo(configApi().getConfig().getDefaultBranch()));
+            r ->
+                assertThat(r.getName())
+                    .isEqualTo(configApi().getServerConfig().getDefaultBranch()));
   }
 
   @Test
@@ -170,18 +162,20 @@ public abstract class AbstractTestReferences extends BaseTestServiceImpl {
     // Tag without sourceRefName & null hash
     soft.assertThatThrownBy(() -> treeApi().createReference(tagName1, TAG, null, null))
         .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("Tag-creation requires a target named-reference and hash.");
+        .hasMessageContaining("Target hash must be provided.");
     // Tag without hash
     soft.assertThatThrownBy(() -> treeApi().createReference(tagName1, TAG, null, main.getName()))
         .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("Tag-creation requires a target named-reference and hash.");
+        .hasMessageContaining("Target hash must be provided.");
     // legit Tag with name + hash
     Tag refTag1 = createTag(tagName2, main);
     soft.assertThat(refTag1).isEqualTo(Tag.of(tagName2, main.getHash()));
 
     // Branch without hash
-    Reference refBranch1 = treeApi().createReference(branchName1, BRANCH, null, main.getName());
-    soft.assertThat(refBranch1).isEqualTo(Branch.of(branchName1, main.getHash()));
+    soft.assertThatThrownBy(
+            () -> treeApi().createReference(branchName1, BRANCH, null, main.getName()))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("Target hash must be provided");
     // Branch with name + hash
     Reference refBranch2 =
         treeApi().createReference(branchName2, BRANCH, main.getHash(), main.getName());
@@ -300,23 +294,17 @@ public abstract class AbstractTestReferences extends BaseTestServiceImpl {
     commit(
         createBranch("refs.branch.1"),
         fromMessage("some awkward message"),
-        Put.of(
-            ContentKey.of("hello.world.BaseTable"),
-            IcebergView.of("path1", 1, 1, "Spark", "SELECT ALL THE THINGS")));
+        Put.of(ContentKey.of("hello.world.BaseTable"), IcebergView.of("path1", 1, 1)));
     Branch b2 =
         commit(
                 createBranch("other-development"),
                 fromMessage("invent awesome things"),
-                Put.of(
-                    ContentKey.of("cool.stuff.Caresian"),
-                    IcebergView.of("path2", 1, 1, "Spark", "CARTESIAN JOINS ARE AWESOME")))
+                Put.of(ContentKey.of("cool.stuff.Caresian"), IcebergView.of("path2", 1, 1)))
             .getTargetBranch();
     commit(
         createBranch("archive"),
         fromMessage("boring old stuff"),
-        Put.of(
-            ContentKey.of("super.old.Numbers"),
-            IcebergView.of("path3", 1, 1, "Spark", "AGGREGATE EVERYTHING")));
+        Put.of(ContentKey.of("super.old.Numbers"), IcebergView.of("path3", 1, 1)));
     Tag t1 = createTag("my-tag", b2);
 
     soft.assertThat(allReferences(MINIMAL, "ref.name == 'other-development'"))
@@ -416,7 +404,7 @@ public abstract class AbstractTestReferences extends BaseTestServiceImpl {
         numCommits,
         0,
         (Branch) ref,
-        getReference(configApi().getConfig().getDefaultBranch()),
+        getReference(configApi().getServerConfig().getDefaultBranch()),
         numCommits);
 
     // fetching additional metadata for a single tag

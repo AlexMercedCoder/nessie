@@ -42,11 +42,10 @@ import org.projectnessie.model.IcebergTable;
 import org.projectnessie.model.ImmutableIcebergTable;
 import org.projectnessie.model.MergeBehavior;
 import org.projectnessie.model.MergeKeyBehavior;
+import org.projectnessie.model.Operation.Put;
 import org.projectnessie.versioned.BranchName;
-import org.projectnessie.versioned.Commit;
 import org.projectnessie.versioned.Hash;
 import org.projectnessie.versioned.MergeResult;
-import org.projectnessie.versioned.Put;
 import org.projectnessie.versioned.VersionStore;
 import org.projectnessie.versioned.VersionStore.MergeOp;
 
@@ -55,18 +54,18 @@ public abstract class AbstractMergeKeyBehaviors extends AbstractNestedVersionSto
 
   @InjectSoftAssertions protected SoftAssertions soft;
 
-  static ContentKey keyInitial = ContentKey.of("initial");
-  static ContentKey keyTarget1 = ContentKey.of("target1");
-  static ContentKey keySource1 = ContentKey.of("source1");
-  static ContentKey keyCommon1 = ContentKey.of("common1");
-  static ContentKey keyCommon2 = ContentKey.of("common2");
-  static IcebergTable initialTable = IcebergTable.of("initial", 1, 2, 3, 4);
-  static IcebergTable targetTable1 = IcebergTable.of("target1", 1, 2, 3, 4);
-  static IcebergTable sourceTable1 = IcebergTable.of("source1", 1, 2, 3, 4);
-  static IcebergTable commonTable1onTarget = IcebergTable.of("common1onTarget", 1, 2, 3, 4);
-  static IcebergTable commonTable2onTarget = IcebergTable.of("common2onTarget", 1, 2, 3, 4);
-  static IcebergTable commonTable1onSource = IcebergTable.of("common1onSource", 1, 2, 3, 4);
-  static IcebergTable commonTable2onSource = IcebergTable.of("common2onSource", 1, 2, 3, 4);
+  static final ContentKey keyInitial = ContentKey.of("initial");
+  static final ContentKey keyTarget1 = ContentKey.of("target1");
+  static final ContentKey keySource1 = ContentKey.of("source1");
+  static final ContentKey keyCommon1 = ContentKey.of("common1");
+  static final ContentKey keyCommon2 = ContentKey.of("common2");
+  static final IcebergTable initialTable = IcebergTable.of("initial", 1, 2, 3, 4);
+  static final IcebergTable targetTable1 = IcebergTable.of("target1", 1, 2, 3, 4);
+  static final IcebergTable sourceTable1 = IcebergTable.of("source1", 1, 2, 3, 4);
+  static final IcebergTable commonTable1onTarget = IcebergTable.of("common1onTarget", 1, 2, 3, 4);
+  static final IcebergTable commonTable2onTarget = IcebergTable.of("common2onTarget", 1, 2, 3, 4);
+  static final IcebergTable commonTable1onSource = IcebergTable.of("common1onSource", 1, 2, 3, 4);
+  static final IcebergTable commonTable2onSource = IcebergTable.of("common2onSource", 1, 2, 3, 4);
 
   protected AbstractMergeKeyBehaviors(VersionStore store) {
     super(store);
@@ -229,7 +228,7 @@ public abstract class AbstractMergeKeyBehaviors extends AbstractNestedVersionSto
                     Put.of(keyCommon2, commonTable2onSource)))
             .getCommitHash();
 
-    MergeResult<Commit> mergeResult =
+    MergeResult mergeResult =
         store()
             .merge(
                 MergeOp.builder()
@@ -246,7 +245,7 @@ public abstract class AbstractMergeKeyBehaviors extends AbstractNestedVersionSto
     soft.assertThat(mergeResult.getResultantTargetHash()).isNotEqualTo(target);
     target = mergeResult.getResultantTargetHash();
     Map<ContentKey, Content> contentsOnTargetAfter =
-        store().getValues(target, allKeys).entrySet().stream()
+        store().getValues(target, allKeys, false).entrySet().stream()
             .collect(
                 Collectors.toMap(
                     Map.Entry::getKey,

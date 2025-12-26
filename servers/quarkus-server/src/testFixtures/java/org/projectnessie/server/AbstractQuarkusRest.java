@@ -17,40 +17,29 @@ package org.projectnessie.server;
 
 import static org.projectnessie.versioned.storage.common.logic.Logics.repositoryLogic;
 
-import javax.enterprise.inject.Instance;
-import javax.inject.Inject;
+import jakarta.enterprise.inject.Default;
+import jakarta.enterprise.inject.Instance;
+import jakarta.inject.Inject;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.projectnessie.jaxrs.tests.BaseTestNessieRest;
-import org.projectnessie.versioned.persist.adapter.DatabaseAdapter;
 import org.projectnessie.versioned.storage.common.persist.Persist;
 
 @ExtendWith(QuarkusNessieClientResolver.class)
 public abstract class AbstractQuarkusRest extends BaseTestNessieRest {
 
-  @Inject Instance<DatabaseAdapter> databaseAdapter;
-
-  @Inject Instance<Persist> persist;
+  @Inject public Instance<Persist> persist;
 
   @Override
   @AfterEach
   public void tearDown() throws Exception {
     try {
-      Persist p = persist.select().get();
+      Persist p = persist.select(Default.Literal.INSTANCE).get();
       if (p != null) {
         try {
           p.erase();
         } finally {
           repositoryLogic(p).initialize("main");
-        }
-      }
-
-      DatabaseAdapter da = databaseAdapter.select().get();
-      if (da != null) {
-        try {
-          da.eraseRepo();
-        } finally {
-          da.initializeRepo("main");
         }
       }
     } finally {

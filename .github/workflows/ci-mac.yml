@@ -25,95 +25,52 @@ on:
     - cron:  '0 4 * * 1-5'
   workflow_dispatch:
 
+# For the main branch: let all CI runs complete, one after the other. This has a couple advantages:
+# * Site deployments happen in commit-order
+# * Saved Gradle cache are persisted in commit-order
+# * (Potentially) more GH runners available for PRs
+concurrency:
+  # PRs: 1 CI run concurrently / older ones are cancelled
+  # main branch: 1 CI run concurrently / all commits / no cancellation
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   java:
     name: Java/Gradle macOS
-    runs-on: macos-12
+    runs-on: macos-15
+    timeout-minutes: 60
     if: (github.repository == 'projectnessie/nessie' && github.event_name != 'pull_request') || contains(github.event.pull_request.labels.*.name, 'pr-macos-win')
     env:
       SPARK_LOCAL_IP: localhost
       CI_MAC: "true"
 
     steps:
-    - name: Brew update & upgrade
-      run: |
-        echo "::group::Update Brew"
-        brew update
-        echo "::endgroup::"
-        echo "::group::Brew Upgrade"
-        brew upgrade || true
-        echo "::endgroup::"
-
-    - name: Prepare Podman
-      run: |
-        echo "::group::Install Podman"
-        brew install podman
-        echo "::endgroup::"
-
-        echo "::group::Initializing Podman"
-        podman machine init
-        echo "::endgroup::"
-
-    - name: Start Podman
-      uses: nick-fields/retry@v2
-      with:
-        max_attempts: 10
-        timeout_minutes: 5
-        retry_wait_seconds: 3
-        command: |
-          echo "::group::Starting Podman"
-          podman machine start
-          echo "::endgroup::"
-        on_retry_command: |
-          echo "::group::Stopping Podman"
-          podman machine stop
-          echo "::endgroup::"
-
-    - name: Configure Podman
-      run: |
-        echo "::group::Aliasing Podman"
-        ln -s /usr/local/bin/podman /usr/local/bin/docker
-        echo "::endgroup::"
-
-        export DOCKER_HOST="unix:///${HOME}/.local/share/containers/podman/machine/podman-machine-default/podman.sock"
-        echo "DOCKER_HOST=$DOCKER_HOST" >> ${GITHUB_ENV}
-
-        # See https://www.testcontainers.org/supported_docker_environment/
-        echo "TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock" >> ${GITHUB_ENV}
-
-        echo "::group::Docker info"
-        docker info
-        echo "::endgroup::"
-
-    - uses: actions/checkout@v3.5.3
+    - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
     - name: Setup Java, Gradle
       uses: ./.github/actions/dev-tool-java
 
-    - name: Gradle / compile
-      uses: gradle/gradle-build-action@v2
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@4d9f0ba0025fe599b4ebab900eb7f3a1d93ef4c2 # v5
       env:
         # Same as for ci.yml
-        GRADLE_BUILD_ACTION_CACHE_KEY_ENVIRONMENT: java-11
+        GRADLE_BUILD_ACTION_CACHE_KEY_ENVIRONMENT: java-17
         GRADLE_BUILD_ACTION_CACHE_KEY_JOB: nessie-ci
         GRADLE_BUILD_ACTION_CACHE_KEY_JOB_INSTANCE: ci
       with:
         cache-read-only: true
-        arguments: assemble --scan
+        validate-wrappers: false
+
+    - name: Gradle / compile
+      run: ./gradlew assemble --scan
 
     - name: Gradle / unit test
-      uses: gradle/gradle-build-action@v2
       env:
         SPARK_LOCAL_IP: localhost
-      with:
-        arguments: test --scan
-
-    - name: Gradle / integ-test
-      uses: gradle/gradle-build-action@v2
-      with:
-        arguments: intTest --scan
+      run: ./gradlew test --scan
 
     - name: Capture Test Reports
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
       if: ${{ failure() }}
       with:
         name: test-results

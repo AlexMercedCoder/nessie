@@ -18,22 +18,21 @@ import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
 
 plugins {
   alias(libs.plugins.nessie.run)
-  id("nessie-conventions-server")
-  id("nessie-jacoco")
+  id("nessie-conventions-java11")
   id("nessie-shadow-jar")
+  id("nessie-license-report")
 }
 
 dependencies {
   implementation(project(":nessie-client"))
+  runtimeOnly(libs.httpclient5)
 
   implementation(libs.picocli)
   // TODO help picocli to make their annotation-processor incremental
   annotationProcessor(libs.picocli.codegen)
   implementation(libs.guava)
 
-  // javax/jakarta
   compileOnly(libs.jakarta.validation.api)
-  compileOnly(libs.javax.validation.api)
   compileOnly(libs.jakarta.annotation.api)
   compileOnly(libs.findbugs.jsr305)
 
@@ -44,9 +43,8 @@ dependencies {
   implementation("com.fasterxml.jackson.core:jackson-annotations")
   implementation("com.fasterxml.jackson.core:jackson-databind")
 
-  compileOnly(libs.immutables.builder)
-  compileOnly(libs.immutables.value.annotations)
-  annotationProcessor(libs.immutables.value.processor)
+  compileOnly(project(":nessie-immutables-std"))
+  annotationProcessor(project(":nessie-immutables-std", configuration = "processor"))
 
   testFixturesImplementation(project(":nessie-client"))
 
@@ -57,10 +55,11 @@ dependencies {
   testFixturesCompileOnly(libs.picocli)
   testFixturesCompileOnly(platform(libs.jackson.bom))
   testFixturesCompileOnly("com.fasterxml.jackson.core:jackson-annotations")
+  testFixturesApi(libs.httpclient5)
 
   testImplementation(project(":nessie-jaxrs-testextension"))
 
-  testImplementation(project(":nessie-versioned-storage-inmemory"))
+  testImplementation(project(":nessie-versioned-storage-inmemory-tests"))
 
   nessieQuarkusServer(project(":nessie-quarkus", "quarkusRunner"))
 }

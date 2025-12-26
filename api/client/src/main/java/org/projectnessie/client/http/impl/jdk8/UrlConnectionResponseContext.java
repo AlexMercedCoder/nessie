@@ -28,30 +28,36 @@ import java.util.zip.GZIPInputStream;
 import java.util.zip.InflaterInputStream;
 import org.projectnessie.client.http.ResponseContext;
 import org.projectnessie.client.http.Status;
+import org.projectnessie.client.http.impl.ResponseClosingInputStream;
 
 final class UrlConnectionResponseContext implements ResponseContext {
 
   private final HttpURLConnection connection;
   private final URI uri;
+  private final Status status;
+  private InputStream inputStream;
 
-  UrlConnectionResponseContext(HttpURLConnection connection, URI uri) {
+  UrlConnectionResponseContext(HttpURLConnection connection, URI uri, Status status) {
     this.connection = connection;
     this.uri = uri;
+    this.status = status;
   }
 
   @Override
-  public Status getResponseCode() throws IOException {
-    return Status.fromCode(connection.getResponseCode());
+  public Status getStatus() {
+    return status;
   }
 
   @Override
   public InputStream getInputStream() throws IOException {
-    return maybeDecompress(connection.getInputStream());
-  }
-
-  @Override
-  public InputStream getErrorStream() throws IOException {
-    return maybeDecompress(connection.getErrorStream());
+    InputStream base = safeGetInputStream();
+    if (base == null) {
+      return null;
+    }
+    if (inputStream == null) {
+      inputStream = new ResponseClosingInputStream(maybeDecompress(base), connection::disconnect);
+    }
+    return inputStream;
   }
 
   @Override
@@ -62,6 +68,31 @@ final class UrlConnectionResponseContext implements ResponseContext {
   @Override
   public URI getRequestedUri() {
     return uri;
+  }
+
+  @Override
+  public void close(Exception error) {
+    if (error != null) {
+      try {
+        InputStream base = safeGetInputStream();
+        if (base != null) {
+          base.close();
+        }
+      } catch (Exception e) {
+        error.addSuppressed(e);
+      } finally {
+        connection.disconnect();
+      }
+    }
+  }
+
+  private InputStream safeGetInputStream() throws IOException {
+    try {
+      return status.getCode() >= 400 ? connection.getErrorStream() : connection.getInputStream();
+    } catch (IOException e) {
+      connection.disconnect();
+      throw e;
+    }
   }
 
   private InputStream maybeDecompress(InputStream inputStream) throws IOException {

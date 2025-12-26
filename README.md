@@ -7,17 +7,14 @@ Project Nessie is a Transactional Catalog for Data Lakes with Git-like semantics
 [![Twitter](https://img.shields.io/badge/Twitter-Follow_Us-blue?color=3d4db3&logo=twitter&style=for-the-badge&logoColor=white)](https://twitter.com/projectnessie)
 [![Website](https://img.shields.io/badge/https-projectnessie.org-blue?color=3d4db3&logo=firefox&style=for-the-badge&logoColor=white)](https://projectnessie.org/)
 
-[![Maven Central](https://img.shields.io/maven-central/v/org.projectnessie/nessie?label=Maven%20Central&logo=apachemaven&color=3f6ec6&style=for-the-badge&logoColor=white)](https://search.maven.org/artifact/org.projectnessie/nessie)
+[![Maven Central](https://img.shields.io/maven-central/v/org.projectnessie.nessie/nessie?label=Maven%20Central&logo=apachemaven&color=3f6ec6&style=for-the-badge&logoColor=white)](https://search.maven.org/artifact/org.projectnessie.nessie/nessie)
 [![PyPI](https://img.shields.io/pypi/v/pynessie.svg?label=PyPI&logo=python&color=3f6ec6&style=for-the-badge&logoColor=white)](https://pypi.python.org/pypi/pynessie)
-[![quay.io Docker](https://img.shields.io/maven-central/v/org.projectnessie/nessie?label=quay.io+Docker&logo=docker&color=3f6ec6&style=for-the-badge&logoColor=white)](https://quay.io/repository/projectnessie/nessie?tab=tags)
+[![quay.io Docker](https://img.shields.io/maven-central/v/org.projectnessie.nessie/nessie?label=quay.io+Docker&logo=docker&color=3f6ec6&style=for-the-badge&logoColor=white)](https://quay.io/repository/projectnessie/nessie?tab=tags)
 [![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/nessie&color=3f6ec6&labelColor=&style=for-the-badge&logoColor=white)](https://artifacthub.io/packages/search?repo=nessie)
-[![Swagger Hub](https://img.shields.io/badge/swagger%20hub-nessie-3f6ec6?style=for-the-badge&logo=swagger&link=https%3A%2F%2Fapp.swaggerhub.com%2Fapis%2Fprojectnessie%2Fnessie)](https://app.swaggerhub.com/apis/projectnessie/nessie)
 
 
 [![Build Status](https://img.shields.io/github/actions/workflow/status/projectnessie/nessie/ci.yml?branch=main&label=Main%20CI&logo=Github&style=flat-square)](https://github.com/projectnessie/nessie/actions/workflows/ci.yml?query=branch%3Amain)
 [![Query Engines CI](https://img.shields.io/github/actions/workflow/status/projectnessie/query-engine-integration-tests/main.yml?label=Nessie%2FIceberg%20in-dev&logo=Github&style=flat-square)](https://github.com/projectnessie/query-engine-integration-tests/actions/workflows/main.yml?query=branch%3Amain)
-[![Java 17+18](https://img.shields.io/github/actions/workflow/status/projectnessie/nessie/newer-java.yml?label=Java%2017%2B&logo=Github&style=flat-square)](https://github.com/projectnessie/nessie/actions/workflows/newer-java.yml)
-[![Windows Build](https://img.shields.io/github/actions/workflow/status/projectnessie/nessie/ci-win.yml?label=Windows&logo=windows&style=flat-square)](https://github.com/projectnessie/nessie/actions/workflows/ci-win.yml)
 [![macOS Build](https://img.shields.io/github/actions/workflow/status/projectnessie/nessie/ci-mac.yml?label=macOS&logo=apple&style=flat-square)](https://github.com/projectnessie/nessie/actions/workflows/ci-mac.yml)
 
 More information can be found at [projectnessie.org](https://projectnessie.org/).
@@ -28,8 +25,8 @@ Nessie supports Iceberg Tables/Views. Additionally, Nessie is focused on working
 
 You can quickly get started with Nessie by using our small, fast docker image.
 
-**IMPORTANT NOTE** Nessie moves away from `docker.io` to GitHub's container registry `ghcr.io`,
-and also `quay.io`. Previous releases are already available on both ghcr.io and quay.io. Please
+**IMPORTANT NOTE** Nessie has moved away from `docker.io` to GitHub's container registry `ghcr.io`,
+and also `quay.io`. Recent releases are already only available on both ghcr.io and quay.io. Please
 update references to `projectnessie/nessie` in your code to either `ghcr.io/projectnessie/nessie`
 or `quay.io/projectnessie/nessie`.
 
@@ -87,8 +84,8 @@ docker run -p 19120:19120 \
 
 ### Requirements
 
-- JDK 11 or higher: JDK11 or higher is needed to build Nessie (artifacts are built 
-  for Java 8)
+- JDK 21 or higher: JDK 21 or higher is needed to build Nessie (some artifacts are built 
+  for Java 8 or 11)
 
 ### Installation
 
@@ -106,27 +103,19 @@ Refer to [CONTRIBUTING](./CONTRIBUTING.md) for build instructions.
 
 Nessie Iceberg's integration is compatible with Iceberg as in the following table:
 
-| Nessie version | Iceberg version | Spark version                                                                                 | Hive version | Flink version          | Presto version                      | Trino version |
-|----------------|-----------------|-----------------------------------------------------------------------------------------------|--------------|------------------------|-------------------------------------|---------------|
-| 0.64.0         | 1.3.0           | 3.1.x (Scala 2.12), 3.2.x (Scala 2.12+2.13), 3.3.x (Scala 2.12+2.13), 3.4.x (Scala 2.12+2.13) | n/a          | 1.15.x, 1.16.x, 1.17.x | 0.277, 0.278.x, 0.279, 0.280, 0.281 | 419           |
+| Nessie version | Iceberg version | Spark version (Scala 2.12+2.13) | Hive version | Flink version          | Presto version                      | Trino version |
+|----------------|-----------------|---------------------------------|--------------|------------------------|-------------------------------------|---------------|
+| 0.106.0         | 1.5.0           | 3.3.x, 3.4.x, 3.5.x             | n/a          | 1.16.x, 1.17.x, 1.18.x | 0.277, 0.278.x, 0.279, 0.280, 0.281 | 419           |
 
 ### Distribution
 To run:
 1. configuration in `servers/quarkus-server/src/main/resources/application.properties`
-2. execute `./gradlew quarkusDev`
+2. execute `./gradlew :nessie-quarkus:assemble && java -jar servers/quarkus-server/build/quarkus-app/quarkus-run.jar`
 3. go to `http://localhost:19120`
 
 ### UI 
-To run the ui (from `ui` directory):
-1. If you are running in test ensure that `setupProxy.js` points to the correct api instance. This ensures we avoid CORS
-issues in testing
-2. `npm install` will install dependencies
-3. `npm run start` to start the ui in development mode via node
 
-To deploy the ui (from `ui` directory):
-1. `npm install` will install dependencies
-2. `npm build` will minify and collect the package for deployment in `build`
-3. the `build` directory can be deployed to any static hosting environment or run locally as `serve -s build`
+Nessie UI sources have moved to their own repository: https://github.com/projectnessie/nessie-ui.
 
 ### Docker image
 
@@ -135,7 +124,7 @@ build a docker image for testing purposes, simply run the following command:
 
 ```shell
 ./gradlew :nessie-quarkus:clean :nessie-quarkus:quarkusBuild
-docker build -f ./tools/dockerbuild/docker/Dockerfile-jvm -t nessie-unstable:latest ./servers/quarkus-server 
+docker build -f ./tools/dockerbuild/docker/Dockerfile-server -t nessie-unstable:latest ./servers/quarkus-server 
 ```
 
 Check that your image is available locally:
@@ -157,7 +146,6 @@ rules](https://github.com/eclipse/microprofile-config/blob/master/spec/src/main/
 
 ## Nessie related repositories
 
-* [Nessie Demos](https://github.com/projectnessie/nessie-demos): Demos for Nessie
 * [CEL Java](https://github.com/projectnessie/cel-java): Java port of the Common Expression Language
 * [Nessie apprunner](https://github.com/projectnessie/nessie-apprunner): Maven and Gradle plugins to use Nessie in integration tests.
 

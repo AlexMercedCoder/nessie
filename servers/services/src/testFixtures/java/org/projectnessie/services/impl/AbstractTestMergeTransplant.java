@@ -20,16 +20,16 @@ import static java.util.Arrays.asList;
 import static java.util.Collections.emptyList;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.assertj.core.api.InstanceOfAssertFactories.list;
-import static org.assertj.core.api.InstanceOfAssertFactories.map;
-import static org.assertj.core.api.InstanceOfAssertFactories.type;
-import static org.assertj.core.data.MapEntry.entry;
 import static org.projectnessie.model.CommitMeta.fromMessage;
 import static org.projectnessie.model.FetchOption.MINIMAL;
 import static org.projectnessie.model.MergeBehavior.DROP;
 import static org.projectnessie.model.MergeBehavior.FORCE;
 import static org.projectnessie.model.MergeBehavior.NORMAL;
+import static org.projectnessie.versioned.RequestMeta.API_READ;
+import static org.projectnessie.versioned.RequestMeta.API_WRITE;
 
 import com.google.common.collect.ImmutableList;
 import java.util.Collection;
@@ -46,11 +46,10 @@ import org.projectnessie.error.BaseNessieClientServerException;
 import org.projectnessie.error.NessieConflictException;
 import org.projectnessie.error.NessieNotFoundException;
 import org.projectnessie.error.NessieReferenceConflictException;
-import org.projectnessie.error.ReferenceConflicts;
 import org.projectnessie.model.Branch;
 import org.projectnessie.model.CommitMeta;
-import org.projectnessie.model.Conflict;
 import org.projectnessie.model.ContentKey;
+import org.projectnessie.model.ContentResponse;
 import org.projectnessie.model.EntriesResponse;
 import org.projectnessie.model.IcebergTable;
 import org.projectnessie.model.LogResponse.LogEntry;
@@ -59,6 +58,7 @@ import org.projectnessie.model.MergeResponse;
 import org.projectnessie.model.MergeResponse.ContentKeyConflict;
 import org.projectnessie.model.MergeResponse.ContentKeyDetails;
 import org.projectnessie.model.Namespace;
+import org.projectnessie.model.Operation.Delete;
 import org.projectnessie.model.Operation.Put;
 import org.projectnessie.model.Reference;
 
@@ -130,6 +130,7 @@ public abstract class AbstractTestMergeTransplant extends BaseTestServiceImpl {
         throws NessieNotFoundException, NessieConflictException;
   }
 
+  @SuppressWarnings("deprecation")
   private void mergeTransplant(
       boolean verifyAdditionalParents,
       MergeTransplantActor actor,
@@ -160,7 +161,7 @@ public abstract class AbstractTestMergeTransplant extends BaseTestServiceImpl {
     table1 =
         (IcebergTable)
             contentApi()
-                .getContent(key1, committed1.getName(), committed1.getHash(), false)
+                .getContent(key1, committed1.getName(), committed1.getHash(), false, API_READ)
                 .getContent();
 
     Branch committed2 =
@@ -180,12 +181,11 @@ public abstract class AbstractTestMergeTransplant extends BaseTestServiceImpl {
         commit(target, fromMessage("test-main"), Put.of(key2, table2)).getTargetBranch();
 
     MergeResponse response = actor.act(target, source, committed1, committed2, false);
-    Reference newHead =
-        mergeWentFine(target, source, key1, committed1, committed2, baseHead, response);
+    Reference newHead = mergeWentFine(target, source, key1, baseHead, response);
 
     // try again --> conflict
 
-    if (isNewStorageModel() && isMerge) {
+    if (isMerge) {
       // New storage model allows "merging the same branch again". If nothing changed, it returns a
       // successful, but not-applied merge-response. This request is effectively a merge without any
       // commits to merge, reported as "successful".
@@ -197,24 +197,6 @@ public abstract class AbstractTestMergeTransplant extends BaseTestServiceImpl {
               MergeResponse::wasApplied,
               MergeResponse::wasSuccessful)
           .containsExactly(committed2.getHash(), newHead.getHash(), newHead.getHash(), false, true);
-    } else if (!isNewStorageModel()) {
-      // For the new storage model, the following transplant will NOT fail (correct behavior),
-      // because the eventually
-      // applied content-value is exactly the same as the currently existing one.
-
-      soft.assertThatThrownBy(() -> actor.act(target, source, committed1, committed2, false))
-          .isInstanceOf(NessieReferenceConflictException.class)
-          .hasMessageContaining("keys have been changed in conflict")
-          .asInstanceOf(type(NessieReferenceConflictException.class))
-          .extracting(NessieReferenceConflictException::getErrorDetails)
-          .isNotNull()
-          .extracting(ReferenceConflicts::conflicts, list(Conflict.class))
-          .hasSizeGreaterThan(0);
-
-      // try again --> conflict, but return information
-
-      conflictExceptionReturnedAsMergeResult(
-          actor, target, source, key1, committed1, committed2, newHead);
     }
 
     List<LogEntry> log = commitLog(target.getName(), MINIMAL, target.getHash(), null, null);
@@ -228,7 +210,7 @@ public abstract class AbstractTestMergeTransplant extends BaseTestServiceImpl {
           .isEqualTo(
               format(
                   "%s %s at %s into %s at %s",
-                  isMerge ? "Merged" : "Transplanted 2 commits from",
+                  "Merged",
                   detached ? "DETACHED" : source.getName(),
                   committed2.getHash(),
                   target.getName(),
@@ -258,24 +240,11 @@ public abstract class AbstractTestMergeTransplant extends BaseTestServiceImpl {
           .extracting(CommitMeta::getParentCommitHashes)
           .asInstanceOf(list(String.class))
           .containsExactly(baseHead.getHash(), committed2.getHash());
-      soft.assertThat(logOfMerged)
-          .first()
-          .extracting(LogEntry::getCommitMeta)
-          .extracting(CommitMeta::getProperties)
-          .asInstanceOf(map(String.class, String.class))
-          .containsExactly(entry(CommitMeta.MERGE_PARENT_PROPERTY, committed2.getHash()));
     }
   }
 
-  @SuppressWarnings("deprecation")
   private Reference mergeWentFine(
-      Branch target,
-      Branch source,
-      ContentKey key1,
-      Branch committed1,
-      Branch committed2,
-      Branch baseHead,
-      MergeResponse response)
+      Branch target, Branch source, ContentKey key1, Branch baseHead, MergeResponse response)
       throws NessieNotFoundException {
     Reference newHead = getReference(target.getName());
     soft.assertThat(response)
@@ -294,82 +263,14 @@ public abstract class AbstractTestMergeTransplant extends BaseTestServiceImpl {
             a -> assertThat(a).isNull(), b -> assertThat(b).isEqualTo(target.getHash()));
     soft.assertThat(response.getDetails())
         .asInstanceOf(list(ContentKeyDetails.class))
-        .extracting(
-            ContentKeyDetails::getKey,
-            ContentKeyDetails::getConflictType,
-            ContentKeyDetails::getMergeBehavior)
-        .contains(tuple(key1, ContentKeyConflict.NONE, NORMAL));
-    if (response.getSourceCommits() != null && !response.getSourceCommits().isEmpty()) {
-      // Database adapter
-      soft.assertThat(response.getSourceCommits())
-          .asInstanceOf(list(LogEntry.class))
-          .extracting(LogEntry::getCommitMeta)
-          .extracting(CommitMeta::getHash, CommitMeta::getMessage)
-          .containsExactly(
-              tuple(committed2.getHash(), "test-branch2"),
-              tuple(committed1.getHash(), "test-branch1"));
-    }
-    if (response.getTargetCommits() != null) {
-      // Database adapter
-      soft.assertThat(response.getTargetCommits())
-          .asInstanceOf(list(LogEntry.class))
-          .extracting(LogEntry::getCommitMeta)
-          .extracting(CommitMeta::getHash, CommitMeta::getMessage)
-          .contains(tuple(baseHead.getHash(), "test-main"));
-    }
-
+        .singleElement()
+        .satisfies(
+            details -> {
+              assertThat(details.getKey()).isEqualTo(key1);
+              assertThat(details.getConflict()).isNull();
+              assertThat(details.getMergeBehavior()).isEqualTo(NORMAL);
+            });
     return newHead;
-  }
-
-  @SuppressWarnings("deprecation")
-  private void conflictExceptionReturnedAsMergeResult(
-      MergeTransplantActor actor,
-      Branch target,
-      Branch source,
-      ContentKey key1,
-      Branch committed1,
-      Branch committed2,
-      Reference newHead)
-      throws NessieNotFoundException, NessieConflictException {
-    MergeResponse conflictResult = actor.act(target, source, committed1, committed2, true);
-
-    soft.assertThat(conflictResult)
-        .extracting(
-            MergeResponse::wasApplied,
-            MergeResponse::wasSuccessful,
-            MergeResponse::getExpectedHash,
-            MergeResponse::getTargetBranch,
-            MergeResponse::getEffectiveTargetHash)
-        .containsExactly(false, false, source.getHash(), target.getName(), newHead.getHash());
-
-    soft.assertThat(conflictResult.getCommonAncestor())
-        .satisfiesAnyOf(
-            a -> assertThat(a).isNull(), b -> assertThat(b).isEqualTo(target.getHash()));
-    soft.assertThat(conflictResult.getDetails())
-        .asInstanceOf(list(ContentKeyDetails.class))
-        .extracting(
-            ContentKeyDetails::getKey,
-            ContentKeyDetails::getConflictType,
-            ContentKeyDetails::getMergeBehavior)
-        .contains(tuple(key1, ContentKeyConflict.UNRESOLVABLE, NORMAL));
-    if (conflictResult.getSourceCommits() != null && !conflictResult.getSourceCommits().isEmpty()) {
-      // Database adapter
-      soft.assertThat(conflictResult.getSourceCommits())
-          .asInstanceOf(list(LogEntry.class))
-          .extracting(LogEntry::getCommitMeta)
-          .extracting(CommitMeta::getHash, CommitMeta::getMessage)
-          .containsExactly(
-              tuple(committed2.getHash(), "test-branch2"),
-              tuple(committed1.getHash(), "test-branch1"));
-    }
-    if (conflictResult.getTargetCommits() != null) {
-      // Database adapter
-      soft.assertThat(conflictResult.getTargetCommits())
-          .asInstanceOf(list(LogEntry.class))
-          .extracting(LogEntry::getCommitMeta)
-          .extracting(CommitMeta::getMessage)
-          .containsAnyOf("test-branch2", "test-branch1", "test-main");
-    }
   }
 
   @Test
@@ -554,8 +455,8 @@ public abstract class AbstractTestMergeTransplant extends BaseTestServiceImpl {
     Namespace ns = Namespace.parse("a.b.c");
     base = ensureNamespacesForKeysExist(base, ns.toContentKey());
     branch = ensureNamespacesForKeysExist(branch, ns.toContentKey());
-    namespaceApi().createNamespace(base.getName(), ns);
-    namespaceApi().createNamespace(branch.getName(), ns);
+    namespaceApi().createNamespace(base.getName(), ns, API_WRITE);
+    namespaceApi().createNamespace(branch.getName(), ns, API_WRITE);
 
     base = (Branch) getReference(base.getName());
     branch = (Branch) getReference(branch.getName());
@@ -572,7 +473,7 @@ public abstract class AbstractTestMergeTransplant extends BaseTestServiceImpl {
     table1 =
         (IcebergTable)
             contentApi()
-                .getContent(key1, committed1.getName(), committed1.getHash(), false)
+                .getContent(key1, committed1.getName(), committed1.getHash(), false, API_READ)
                 .getContent();
 
     Branch committed2 =
@@ -649,6 +550,7 @@ public abstract class AbstractTestMergeTransplant extends BaseTestServiceImpl {
                     returnConflictAsResult));
   }
 
+  @SuppressWarnings("deprecation")
   private void testMergeTransplantWithCustomModes(MergeTransplantActor actor)
       throws BaseNessieClientServerException {
     Branch target = createBranch("target");
@@ -711,5 +613,196 @@ public abstract class AbstractTestMergeTransplant extends BaseTestServiceImpl {
             tuple(KEY_1, "main-table1"),
             tuple(KEY_2, "branch-table2"),
             tuple(KEY_3, "branch-no-conflict"));
+  }
+
+  @Test
+  public void mergeRecreateTableNoConflict() throws BaseNessieClientServerException {
+
+    MergeRecreateTableSetup setup = setupMergeRecreateTable();
+
+    MergeResponse mergeResponse =
+        treeApi()
+            .mergeRefIntoBranch(
+                setup.root.getName(),
+                setup.root.getHash(),
+                setup.work.getName(),
+                setup.work.getHash(),
+                fromMessage("merge-recreate"),
+                emptyList(),
+                NORMAL,
+                Boolean.FALSE,
+                Boolean.FALSE,
+                Boolean.FALSE);
+
+    Branch rootAfterMerge =
+        Branch.of(mergeResponse.getTargetBranch(), mergeResponse.getResultantTargetHash());
+    soft.assertThat(rootAfterMerge).isNotEqualTo(setup.root);
+
+    ContentResponse tableOnRootAfterMerge =
+        contentApi()
+            .getContent(
+                setup.key, rootAfterMerge.getName(), rootAfterMerge.getHash(), false, API_READ);
+
+    soft.assertThat(setup.tableOnWork.getContent().getId())
+        .isEqualTo(tableOnRootAfterMerge.getContent().getId());
+
+    // add a commit modifying the table to ensure the content key is OK
+    commit(
+        rootAfterMerge,
+        fromMessage("add-to-merged-table"),
+        Put.of(
+            setup.key,
+            IcebergTable.of("something even more different", 43, 44, 45, 47)
+                .withId(tableOnRootAfterMerge.getContent().getId())));
+  }
+
+  @Test
+  public void mergeRecreateTableConflict() throws BaseNessieClientServerException {
+
+    MergeRecreateTableSetup setup = setupMergeRecreateTable();
+
+    Branch root =
+        commit(
+                setup.root,
+                fromMessage("update-table-on-root"),
+                Put.of(
+                    setup.key,
+                    IcebergTable.of("something even more different", 43, 44, 45, 46)
+                        .withId(setup.tableOnRoot.getContent().getId())))
+            .getTargetBranch();
+    soft.assertThat(root).isNotEqualTo(setup.root);
+
+    assertThatThrownBy(
+            () ->
+                treeApi()
+                    .mergeRefIntoBranch(
+                        root.getName(),
+                        root.getHash(),
+                        setup.work.getName(),
+                        setup.work.getHash(),
+                        fromMessage("merge-recreate-conflict"),
+                        emptyList(),
+                        NORMAL,
+                        Boolean.FALSE,
+                        Boolean.FALSE,
+                        Boolean.FALSE))
+        .isInstanceOf(NessieReferenceConflictException.class)
+        .hasMessage("The following keys have been changed in conflict: '%s'", setup.key);
+  }
+
+  private MergeRecreateTableSetup setupMergeRecreateTable()
+      throws NessieNotFoundException, NessieConflictException {
+    Branch root = createBranch("root");
+    Branch lastRoot = root;
+
+    ContentKey key = ContentKey.of("my_table");
+
+    root =
+        commit(
+                root,
+                fromMessage("initial-create-table"),
+                Put.of(key, IcebergTable.of("something", 42, 43, 44, 45)))
+            .getTargetBranch();
+    soft.assertThat(root).isNotEqualTo(lastRoot);
+
+    ContentResponse tableOnRoot =
+        contentApi().getContent(key, root.getName(), root.getHash(), false, API_READ);
+    soft.assertThat(tableOnRoot.getEffectiveReference()).isEqualTo(root);
+
+    Branch work = createBranch("recreateBranch", root);
+    soft.assertThat(work.getHash()).isEqualTo(root.getHash());
+    Branch lastWork = work;
+
+    work = commit(work, fromMessage("drop-table"), Delete.of(key)).getTargetBranch();
+    soft.assertThat(work).isNotEqualTo(lastWork);
+    lastWork = work;
+
+    work =
+        commit(
+                work,
+                fromMessage("recreate-table"),
+                Put.of(key, IcebergTable.of("something different", 42, 43, 44, 45)))
+            .getTargetBranch();
+    soft.assertThat(work).isNotEqualTo(lastWork);
+
+    ContentResponse tableOnWork =
+        contentApi().getContent(key, work.getName(), work.getHash(), false, API_READ);
+    soft.assertThat(tableOnWork.getEffectiveReference()).isEqualTo(work);
+
+    soft.assertThat(tableOnWork.getContent().getId())
+        .isNotEqualTo(tableOnRoot.getContent().getId());
+    return new MergeRecreateTableSetup(root, work, tableOnRoot, tableOnWork, key);
+  }
+
+  private static class MergeRecreateTableSetup {
+
+    final Branch root;
+    final Branch work;
+    final ContentResponse tableOnRoot;
+    final ContentResponse tableOnWork;
+    final ContentKey key;
+
+    MergeRecreateTableSetup(
+        Branch root,
+        Branch work,
+        ContentResponse tableOnRoot,
+        ContentResponse tableOnWork,
+        ContentKey key) {
+      this.root = root;
+      this.work = work;
+      this.tableOnRoot = tableOnRoot;
+      this.tableOnWork = tableOnWork;
+      this.key = key;
+    }
+  }
+
+  @Test
+  public void mergeConflictingKey() throws BaseNessieClientServerException {
+
+    Branch root = createBranch("root");
+    root =
+        commit(
+                root,
+                fromMessage("common-ancestor"),
+                Put.of(ContentKey.of("unrelated"), IcebergTable.of("unrelated", 42, 43, 44, 45)))
+            .getTargetBranch();
+
+    Branch work = createBranch("work", root);
+
+    ContentKey key = ContentKey.of("conflicting");
+
+    root =
+        commit(
+                root,
+                fromMessage("create-table-on-root"),
+                Put.of(key, IcebergTable.of("something", 42, 43, 44, 45)))
+            .getTargetBranch();
+
+    work =
+        commit(
+                work,
+                fromMessage("create-table-on-work"),
+                Put.of(key, IcebergTable.of("something else", 42, 43, 44, 45)))
+            .getTargetBranch();
+
+    Branch lastRoot = root;
+    Branch lastWork = work;
+
+    assertThatThrownBy(
+            () ->
+                treeApi()
+                    .mergeRefIntoBranch(
+                        lastRoot.getName(),
+                        lastRoot.getHash(),
+                        lastWork.getName(),
+                        lastWork.getHash(),
+                        fromMessage("merge-conflicting-keys"),
+                        emptyList(),
+                        NORMAL,
+                        Boolean.FALSE,
+                        Boolean.FALSE,
+                        Boolean.FALSE))
+        .isInstanceOf(NessieReferenceConflictException.class)
+        .hasMessage("The following keys have been changed in conflict: 'conflicting'");
   }
 }

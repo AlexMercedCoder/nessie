@@ -14,18 +14,28 @@
  * limitations under the License.
  */
 
-plugins {
-  id("nessie-conventions-server")
-  id("nessie-jacoco")
-}
+plugins { id("nessie-conventions-java11") }
 
-extra["maven.name"] = "Nessie - Storage - Common proto serialization"
+publishingHelper { mavenName = "Nessie - Storage - Common serialization" }
 
-description = "Protobuf based serialization for storage objects."
+description = "Serialization for storage objects."
 
 dependencies {
   api(project(":nessie-versioned-storage-common"))
   api(project(":nessie-versioned-storage-common-proto"))
+
+  implementation(platform(libs.jackson.bom))
+  implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-smile")
+
+  // required for custom object serialization tests
+  testImplementation("com.fasterxml.jackson.datatype:jackson-datatype-guava")
+  testImplementation("com.fasterxml.jackson.datatype:jackson-datatype-jdk8")
+  testImplementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
+
+  testImplementation(project(":nessie-versioned-storage-common-tests"))
+
+  testCompileOnly(project(":nessie-immutables-std"))
+  testAnnotationProcessor(project(":nessie-immutables-std", configuration = "processor"))
 
   testImplementation(platform(libs.junit.bom))
   testImplementation(libs.bundles.junit.testing)

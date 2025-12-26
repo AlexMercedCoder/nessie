@@ -10,9 +10,9 @@ Maven. The coordinates are:
 
 ```
 <dependency>
-  <groupId>org.projectnessie</groupId>
+  <groupId>org.projectnessie.nessie</groupId>
   <artifactId>nessie-client</artifactId>
-  <version>{{ versions.java }}</version>
+  <version>{{ versions.nessie }}</version>
 </dependency> 
 ```
 
@@ -25,23 +25,23 @@ tests) + Jackson's DataBinding and JAX-RS modules (any version from the last ~3+
 ## API
 
 The `NessieClientBuilder` and concrete builder implementations (such as `HttpClientBuilder`) provide an easy way of configuring and building a `NessieApi`. The currently stable API that should be used
-is `NessieApiV1`, which can be instantiated as shown below:
+is `NessieApiV2`, which can be instantiated as shown below:
 
 
 ```java
 
 import java.net.URI;
 import java.util.List;
-import org.projectnessie.client.api.NessieApiV1;
-import org.projectnessie.client.http.HttpClientBuilder;
+import org.projectnessie.client.api.NessieApiV2;
+import org.projectnessie.client.NessieClientBuilder;
 import org.projectnessie.model.Reference;
 
-NessieApiV1 api = HttpClientBuilder.builder()
-  .withUri(URI.create("http://localhost:19121/api/v1"))
-  .build(NessieApiV1.class);
+NessieApiV2 api = NessieClientBuilder.createClientBuilder(null, null)
+  .withUri(URI.create("http://localhost:19120/api/v2"))
+  .build(NessieApiV2.class);
 
-List<Reference> references = api.getAllReferences().get();
-references.stream()
+api.getAllReferences()
+  .stream()
   .map(Reference::getName)
   .forEach(System.out::println);
 ```
@@ -131,8 +131,8 @@ config.getVersion();
 Creates a new commit by adding metadata for an `IcebergTable` under the specified `ContentKey` instance represented by `key` and deletes content represented by `key2`
 
 ```java
-ContentKey key = ContentKey.of("table.name.space", "name");
-ContentKey key2 = ContentKey.of("other.name.space", "name2");
+ContentKey key = ContentKey.of("your-namespace", "your-table-name");
+ContentKey key2 = ContentKey.of("your-namespace2", "your-table-name2");
 IcebergTable icebergTable = IcebergTable.of("path1", 42L);
 api.commitMultipleOperations()
     .branchName(branch)
@@ -147,7 +147,7 @@ api.commitMultipleOperations()
 
 Fetches the content for a single `ContentKey`
 ```java
-ContentKey key = ContentKey.of("table.name.space", "name");
+ContentKey key = ContentKey.of("your-namespace", "your-table-name");
 Map<ContentKey, Content> map = api.getContent().key(key).refName("dev").get();
 ```
 
@@ -155,9 +155,9 @@ Fetches the content for multiple `ContentKey` instances
 ```java
 List<ContentKey> keys =
   Arrays.asList(
-  ContentKey.of("table.name.space", "name1"),
-  ContentKey.of("table.name.space", "name2"),
-  ContentKey.of("table.name.space", "name3"));
+  ContentKey.of("your-namespace1", "your-table-name1"),
+  ContentKey.of("your-namespace1", "your-table-name2"),
+  ContentKey.of("your-namespace2", "your-table-name3"));
 Map<ContentKey, Content> allContent = api.getContent().keys(keys).refName("dev").get();
 ```
 
@@ -205,23 +205,65 @@ api.transplantCommitsIntoBranch()
 ## Authentication
 
 Nessie has multiple `NessieAuthenticationProvider` implementations that allow different client authentication mechanisms as can be seen below.
-The documentation for how to configure Nessie server authentication can be found [here](../try/authentication.md).
+The documentation for how to configure Nessie server authentication can be found [here](../nessie-latest/authentication.md).
 
-The `BasicAuthenticationProvider` allows connecting to a Nessie server that has `BASIC` authentication enabled.
-Note that `BASIC` is not supported in production and should only be used for development/testing.
-```java
-NessieApiV1 api =
-  HttpClientBuilder.builder()
-  .withUri(URI.create("http://localhost:19121/api/v1"))
-  .withAuthentication(BasicAuthenticationProvider.create("my_username", "very_secret"))
-  .build(NessieApiV1.class);
-```
+When configured with authentication enabled, a Nessie server expects every HTTP request to contain a 
+valid Bearer token in an `Authorization` header. Two authentication providers allow a Nessie client
+to automatically add the required token to the HTTP requests:
 
-The `BearerAuthenticationProvider` allows connecting to a Nessie server that has `BEARER` authentication enabled.
-```java
-NessieApiV1 api =
-  HttpClientBuilder.builder()
-  .withUri(URI.create("http://localhost:19121/api/v1"))
-  .withAuthentication(BearerAuthenticationProvider.create("bearerToken"))
-  .build(NessieApiV1.class);
-```
+1. The `BearerAuthenticationProvider` is the simplest one and directly takes the Bearer token as a 
+parameter; _the token must be valid for the entire duration of the client's lifetime_:
+
+    ```java
+    NessieApiV2 api =
+      NessieClientBuilder.createClientBuilder(null, null)
+      .withUri(URI.create("http://localhost:19120/api/v2"))
+      .withAuthentication(BearerAuthenticationProvider.create("bearerToken"))
+      .build(NessieApiV2.class);
+    ```
+
+2. The `Oauth2AuthenticationProvider` is more elaborate; at a minimum, it takes an OAuth2 token 
+endpoint URI, a Client ID and a Client Secret, and uses them to obtain an access token from the 
+token endpoint, which is then used as a Bearer token to authenticate against Nessie:
+
+    ```java
+    Map<String, String> authConfig =
+        Map.of(
+            CONF_NESSIE_AUTH_TYPE, "OAUTH2",
+            CONF_NESSIE_OAUTH2_TOKEN_ENDPOINT,
+                "https://<oidc-server>/realms/<realm-name>/protocol/openid-connect/token",
+            CONF_NESSIE_OAUTH2_CLIENT_ID, "my_client_id",
+            CONF_NESSIE_OAUTH2_CLIENT_SECRET, "very_secret");
+    NessieApiV2 api =
+        NessieClientBuilder.createClientBuilder(null, null)
+            .withUri(URI.create("http://localhost:19120/api/v2"))
+            .withAuthenticationFromConfig(authConfig::get)
+            .build(NessieApiV2.class);
+    ```
+    Since Nessie 0.75.1, the `Oauth2AuthenticationProvider` can also be configured programmatically;
+    this can be convenient if it's necessary to supply a custom SSL context, a custom executor or 
+    custom Jackson object mapper:
+    ```java
+    URI tokenEndpointUri = ...;
+    SSLContext sslContext = ...;
+    ExecutorService executor = ...;
+    ObjectMapper objectMapper = ...;
+    OAuth2AuthenticatorConfig authConfig =
+        OAuth2AuthenticatorConfig.builder()
+            .tokenEndpoint(tokenEndpointUri)
+            .clientId("my_client_id")
+            .clientSecret("very_secret")
+            .sslContext(sslContext)
+            .executor(executor) 
+            .objectMapper(objectMapper)
+            .build();
+    NessieApiV2 api =
+        NessieClientBuilder.createClientBuilder(null, null)
+            .withUri(URI.create("http://localhost:19120/api/v2"))
+            .withAuthentication(OAuth2AuthenticationProvider.create(authConfig))
+            .build(NessieApiV2.class);
+    ```
+   
+The main advantage of the `Oauth2AuthenticationProvider` over `BearerAuthenticationProvider` is 
+that the token is automatically refreshed when it expires. It has more configuration options, 
+which are documented in the [Tools Configuration](../nessie-latest/client_config.md) section.

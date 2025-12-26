@@ -30,6 +30,10 @@ public class QuarkusNessieClientResolver extends NessieClientResolver {
 
   @Override
   protected URI getBaseUri(ExtensionContext extensionContext) {
-    return URI.create(String.format("http://localhost:%d/api/v1", getQuarkusTestPort()));
+    return getQuarkusBaseTestUri();
+  }
+
+  public static URI getQuarkusBaseTestUri() {
+    return URI.create(String.format("http://localhost:%d/", getQuarkusTestPort()));
   }
 }

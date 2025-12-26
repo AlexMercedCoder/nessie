@@ -23,6 +23,7 @@ import static java.util.Collections.emptyIterator;
 import static java.util.Collections.emptyList;
 import static java.util.Objects.requireNonNull;
 import static org.projectnessie.nessie.relocated.protobuf.ByteString.copyFromUtf8;
+import static org.projectnessie.versioned.storage.common.indexes.StoreIndexElement.indexElement;
 import static org.projectnessie.versioned.storage.common.indexes.StoreKey.key;
 import static org.projectnessie.versioned.storage.common.logic.CommitConflict.ConflictType.KEY_EXISTS;
 import static org.projectnessie.versioned.storage.common.logic.CommitRetry.commitRetry;
@@ -38,25 +39,29 @@ import static org.projectnessie.versioned.storage.common.logic.ReferenceLogicImp
 import static org.projectnessie.versioned.storage.common.logic.ReferenceLogicImpl.CommitReferenceResult.Kind.REF_ROW_EXISTS;
 import static org.projectnessie.versioned.storage.common.logic.ReferenceLogicImpl.CommitReferenceResult.Kind.REF_ROW_MISSING;
 import static org.projectnessie.versioned.storage.common.objtypes.CommitHeaders.newCommitHeaders;
+import static org.projectnessie.versioned.storage.common.objtypes.CommitOp.commitOp;
 import static org.projectnessie.versioned.storage.common.objtypes.RefObj.ref;
+import static org.projectnessie.versioned.storage.common.objtypes.StandardObjType.COMMIT;
+import static org.projectnessie.versioned.storage.common.objtypes.StandardObjType.REF;
 import static org.projectnessie.versioned.storage.common.persist.ObjId.EMPTY_OBJ_ID;
-import static org.projectnessie.versioned.storage.common.persist.ObjType.COMMIT;
-import static org.projectnessie.versioned.storage.common.persist.ObjType.REF;
 import static org.projectnessie.versioned.storage.common.persist.Reference.INTERNAL_PREFIX;
 import static org.projectnessie.versioned.storage.common.persist.Reference.isInternalReferenceName;
 import static org.projectnessie.versioned.storage.common.persist.Reference.reference;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.AbstractIterator;
+import jakarta.annotation.Nonnull;
+import jakarta.annotation.Nullable;
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.BiPredicate;
+import java.util.function.Function;
 import java.util.function.Supplier;
-import javax.annotation.Nonnull;
-import javax.annotation.Nullable;
 import org.projectnessie.nessie.relocated.protobuf.ByteString;
 import org.projectnessie.versioned.storage.common.exceptions.CommitConflictException;
 import org.projectnessie.versioned.storage.common.exceptions.CommitWrappedException;
@@ -185,9 +190,18 @@ final class ReferenceLogicImpl implements ReferenceLogic {
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public List<Reference> getReferences(
-      @Nonnull @jakarta.annotation.Nonnull List<String> references) {
+  public List<Reference> getReferences(@Nonnull List<String> references) {
+    return getReferences(references, persist::fetchReferences);
+  }
+
+  @Override
+  @Nonnull
+  public List<Reference> getReferencesForUpdate(@Nonnull List<String> references) {
+    return getReferences(references, persist::fetchReferencesForUpdate);
+  }
+
+  private List<Reference> getReferences(
+      @Nonnull List<String> references, Function<String[], Reference[]> fetchRefs) {
     int refCount = references.size();
     String[] refsArray;
     int refRefsIndex = references.indexOf(REF_REFS.name());
@@ -198,7 +212,7 @@ final class ReferenceLogicImpl implements ReferenceLogic {
       refRefsIndex = references.size();
       refsArray[refRefsIndex] = REF_REFS.name();
     }
-    Reference[] refs = persist.fetchReferences(refsArray);
+    Reference[] refs = fetchRefs.apply(refsArray);
 
     Supplier<SuppliedCommitIndex> refsIndexSupplier = createRefsIndexSupplier(refs[refRefsIndex]);
 
@@ -219,9 +233,7 @@ final class ReferenceLogicImpl implements ReferenceLogic {
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public PagedResult<Reference, String> queryReferences(
-      @Nonnull @jakarta.annotation.Nonnull ReferencesQuery referencesQuery) {
+  public PagedResult<Reference, String> queryReferences(@Nonnull ReferencesQuery referencesQuery) {
     Optional<PagingToken> pagingToken = referencesQuery.pagingToken();
 
     StoreKey prefix = referencesQuery.referencePrefix().map(StoreKey::keyFromString).orElse(null);
@@ -303,7 +315,6 @@ final class ReferenceLogicImpl implements ReferenceLogic {
     }
 
     @Nonnull
-    @jakarta.annotation.Nonnull
     @Override
     public PagingToken tokenForKey(String key) {
       return key != null ? pagingToken(copyFromUtf8(key)) : emptyPagingToken();
@@ -312,15 +323,33 @@ final class ReferenceLogicImpl implements ReferenceLogic {
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
   public Reference createReference(
-      @Nonnull @jakarta.annotation.Nonnull String name,
-      @Nonnull @jakarta.annotation.Nonnull ObjId pointer,
-      @Nullable @jakarta.annotation.Nullable ObjId extendedInfoObj)
+      @Nonnull String name, @Nonnull ObjId pointer, @Nullable ObjId extendedInfoObj)
+      throws RefAlreadyExistsException, RetryTimeoutException {
+    long refCreatedTimestamp = persist.config().currentTimeMicros();
+    return createReferenceInternal(name, pointer, extendedInfoObj, refCreatedTimestamp);
+  }
+
+  @Override
+  @Nonnull
+  public Reference createReferenceForImport(
+      @Nonnull String name,
+      @Nonnull ObjId pointer,
+      @Nullable ObjId extendedInfoObj,
+      long createdAtMicros)
+      throws RefAlreadyExistsException, RetryTimeoutException {
+    return createReferenceInternal(name, pointer, extendedInfoObj, createdAtMicros);
+  }
+
+  @Nonnull
+  private Reference createReferenceInternal(
+      @Nonnull String name,
+      @Nonnull ObjId pointer,
+      @Nullable ObjId extendedInfoObj,
+      long refCreatedTimestamp)
       throws RefAlreadyExistsException, RetryTimeoutException {
     checkArgument(!isInternalReferenceName(name));
 
-    long refCreatedTimestamp = persist.config().currentTimeMicros();
     while (true) {
       CommitReferenceResult commitToIndex =
           commitCreateReference(name, pointer, extendedInfoObj, refCreatedTimestamp);
@@ -374,13 +403,11 @@ final class ReferenceLogicImpl implements ReferenceLogic {
   }
 
   @Override
-  public void deleteReference(
-      @Nonnull @jakarta.annotation.Nonnull String name,
-      @Nonnull @jakarta.annotation.Nonnull ObjId expectedPointer)
+  public void deleteReference(@Nonnull String name, @Nonnull ObjId expectedPointer)
       throws RefNotFoundException, RefConditionFailedException, RetryTimeoutException {
     checkArgument(!isInternalReferenceName(name));
 
-    Reference reference = persist.fetchReference(name);
+    Reference reference = persist.fetchReferenceForUpdate(name);
     Supplier<SuppliedCommitIndex> indexSupplier = null;
     if (reference == null) {
       StoreKey nameKey = key(name);
@@ -437,7 +464,8 @@ final class ReferenceLogicImpl implements ReferenceLogic {
               expectedPointer,
               false,
               reference.createdAtMicros(),
-              reference.extendedInfoObj()));
+              reference.extendedInfoObj(),
+              reference.previousPointers()));
     }
   }
 
@@ -480,7 +508,7 @@ final class ReferenceLogicImpl implements ReferenceLogic {
       return commitRetry(
           persist,
           (p, retryState) -> {
-            Reference refRefs = requireNonNull(p.fetchReference(REF_REFS.name()));
+            Reference refRefs = requireNonNull(p.fetchReferenceForUpdate(REF_REFS.name()));
             RefObj ref = ref(name, pointer, refCreatedTimestamp, extendedInfoObj);
             try {
               p.storeObj(ref);
@@ -521,7 +549,7 @@ final class ReferenceLogicImpl implements ReferenceLogic {
       StoreIndexElement<CommitOp> el = indexSupplier.get().index().get(key(name));
       checkNotNull(el, "Key %s missing in index", name);
 
-      Reference existing = persist.fetchReference(name);
+      Reference existing = persist.fetchReferenceForUpdate(name);
 
       if (existing != null) {
         return new CommitReferenceResult(reference, existing, REF_ROW_EXISTS);
@@ -559,7 +587,7 @@ final class ReferenceLogicImpl implements ReferenceLogic {
       commitRetry(
           persist,
           (p, retryState) -> {
-            Reference refRefs = requireNonNull(p.fetchReference(REF_REFS.name()));
+            Reference refRefs = requireNonNull(p.fetchReferenceForUpdate(REF_REFS.name()));
             if (expectedRefRefsHead != null && !refRefs.pointer().equals(expectedRefRefsHead)) {
               throw new RuntimeException(REF_REFS_ADVANCED);
             }
@@ -648,20 +676,89 @@ final class ReferenceLogicImpl implements ReferenceLogic {
 
   @Override
   @Nonnull
-  @jakarta.annotation.Nonnull
-  public Reference assignReference(
-      @Nonnull @jakarta.annotation.Nonnull Reference current,
-      @Nonnull @jakarta.annotation.Nonnull ObjId newPointer)
+  public Reference assignReference(@Nonnull Reference current, @Nonnull ObjId newPointer)
       throws RefNotFoundException, RefConditionFailedException {
     checkArgument(!current.isInternal());
 
     return persist.updateReferencePointer(current, newPointer);
   }
 
+  @Override
+  public Reference rewriteCommitLog(
+      @Nonnull Reference current, BiPredicate<Integer, CommitObj> cutoffPredicate)
+      throws RefNotFoundException,
+          RefConditionFailedException,
+          CommitConflictException,
+          ObjNotFoundException {
+    var commitLogic = commitLogic(persist);
+    var indexesLogic = indexesLogic(persist);
+
+    var log = commitLogic.commitLog(CommitLogQuery.commitLogQuery(current.pointer()));
+    var commits = new ArrayDeque<CommitObj>();
+    for (int n = 1; log.hasNext(); n++) {
+      var commit = log.next();
+
+      if (cutoffPredicate.test(n, commit)) {
+        // THIS is the last commit to retain
+
+        if (commit.directParent().equals(EMPTY_OBJ_ID)) {
+          return current;
+        }
+
+        // Build the "oldest" commit
+        var c =
+            newCommitBuilder()
+                .message(commit.message())
+                .parentCommitId(EMPTY_OBJ_ID)
+                .headers(commit.headers());
+        for (StoreIndexElement<CommitOp> element : indexesLogic.buildCompleteIndexOrEmpty(commit)) {
+          var op = element.content();
+          if (op.action().exists()) {
+            c.addAdds(commitAdd(element.key(), op.payload(), op.value(), null, op.contentId()));
+          }
+        }
+        var head = commitLogic.buildCommitObj(c.build());
+        commitLogic.storeCommit(head, List.of());
+
+        // Build the "next newer" commit(s)
+        while (!commits.isEmpty()) {
+          commit = commits.removeLast();
+
+          c =
+              newCommitBuilder()
+                  .message(commit.message())
+                  .parentCommitId(head.id())
+                  .headers(commit.headers());
+          for (StoreIndexElement<CommitOp> element :
+              indexesLogic.incrementalIndexFromCommit(commit)) {
+            var op = element.content();
+            if (op.action().currentCommit()) {
+              if (op.action().exists()) {
+                c.addAdds(commitAdd(element.key(), op.payload(), op.value(), null, op.contentId()));
+              } else {
+                c.addRemoves(commitRemove(element.key(), op.payload(), op.value(), op.contentId()));
+              }
+            }
+          }
+          head = commitLogic.buildCommitObj(c.build());
+          commitLogic.storeCommit(head, List.of());
+        }
+
+        return persist.updateReferencePointer(current, head.id());
+      }
+
+      // memoize the
+      commits.addLast(commit);
+    }
+
+    // no cut-off found, just return "current"
+    return current;
+  }
+
   private Reference maybeRecover(
-      @Nonnull @jakarta.annotation.Nonnull String name,
+      @Nonnull String name,
       Reference ref,
-      @Nonnull @jakarta.annotation.Nonnull Supplier<SuppliedCommitIndex> refsIndexSupplier) {
+      @Nonnull Supplier<SuppliedCommitIndex> refsIndexSupplier) {
     if (ref == null) {
       SuppliedCommitIndex suppliedIndex = refsIndexSupplier.get();
 
@@ -786,8 +883,8 @@ final class ReferenceLogicImpl implements ReferenceLogic {
   }
 
   private boolean refRefsOutOfDate(SuppliedCommitIndex index) {
-    Reference refRefs = persist.fetchReference(REF_REFS.name());
-    return !index.pointer().equals(requireNonNull(refRefs).pointer());
+    Reference refRefs = persist.fetchReferenceForUpdate(REF_REFS.name());
+    return !index.pointer().equals(requireNonNull(refRefs, "internal refs missing").pointer());
   }
 
   @VisibleForTesting

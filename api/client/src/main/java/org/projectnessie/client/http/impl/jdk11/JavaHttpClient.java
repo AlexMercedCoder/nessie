@@ -15,12 +15,16 @@
  */
 package org.projectnessie.client.http.impl.jdk11;
 
+import java.io.OutputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpClient.Redirect;
 import java.net.http.HttpClient.Version;
 import java.time.Duration;
 import java.util.Locale;
+import java.util.concurrent.Flow;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.TimeUnit;
 import org.projectnessie.client.http.HttpRequest;
 import org.projectnessie.client.http.impl.HttpRuntimeConfig;
 
@@ -29,15 +33,28 @@ import org.projectnessie.client.http.impl.HttpRuntimeConfig;
  *
  * <p>Java's new {@link HttpClient} provides a lot of benefits, such as HTTP/2 support, proper
  * redirection support (if enabled), and advanced security capabilities. See the {@link
- * org.projectnessie.client.http.HttpClientBuilder} for parameters supported only by this client
+ * org.projectnessie.client.NessieClientBuilder} for parameters supported only by this client
  * implementation.
  */
-@SuppressWarnings("Since15") // IntelliJ warns about new APIs. 15 is misleading, it means 11
-public final class JavaHttpClient implements org.projectnessie.client.http.HttpClient {
+final class JavaHttpClient implements org.projectnessie.client.http.HttpClient {
   final HttpRuntimeConfig config;
   private HttpClient client;
 
-  public JavaHttpClient(HttpRuntimeConfig config) {
+  /**
+   * Executor used to serialize the response object to JSON.
+   *
+   * <p>Java's new {@link HttpClient} uses the {@link Flow.Publisher}/{@link Flow.Subscriber}/{@link
+   * Flow.Subscription} mechanism to write and read request and response data. We have to use that
+   * protocol. Since none of the implementations must block, writes and reads run in a separate
+   * pool.
+   *
+   * <p>Jackson has no "reactive" serialization mechanism, which means that we have to provide a
+   * custom {@link OutputStream}, which delegates {@link Flow.Subscriber#onNext(Object) writes} to
+   * the subscribing code.
+   */
+  private final ForkJoinPool writerPool;
+
+  JavaHttpClient(HttpRuntimeConfig config) {
     this.config = config;
 
     HttpClient.Builder clientBuilder =
@@ -61,11 +78,12 @@ public final class JavaHttpClient implements org.projectnessie.client.http.HttpC
     }
 
     client = clientBuilder.build();
+    writerPool = new ForkJoinPool(Math.max(8, ForkJoinPool.getCommonPoolParallelism()));
   }
 
   @Override
-  public HttpRequest newRequest() {
-    return new JavaRequest(this.config, (req, handler) -> client.send(req, handler));
+  public HttpRequest newRequest(URI baseUri) {
+    return new JavaRequest(this.config, baseUri, client::send, writerPool);
   }
 
   @Override
@@ -73,9 +91,51 @@ public final class JavaHttpClient implements org.projectnessie.client.http.HttpC
     return config.getBaseUri();
   }
 
+  @SuppressWarnings({"DataFlowIssue", "ResultOfMethodCallIgnored"})
   @Override
   public void close() {
-    client = null;
-    config.close();
+    Exception fail = null;
+    try {
+      if (client instanceof AutoCloseable) {
+        ((AutoCloseable) client).close();
+      }
+    } catch (Exception e) {
+      fail = e;
+    } finally {
+      client = null;
+    }
+
+    try {
+      config.close();
+    } catch (Exception e) {
+      if (fail == null) {
+        fail = e;
+      } else {
+        fail.addSuppressed(e);
+      }
+    } finally {
+      try {
+        writerPool.shutdown();
+        try {
+          writerPool.awaitTermination(10, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+          // populate
+          Thread.currentThread().interrupt();
+        }
+      } catch (Exception e) {
+        if (fail == null) {
+          fail = e;
+        } else {
+          fail.addSuppressed(e);
+        }
+      }
+    }
+
+    if (fail instanceof RuntimeException) {
+      throw (RuntimeException) fail;
+    }
+    if (fail != null) {
+      throw new RuntimeException(fail);
+    }
   }
 }

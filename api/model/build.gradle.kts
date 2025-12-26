@@ -20,11 +20,11 @@ import io.smallrye.openapi.gradleplugin.SmallryeOpenApiTask
 import org.apache.tools.ant.filters.ReplaceTokens
 
 plugins {
-  id("nessie-conventions-client")
-  id("nessie-jacoco")
-  alias(libs.plugins.annotations.stripper)
+  id("nessie-conventions-java11")
   alias(libs.plugins.smallrye.openapi)
 }
+
+publishingHelper { mavenName = "Nessie - Model" }
 
 dependencies {
   implementation(platform(libs.jackson.bom))
@@ -41,13 +41,12 @@ dependencies {
 
   compileOnly(libs.microprofile.openapi)
 
-  compileOnly(libs.immutables.builder)
-  compileOnly(libs.immutables.value.annotations)
-  annotationProcessor(libs.immutables.value.processor)
+  compileOnly(project(":nessie-immutables-std"))
+  annotationProcessor(project(":nessie-immutables-std", configuration = "processor"))
 
   testCompileOnly(libs.microprofile.openapi)
-  testCompileOnly(libs.immutables.value.annotations)
-  testAnnotationProcessor(libs.immutables.value.processor)
+  testCompileOnly(project(":nessie-immutables-std"))
+  testAnnotationProcessor(project(":nessie-immutables-std", configuration = "processor"))
   testCompileOnly(libs.jakarta.ws.rs.api)
   testCompileOnly(libs.javax.ws.rs)
   testCompileOnly(libs.jakarta.validation.api)
@@ -55,18 +54,30 @@ dependencies {
   testCompileOnly(libs.jakarta.annotation.api)
   testCompileOnly(libs.findbugs.jsr305)
 
-  testImplementation(platform(libs.junit.bom))
-  testImplementation(libs.bundles.junit.testing)
+  testFixturesApi(platform(libs.junit.bom))
+  testFixturesApi(libs.bundles.junit.testing)
+
+  intTestImplementation(platform(libs.testcontainers.bom))
+  intTestImplementation("org.testcontainers:testcontainers")
+  intTestImplementation(libs.awaitility)
+  intTestImplementation(project(":nessie-container-spec-helper"))
+  intTestCompileOnly(project(":nessie-immutables-std"))
+  intTestRuntimeOnly(libs.logback.classic)
 }
 
 extensions.configure<SmallryeOpenApiExtension> {
-  scanDependenciesDisable.set(false)
-  infoVersion.set(project.version.toString())
-  schemaFilename.set("META-INF/openapi/openapi")
-  operationIdStrategy.set(OperationIdStrategy.METHOD)
-  scanPackages.set(
+  scanDependenciesDisable = false
+  infoVersion = project.version.toString()
+  infoDescription =
+    "Transactional Catalog for Data Lakes\n" +
+      "\n" +
+      "* Git-inspired data version control\n" +
+      "* Cross-table transactions and visibility\n" +
+      "* Works with Apache Iceberg tables"
+  schemaFilename = "META-INF/openapi/openapi"
+  operationIdStrategy = OperationIdStrategy.METHOD
+  scanPackages =
     listOf("org.projectnessie.api", "org.projectnessie.api.http", "org.projectnessie.model")
-  )
 }
 
 tasks.named<ProcessResources>("processResources").configure {
@@ -89,9 +100,43 @@ generateOpenApiSpec.configure {
 
 artifacts { add(openapiSource.name, file("src/main/resources/META-INF")) }
 
-annotationStripper {
-  registerDefault().configure {
-    annotationsToDrop("^jakarta[.].+".toRegex())
-    unmodifiedClassesForJavaVersion.set(11)
+tasks.named<Test>("intTest").configure {
+  dependsOn(generateOpenApiSpec)
+  systemProperty(
+    "openapiSchemaDir",
+    project.layout.buildDirectory.dir("generated/openapi/META-INF/openapi").get().toString(),
+  )
+  systemProperty("redoclyConfDir", "$projectDir/src/redocly")
+}
+
+testing {
+  suites {
+    register("testUriCompliance", JvmTestSuite::class.java) {
+      useJUnitJupiter(libsRequiredVersion("junit"))
+
+      dependencies {
+        implementation.add(project())
+        implementation.add(platform(libs.jetty.bom))
+        implementation.add("org.eclipse.jetty:jetty-http")
+        compileOnly(libs.microprofile.openapi)
+      }
+
+      targets {
+        all {
+          testTask.configure {
+            usesService(
+              gradle.sharedServices.registrations.named("testParallelismConstraint").get().service
+            )
+          }
+          tasks.named("test").configure { dependsOn(testTask) }
+        }
+      }
+    }
   }
 }
+
+configurations.named("testUriComplianceImplementation").configure {
+  extendsFrom(configurations.getByName("testImplementation"))
+}
+
+tasks.named<JavaCompile>("compileTestUriComplianceJava") { options.release = 21 }

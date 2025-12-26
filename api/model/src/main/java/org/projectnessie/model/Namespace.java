@@ -15,8 +15,8 @@
  */
 package org.projectnessie.model;
 
-import static org.projectnessie.model.Util.DOT_STRING;
-import static org.projectnessie.model.Util.FIRST_ALLOWED_KEY_CHAR;
+import static java.lang.String.format;
+import static org.projectnessie.model.Namespace.Empty.EMPTY_NAMESPACE;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
@@ -43,11 +43,20 @@ import org.immutables.value.Value.Derived;
 @JsonSerialize(as = ImmutableNamespace.class)
 @JsonDeserialize(as = ImmutableNamespace.class)
 @JsonTypeName("NAMESPACE")
-public abstract class Namespace extends Content {
+public abstract class Namespace extends Content implements Elements {
 
-  static final String ERROR_MSG_TEMPLATE =
-      "'%s' is not a valid namespace identifier (should not end with '.')";
+  /** This separate static class is needed to prevent class loader deadlocks. */
+  public static final class Empty {
+    private Empty() {}
 
+    public static final Namespace EMPTY_NAMESPACE = builder().build();
+  }
+
+  /**
+   * Refactor all code references to this constant to use {@link Empty#EMPTY_NAMESPACE}, there's a
+   * non-zero risk of causing a class loader deadlock.
+   */
+  @Deprecated
   public static final Namespace EMPTY = builder().elements(Collections.emptyList()).build();
 
   public static ImmutableNamespace.Builder builder() {
@@ -75,16 +84,19 @@ public abstract class Namespace extends Content {
 
   @NotNull
   @jakarta.validation.constraints.NotNull
+  @Override
   public abstract List<String> getElements();
 
   @JsonIgnore
   @Value.Redacted
+  @Override
   public String[] getElementsArray() {
     return getElements().toArray(new String[0]);
   }
 
   @JsonIgnore
   @Value.Redacted
+  @Override
   public int getElementCount() {
     return getElements().size();
   }
@@ -95,6 +107,16 @@ public abstract class Namespace extends Content {
     List<String> elements = getElements();
     if (elements.size() <= 1) {
       throw new IllegalArgumentException("Namespace has no parent");
+    }
+    return Namespace.of(elements.subList(0, elements.size() - 1));
+  }
+
+  @JsonIgnore
+  @Value.Redacted
+  public Namespace getParentOrEmpty() {
+    List<String> elements = getElements();
+    if (elements.size() <= 1) {
+      return EMPTY_NAMESPACE;
     }
     return Namespace.of(elements.subList(0, elements.size() - 1));
   }
@@ -139,37 +161,25 @@ public abstract class Namespace extends Content {
   public static Namespace of(Map<String, String> properties, String... elements) {
     Objects.requireNonNull(elements, "elements must be non-null");
     if (elements.length == 0 || (elements.length == 1 && "".equals(elements[0]))) {
-      return EMPTY;
-    }
-
-    for (String e : elements) {
-      if (e == null) {
-        throw new IllegalArgumentException(
-            String.format(
-                "Namespace '%s' must not contain a null element.", Arrays.toString(elements)));
-      }
-      if (e.isEmpty()) {
-        throw new IllegalArgumentException(
-            String.format(
-                "Namespace '%s' must not contain an empty element.", Arrays.toString(elements)));
-      }
-      if (e.chars().anyMatch(i -> i < FIRST_ALLOWED_KEY_CHAR)) {
-        throw new IllegalArgumentException(
-            String.format(
-                "Namespace '%s' must not contain characters less than 0x%2h.",
-                Arrays.toString(elements), FIRST_ALLOWED_KEY_CHAR));
-      }
-    }
-
-    if (DOT_STRING.equals(elements[elements.length - 1])) {
-      throw new IllegalArgumentException(
-          String.format(ERROR_MSG_TEMPLATE, Arrays.toString(elements)));
+      return EMPTY_NAMESPACE;
     }
 
     return ImmutableNamespace.builder()
         .elements(Arrays.asList(elements))
         .properties(properties)
         .build();
+  }
+
+  @Value.Check
+  protected void validate() {
+    Elements.super.validate("Namespace");
+
+    int elementCount = getElementCount();
+    List<String> elements = getElements();
+    if (elementCount > 0 && ".".equals(elements.get(elementCount - 1))) {
+      throw new IllegalArgumentException(
+          format("Namespace '%s' must not contain a '.' element", elements));
+    }
   }
 
   /**
@@ -199,9 +209,10 @@ public abstract class Namespace extends Content {
 
   /**
    * Builds a {@link Namespace} instance for the given elements split by the <b>.</b> (dot)
-   * character.
+   * character, see {@linkplain Util#fromPathString(String) encoding specification}.
    *
-   * @param identifier The identifier to build the namespace from.
+   * @param identifier The identifier to build the namespace from, see {@linkplain
+   *     Util#fromPathString(String) encoding specification}.
    * @return Splits the given <b>identifier</b> by <b>.</b> and returns a {@link Namespace}
    *     instance. If <b>identifier</b> is empty, then {@link Namespace#name()} will be an empty
    *     string.
@@ -209,10 +220,7 @@ public abstract class Namespace extends Content {
   public static Namespace parse(String identifier) {
     Objects.requireNonNull(identifier, "identifier must be non-null");
     if (identifier.isEmpty()) {
-      return EMPTY;
-    }
-    if (identifier.endsWith(DOT_STRING)) {
-      throw new IllegalArgumentException(String.format(ERROR_MSG_TEMPLATE, identifier));
+      return EMPTY_NAMESPACE;
     }
     return Namespace.of(Util.fromPathString(identifier));
   }
@@ -241,27 +249,37 @@ public abstract class Namespace extends Content {
   }
 
   /**
-   * Convert from path encoded string to normal string.
-   *
-   * @param encoded Path encoded string
-   * @return Actual key.
+   * Parses the path encoded string to a {@link Namespace} object, supports all Nessie Spec
+   * versions, see {@link Elements#elementsFromPathString(String)}.
    */
   public static Namespace fromPathString(String encoded) {
     return parse(encoded);
   }
 
-  /**
-   * Convert this namespace to a URL encoded path string.
-   *
-   * @return String encoded for path use.
-   */
+  @Override
+  @Value.NonAttribute
+  @JsonIgnore
   public String toPathString() {
-    return Util.toPathString(getElements());
+    return Elements.super.toPathString();
+  }
+
+  @Override
+  @Value.NonAttribute
+  @JsonIgnore
+  public String toPathStringEscaped() {
+    return Elements.super.toPathStringEscaped();
+  }
+
+  @Override
+  @Value.NonAttribute
+  @JsonIgnore
+  public String toCanonicalString() {
+    return Elements.super.toCanonicalString();
   }
 
   @Override
   public String toString() {
-    return name();
+    return toPathString();
   }
 
   public ContentKey toContentKey() {
